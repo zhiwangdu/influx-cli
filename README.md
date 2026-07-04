@@ -20,13 +20,17 @@ Legacy drafts are kept under [docs/legacy](docs/legacy/) for historical context 
 
 ## Current Status
 
-This repository is currently in the product and architecture design stage. It does not yet contain a Go implementation.
+This repository now contains the Phase 0 CLI MVP foundation:
 
 Current files:
 
 ```text
 README.md
 AGENTS.md
+go.mod
+go.sum
+cmd/influx-cli/
+internal/
 docs/
   PRODUCT_DESIGN.md
   ARCHITECTURE.md
@@ -34,6 +38,15 @@ docs/
   legacy/
     README.legacy.md
     TUIDesign.legacy.md
+```
+
+Implemented MVP surface:
+
+```bash
+influx-cli query "SHOW DATABASES"
+influx-cli query --db metrics "SELECT mean(value) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)"
+influx-cli repl
+influx-cli config show
 ```
 
 ## MVP Scope
@@ -48,28 +61,23 @@ The first implementation phase should stay narrow:
 
 Do not start with a full dashboard, plugin system, storage parser, or query optimizer.
 
-## Planned Tech Stack
+## Tech Stack
 
 | Area | Choice |
 | --- | --- |
 | Language | Go |
 | CLI | Cobra |
-| TUI | Bubble Tea, Lip Gloss, Bubbles |
+| TUI | Bubble Tea, Lip Gloss, Bubbles planned for later phases |
 | Visualization | Built-in sparkline first, ASCII chart later |
 | Initial adapter | InfluxDB 1.x HTTP query API |
 | Compatible target | openGemini via InfluxDB-compatible query path |
 
-## Next Implementation Step
+## Verification
 
-Follow [docs/ROADMAP.md](docs/ROADMAP.md), Phase 0:
-
-1. Initialize `go.mod`.
-2. Add `cmd/influx-cli/main.go`.
-3. Implement config/profile loading.
-4. Implement InfluxDB HTTP query adapter.
-5. Normalize query results into table/series models.
-6. Add table and sparkline renderers.
-7. Add `query` and `repl` commands.
+```bash
+go test ./...
+go vet ./...
+```
 
 ## Working Notes
 

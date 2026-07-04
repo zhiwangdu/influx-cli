@@ -10,17 +10,22 @@
 
 ## 2. 当前仓库状态
 
-截至 2026-07-04，当前仓库主要是设计材料：
+截至 2026-07-04，当前仓库已经包含 Phase 0 CLI MVP 基础实现：
 
 | 文件 | 状态 |
 | --- | --- |
-| `README.md` | 草案，包含产品定位、模块和初步 roadmap |
-| `TUIDesign.md` | 草案，包含 TUI 布局和交互设计 |
-| `docs/PRODUCT_DESIGN.md` | 本次整理后的产品设计书 |
-| `docs/ARCHITECTURE.md` | 本次整理后的架构说明 |
+| `go.mod`、`go.sum` | Go module 和依赖 |
+| `cmd/influx-cli/main.go` | Cobra CLI 入口，包含 `query`、`repl`、`config` |
+| `internal/config` | profile、环境变量和命令行覆盖合并 |
+| `internal/adapter/influxdb` | InfluxDB 1.x/openGemini 兼容 HTTP query path |
+| `internal/result` | table、series、schema result model |
+| `internal/render` | table 和 sparkline renderer |
+| `internal/app`、`internal/repl` | session、statusline、meta command 和 REPL loop |
+| `docs/PRODUCT_DESIGN.md` | 产品设计书 |
+| `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
 
-当前还没有 Go 项目骨架和可执行代码。因此 Phase 0 的第一步是初始化工程。
+Phase 0 仍应通过本地 InfluxDB/openGemini 兼容端点做人工验收。
 
 ## 3. Phase 0: CLI MVP Foundation
 
@@ -375,4 +380,3 @@ influx-cli ingest out-of-order --ratio 0.1
 5. 实现 table 和 sparkline renderer。
 6. 实现 `query` 和 `repl` 两个命令。
 7. 用 fake adapter 写单测，再用本地 InfluxDB/openGemini 兼容接口手动验证。
-
