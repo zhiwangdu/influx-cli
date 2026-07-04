@@ -20,6 +20,7 @@ type Options struct {
 	Width     int
 	MaxRows   int
 	MaxSeries int
+	Color     bool
 }
 
 func Render(res result.Result, options Options) (string, string, error) {

@@ -42,18 +42,18 @@ func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Write
 		res, err := executor.Execute(ctx, line)
 		if err != nil {
 			fmt.Fprintln(out, "error:", err)
-			fmt.Fprintln(out, executor.Session.StatusLine())
+			fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 			continue
 		}
 		output, _, err := render.Render(res, options.Render)
 		if err != nil {
 			fmt.Fprintln(out, "error:", err)
-			fmt.Fprintln(out, executor.Session.StatusLine())
+			fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 			continue
 		}
 		if strings.TrimSpace(output) != "" {
 			fmt.Fprintln(out, output)
 		}
-		fmt.Fprintln(out, executor.Session.StatusLine())
+		fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 	}
 }

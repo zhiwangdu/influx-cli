@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -28,9 +29,24 @@ type globalFlags struct {
 
 func main() {
 	if err := newRootCommand().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		var reported reportedError
+		if !errors.As(err, &reported) {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		}
 		os.Exit(1)
 	}
+}
+
+type reportedError struct {
+	err error
+}
+
+func (e reportedError) Error() string {
+	return e.err.Error()
+}
+
+func (e reportedError) Unwrap() error {
+	return e.err
 }
 
 func newRootCommand() *cobra.Command {
@@ -84,19 +100,21 @@ func newQueryCommand(flags *globalFlags) *cobra.Command {
 			ctx, cancel := context.WithTimeout(ctx, effective.Timeout)
 			defer cancel()
 
+			options := renderOptions(effective, flags)
 			res, err := executor.Execute(ctx, strings.Join(args, " "))
 			if err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), executor.Session.StatusLine())
-				return err
+				fmt.Fprintln(cmd.ErrOrStderr(), "error:", err)
+				fmt.Fprintln(cmd.ErrOrStderr(), render.RenderStatusLine(executor.Session.StatusLine(), options))
+				return reportedError{err: err}
 			}
-			output, _, err := render.Render(res, renderOptions(effective, flags))
+			output, _, err := render.Render(res, options)
 			if err != nil {
 				return err
 			}
 			if strings.TrimSpace(output) != "" {
 				fmt.Fprintln(cmd.OutOrStdout(), output)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), executor.Session.StatusLine())
+			fmt.Fprintln(cmd.OutOrStdout(), render.RenderStatusLine(executor.Session.StatusLine(), options))
 			return nil
 		},
 	}
@@ -196,7 +214,15 @@ func renderOptions(effective config.Effective, flags *globalFlags) render.Option
 		Width:     width,
 		MaxRows:   flags.maxRows,
 		MaxSeries: flags.maxSeries,
+		Color:     colorEnabled(),
 	}
+}
+
+func colorEnabled() bool {
+	if _, disabled := os.LookupEnv("NO_COLOR"); disabled {
+		return false
+	}
+	return strings.ToLower(os.Getenv("TERM")) != "dumb"
 }
 
 func envInt(name string, fallback int) int {
