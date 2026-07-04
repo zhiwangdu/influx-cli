@@ -69,6 +69,15 @@ When implementation starts:
 - Keep errors explicit and user-readable. Do not print secrets.
 - All long-running query paths should accept `context.Context`.
 
+## Local Claude Review Rule
+
+For every coding implementation:
+
+- Run the local `claude` command for iterative code review before committing.
+- Review Claude's findings yourself, then apply appropriate fixes.
+- Repeat the review/fix loop as needed, but stop after at most 5 review rounds for a single implementation to avoid non-converging review loops.
+- If `claude` is unavailable or cannot complete, state that in the final response and proceed with the best available verification.
+
 ## Commit And Push Rule
 
 After each completed modification and verification step, commit and push the changes before starting unrelated work.
