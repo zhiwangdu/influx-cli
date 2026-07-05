@@ -22,9 +22,15 @@ type Options struct {
 
 var errInputInterrupted = errors.New("input interrupted")
 
+const lineHistoryLimit = history.DefaultMaxEntries
+
 type lineReader interface {
 	ReadLine(prompt string) (string, error)
 	Close() error
+}
+
+type historyLineReader interface {
+	SaveHistory(line string) error
 }
 
 func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Writer, options Options) error {
@@ -40,7 +46,10 @@ func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Write
 func runWithReader(ctx context.Context, executor *app.Executor, reader lineReader, out io.Writer, options Options) error {
 	defer reader.Close()
 
-	fmt.Fprintln(out, "Enter run | \\ continue | Tab complete | Ctrl+C cancel | :q quit | :help commands")
+	if err := loadLineHistory(reader, options.History); err != nil {
+		fmt.Fprintln(out, "warning:", err)
+	}
+	fmt.Fprintln(out, "Enter run | \\ continue | Tab complete | Up/Down history | Ctrl+C cancel | :q quit | :help commands")
 	var buffer statementBuffer
 	for {
 		if ctx.Err() != nil {
@@ -127,6 +136,9 @@ func runWithReader(ctx context.Context, executor *app.Executor, reader lineReade
 			if err := persistHistory(executor, options.History, statement); err != nil {
 				fmt.Fprintln(out, "warning:", err)
 			}
+			if err := saveLineHistory(reader, statement); err != nil {
+				fmt.Fprintln(out, "warning:", err)
+			}
 		}
 		fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 	}
@@ -156,6 +168,58 @@ func (r *scannerLineReader) ReadLine(prompt string) (string, error) {
 
 func (r *scannerLineReader) Close() error {
 	return nil
+}
+
+func loadLineHistory(reader lineReader, store *history.Store) error {
+	historyReader, ok := reader.(historyLineReader)
+	if !ok || store == nil {
+		return nil
+	}
+
+	entries, err := store.Search("", lineHistoryLimit)
+	if err != nil {
+		return fmt.Errorf("load query history: %w", err)
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		line := lineHistoryReplayText(entries[i].Query)
+		if line == "" {
+			continue
+		}
+		if err := historyReader.SaveHistory(line); err != nil {
+			return fmt.Errorf("load query history: %w", err)
+		}
+	}
+	return nil
+}
+
+func saveLineHistory(reader lineReader, line string) error {
+	historyReader, ok := reader.(historyLineReader)
+	if !ok {
+		return nil
+	}
+	line = lineHistoryReplayText(line)
+	if line == "" {
+		return nil
+	}
+	if err := historyReader.SaveHistory(line); err != nil {
+		return fmt.Errorf("save query history: %w", err)
+	}
+	return nil
+}
+
+func lineHistoryReplayText(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	var buffer statementBuffer
+	if _, ready := buffer.Add(line); ready {
+		return line
+	}
+	if strings.HasSuffix(line, ";") {
+		return line
+	}
+	return line + ";"
 }
 
 func handleFormatCommand(line string, options *Options, out io.Writer) (bool, error) {

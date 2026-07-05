@@ -3,6 +3,8 @@ package repl
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -226,6 +228,9 @@ func TestRunSearchesHistoryByFilter(t *testing.T) {
 	if err := store.Append(history.Entry{Query: "SELECT mean(value) FROM mem"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.Append(history.Entry{Query: "SELECT mean(value)\nFROM disk"}); err != nil {
+		t.Fatal(err)
+	}
 	executor := app.NewExecutor(
 		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
 		&fakeAdapter{},
@@ -266,8 +271,168 @@ func TestRunRejectsInvalidHistoryLimit(t *testing.T) {
 	}
 }
 
+func TestRunLoadsStoredHistoryIntoLineReader(t *testing.T) {
+	store := history.NewStore(filepath.Join(t.TempDir(), "history.jsonl"), history.Options{})
+	if err := store.Append(history.Entry{Query: "SELECT mean(value) FROM cpu"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(history.Entry{Query: "SELECT mean(value) FROM mem"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(history.Entry{Query: "SELECT mean(value)\nFROM disk"}); err != nil {
+		t.Fatal(err)
+	}
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{},
+	)
+	reader := &recordingLineReader{lines: []string{":q"}}
+	var out bytes.Buffer
+
+	if err := runWithReader(context.Background(), executor, reader, &out, Options{History: store}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"SELECT mean(value) FROM cpu",
+		"SELECT mean(value) FROM mem",
+		"SELECT mean(value)\nFROM disk",
+	}
+	if !equalStrings(reader.saved, want) {
+		t.Fatalf("saved line history = %#v, want %#v", reader.saved, want)
+	}
+}
+
+func TestRunSavesSuccessfulQueryToLineHistory(t *testing.T) {
+	store := history.NewStore(filepath.Join(t.TempDir(), "history.jsonl"), history.Options{})
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{},
+	)
+	reader := &recordingLineReader{lines: []string{
+		":format table",
+		"SELECT mean(value) FROM cpu",
+		":history",
+		":q",
+	}}
+	var out bytes.Buffer
+
+	if err := runWithReader(context.Background(), executor, reader, &out, Options{
+		History: store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"SELECT mean(value) FROM cpu"}
+	if !equalStrings(reader.saved, want) {
+		t.Fatalf("saved line history = %#v, want %#v", reader.saved, want)
+	}
+}
+
+func TestRunPreservesMultilineQueryInLineHistory(t *testing.T) {
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{},
+	)
+	reader := &recordingLineReader{lines: []string{
+		"SELECT mean(value)",
+		"FROM cpu;",
+		":q",
+	}}
+	var out bytes.Buffer
+
+	if err := runWithReader(context.Background(), executor, reader, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"SELECT mean(value)\nFROM cpu"}
+	if !equalStrings(reader.saved, want) {
+		t.Fatalf("saved line history = %#v, want %#v", reader.saved, want)
+	}
+}
+
+func TestRunSavesReplayableLineHistoryForTerminatedHeuristicQuery(t *testing.T) {
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{},
+	)
+	reader := &recordingLineReader{lines: []string{
+		`SELECT now() \`,
+		";",
+		":q",
+	}}
+	var out bytes.Buffer
+
+	if err := runWithReader(context.Background(), executor, reader, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"SELECT now();"}
+	if !equalStrings(reader.saved, want) {
+		t.Fatalf("saved line history = %#v, want %#v", reader.saved, want)
+	}
+}
+
+func TestRunDoesNotSaveFailedQueryToLineHistory(t *testing.T) {
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{queryErr: errors.New("query failed")},
+	)
+	reader := &recordingLineReader{lines: []string{
+		"SELECT mean(value) FROM cpu",
+		":q",
+	}}
+	var out bytes.Buffer
+
+	if err := runWithReader(context.Background(), executor, reader, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(reader.saved) != 0 {
+		t.Fatalf("saved line history = %#v, want none", reader.saved)
+	}
+}
+
+func TestRunWarnsWhenLineHistorySaveFails(t *testing.T) {
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{},
+	)
+	reader := &recordingLineReader{
+		lines:   []string{"SELECT mean(value) FROM cpu", ":q"},
+		saveErr: errors.New("line history unavailable"),
+	}
+	var out bytes.Buffer
+
+	if err := runWithReader(context.Background(), executor, reader, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "warning: save query history: line history unavailable") {
+		t.Fatalf("missing line history warning:\n%s", out.String())
+	}
+}
+
+func TestRunWarnsWhenLineHistoryLoadFails(t *testing.T) {
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{},
+	)
+	store := history.NewStore(t.TempDir(), history.Options{})
+	reader := &recordingLineReader{lines: []string{":q"}}
+	var out bytes.Buffer
+
+	if err := runWithReader(context.Background(), executor, reader, &out, Options{
+		History: store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "warning: load query history:") {
+		t.Fatalf("missing line history load warning:\n%s", out.String())
+	}
+}
+
 type fakeAdapter struct {
-	queries []query.Query
+	queries  []query.Query
+	queryErr error
 }
 
 func (*fakeAdapter) Name() string {
@@ -280,6 +445,9 @@ func (*fakeAdapter) Ping(ctx context.Context) error {
 
 func (f *fakeAdapter) Query(ctx context.Context, q query.Query) (result.Result, error) {
 	f.queries = append(f.queries, q)
+	if f.queryErr != nil {
+		return result.Result{}, f.queryErr
+	}
 	base := time.Unix(0, 0).UTC()
 	table := result.NewTable([]string{"time", "value"})
 	table.AddRow(base, 1.0)
@@ -316,4 +484,43 @@ func (*fakeAdapter) ShowMeasurements(ctx context.Context, db, rp string) ([]stri
 
 func (*fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
 	return schema.Snapshot{}, nil
+}
+
+type recordingLineReader struct {
+	lines   []string
+	saved   []string
+	saveErr error
+}
+
+func (r *recordingLineReader) ReadLine(prompt string) (string, error) {
+	if len(r.lines) == 0 {
+		return "", io.EOF
+	}
+	line := r.lines[0]
+	r.lines = r.lines[1:]
+	return line, nil
+}
+
+func (r *recordingLineReader) Close() error {
+	return nil
+}
+
+func (r *recordingLineReader) SaveHistory(line string) error {
+	if r.saveErr != nil {
+		return r.saveErr
+	}
+	r.saved = append(r.saved, line)
+	return nil
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

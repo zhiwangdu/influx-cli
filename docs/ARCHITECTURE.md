@@ -284,7 +284,7 @@ read input
   -> continue
 ```
 
-REPL history 属于 application core 的本地状态，默认写入 `~/.local/state/influx-cli/history.jsonl`，也支持 `XDG_STATE_HOME`。MVP/Phase 1 的 REPL 使用 `:history [limit] [filter]` 或 `:hist [limit] [filter]` 检索已持久化的 query。
+REPL history 属于 application core 的本地状态，默认写入 `~/.local/state/influx-cli/history.jsonl`，也支持 `XDG_STATE_HOME`。MVP/Phase 1 的 REPL 使用 `:history [limit] [filter]` 或 `:hist [limit] [filter]` 检索已持久化的 query；交互式终端启动时会把已持久化 query 加载进 readline 内存历史，支持 Up/Down 导航，readline 不单独写历史文件。
 
 REPL multiline 属于 UI 输入组装层：普通单行 query 保持 Enter 即执行；显式续行 `\`、未闭合引号/括号、Flux pipeline continuation 或进入多行后的终止分号会控制 pending buffer。pending query 中的 meta command 不会执行，可用 `:cancel` 或 `:clear` 清空。
 

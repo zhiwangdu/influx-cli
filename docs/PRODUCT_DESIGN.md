@@ -207,7 +207,7 @@ REPL 必备能力：
 | --- | --- | --- |
 | 单行 query | yes | 基础执行 |
 | 多行 query | phase 1 | `\` 续行、pending query 分号结束、`:cancel`/`:clear` 清空 |
-| history | phase 1 | 本地持久化，可用 `:history`/`:hist` 检索 |
+| history | phase 1 | 本地持久化，可用 `:history`/`:hist` 检索，交互式 REPL 可用 Up/Down 导航 query 历史 |
 | autocomplete | phase 1 | Tab 补全 db/rp/measurement/field/tag，带 schema cache |
 | meta command | MVP/Phase 1 | `:use`、`:db`、`:dbs`、`:rps`、`:schema`、`:refresh schema`、`:format`、`:history`、`:cancel` |
 

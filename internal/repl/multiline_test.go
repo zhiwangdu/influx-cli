@@ -68,3 +68,14 @@ func TestStatementBufferRunsCompleteSingleLineWithoutSemicolon(t *testing.T) {
 		t.Fatalf("statement = %q, want %q", got, want)
 	}
 }
+
+func TestStatementBufferRunsTerminatedSelectWithoutFrom(t *testing.T) {
+	var buffer statementBuffer
+	statement, ready := buffer.Add("SELECT now();")
+	if !ready {
+		t.Fatal("terminated SELECT should run immediately")
+	}
+	if got, want := normalizeStatement(statement), "SELECT now()"; got != want {
+		t.Fatalf("statement = %q, want %q", got, want)
+	}
+}

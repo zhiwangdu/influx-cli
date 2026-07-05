@@ -34,6 +34,11 @@ func (b *statementBuffer) Add(line string) (string, bool) {
 		return "", false
 	}
 
+	if state.Terminated && !state.Incomplete() {
+		b.Reset()
+		return statement, true
+	}
+
 	if explicitContinue || state.Incomplete() || looksLikeIncompleteSelect(statement) || endsWithContinuationToken(statement) {
 		b.active = true
 		return "", false

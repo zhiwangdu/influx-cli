@@ -130,7 +130,7 @@ REPL meta command：
 
 | 验收项 | 标准 |
 | --- | --- |
-| history | Ctrl+R 或命令可检索历史 |
+| history | Up/Down 可导航 query 历史，`:history`/`:hist` 可检索历史 |
 | multiline | REPL 可组装多行 InfluxQL/Flux query 并作为一次查询执行 |
 | autocomplete | Tab 能补全 db、rp、measurement、field/tag |
 | schema | `:schema cpu` 可展示 field/tag |

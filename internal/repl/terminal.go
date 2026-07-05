@@ -27,7 +27,7 @@ func newTerminalLineReader(ctx context.Context, executor *app.Executor, in io.Re
 		return nil, false, nil
 	}
 	instance, err := readline.NewEx(&readline.Config{
-		HistoryLimit:           -1,
+		HistoryLimit:           lineHistoryLimit,
 		DisableAutoSaveHistory: true,
 		Stdin:                  inFile,
 		Stdout:                 out,
@@ -61,6 +61,10 @@ func (r *terminalLineReader) ReadLine(prompt string) (string, error) {
 
 func (r *terminalLineReader) Close() error {
 	return r.instance.Close()
+}
+
+func (r *terminalLineReader) SaveHistory(line string) error {
+	return r.instance.SaveHistory(line)
 }
 
 type readlineCompleter struct {
