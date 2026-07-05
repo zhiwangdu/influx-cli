@@ -12,7 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	ksnappy "github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 )
 
 const (
@@ -645,7 +647,7 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 				info.ValueKnown = true
 			}
 		} else if payload[0] == 34 {
-			if values, ok := decodeTSSPStringFullUncompressedValues(payload[5:], info.Rows); ok {
+			if values, ok := decodeTSSPStringFullValues(payload[5:], info.Rows); ok {
 				info.Values = values
 				if len(values) > 0 {
 					info.Value = values[0]
@@ -838,16 +840,56 @@ func decodeTSSPBooleanFullBitpackValues(encoded []byte, rows int) ([]string, boo
 	return values, true
 }
 
-func decodeTSSPStringFullUncompressedValues(encoded []byte, rows int) ([]string, bool) {
-	if rows < 0 || len(encoded) < 9 || encoded[0]>>4 != 0 {
+func decodeTSSPStringFullValues(encoded []byte, rows int) ([]string, bool) {
+	if rows < 0 || len(encoded) < 9 {
 		return nil, false
 	}
+	codec := encoded[0] >> 4
 	sourceLen := int(binary.BigEndian.Uint32(encoded[1:5]))
 	compressedLen := int(binary.BigEndian.Uint32(encoded[5:9]))
-	if sourceLen != compressedLen || len(encoded)-9 < sourceLen {
+	if sourceLen < 0 || compressedLen < 0 || len(encoded)-9 < compressedLen {
 		return nil, false
 	}
-	return decodeTSSPPackedStringValues(encoded[9:9+sourceLen], rows)
+	compressed := encoded[9 : 9+compressedLen]
+
+	var raw []byte
+	switch codec {
+	case 0:
+		if sourceLen != compressedLen {
+			return nil, false
+		}
+		raw = compressed
+	case 1:
+		decoded, err := ksnappy.Decode(nil, compressed)
+		if err != nil {
+			return nil, false
+		}
+		raw = decoded
+	case 2:
+		decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return nil, false
+		}
+		defer decoder.Close()
+		decoded, err := decoder.DecodeAll(compressed, make([]byte, 0, sourceLen))
+		if err != nil {
+			return nil, false
+		}
+		raw = decoded
+	case 3:
+		decoded := make([]byte, sourceLen)
+		n, err := lz4.UncompressBlock(compressed, decoded)
+		if err != nil || n != sourceLen {
+			return nil, false
+		}
+		raw = decoded[:n]
+	default:
+		return nil, false
+	}
+	if len(raw) != sourceLen {
+		return nil, false
+	}
+	return decodeTSSPPackedStringValues(raw, rows)
 }
 
 const (

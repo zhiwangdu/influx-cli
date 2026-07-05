@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/golang/snappy"
+	ksnappy "github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
 )
@@ -603,6 +604,74 @@ func TestAnalyzeTSSPSamplesAttachedStringFullUncompressedBlocks(t *testing.T) {
 	}
 	if !containsStringWithPrefix(decode.Recommendations, "sampled 2 TSSP value output") {
 		t.Fatalf("recommendations = %v, want value output recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPSamplesAttachedStringFullCompressedBlocks(t *testing.T) {
+	values := []string{
+		strings.Repeat("red-", 32),
+		strings.Repeat("blue-", 24),
+	}
+	for _, tc := range []struct {
+		name  string
+		codec byte
+	}{
+		{name: "snappy", codec: 1},
+		{name: "zstd", codec: 2},
+		{name: "lz4", codec: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+			if err := writeTestTSSPWithStringFullValues(path, values, tc.codec); err != nil {
+				t.Fatal(err)
+			}
+			queryRange, err := NewTimeRange(333, 444)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := Analyze(context.Background(), []string{path}, Options{
+				Format:           FormatTSSP,
+				QueryRange:       queryRange,
+				KeySampleLimit:   3,
+				BlockSampleLimit: 4,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := report.Files[0]
+			if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+				t.Fatalf("data block probe blocks = %q, want %q", got, want)
+			}
+			if got, want := file.Extra["data_block_probe_value_blocks"], "2"; got != want {
+				t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+			}
+			if got, want := file.Extra["data_block_probe_types"], "integer-full:1,string-full:1"; got != want {
+				t.Fatalf("data block probe types = %q, want %q", got, want)
+			}
+			decode := file.DecodePath
+			if decode == nil {
+				t.Fatal("decode path is nil")
+			}
+			if got, want := decode.OptimizedValueOutputPoints, 2; got != want {
+				t.Fatalf("optimized value output points = %d, want %d", got, want)
+			}
+			if got, want := len(decode.CursorOutputSamples), 2; got != want {
+				t.Fatalf("cursor output samples = %d, want %d", got, want)
+			}
+			for i, want := range []DecodePathCursorOutput{
+				{Key: "sid:7/value", Time: 333, Type: "string-full", OptimizedValue: values[0], Matches: true},
+				{Key: "sid:7/value", Time: 444, Type: "string-full", OptimizedValue: values[1], Matches: true},
+			} {
+				got := decode.CursorOutputSamples[i]
+				if got != want {
+					t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+				}
+			}
+			if got, want := decode.Samples[0].ValueOutputPoints, 2; got != want {
+				t.Fatalf("decode sample value output points = %d, want %d", got, want)
+			}
+		})
 	}
 }
 
@@ -1615,13 +1684,20 @@ func writeTestTSSPWithBooleanFullData(path string) error {
 }
 
 func writeTestTSSPWithStringFullData(path string) error {
+	return writeTestTSSPWithStringFullValues(path, []string{"red", "blue"}, 0)
+}
+
+func writeTestTSSPWithStringFullValues(path string, values []string, codec byte) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsspMagic)
 	writeUint64(&buf, 2)
 
 	dataOffset := int64(buf.Len())
 	valueOffset := int64(buf.Len())
-	valueSize := writeTestTSSPAttachedStringFullBlock(&buf, []string{"red", "blue"})
+	valueSize, err := writeTestTSSPAttachedStringFullBlock(&buf, values, codec)
+	if err != nil {
+		return err
+	}
 	timeSize := writeTestTSSPAttachedIntegerFullBlock(&buf, []int64{333, 444})
 	dataSize := int64(valueSize + timeSize)
 	chunk := testTSSPChunkSpec{
@@ -1754,16 +1830,65 @@ func testTSSPZSTDCompress(data []byte) ([]byte, error) {
 	return encoder.EncodeAll(data, nil), nil
 }
 
-func writeTestTSSPAttachedStringFullBlock(buf *bytes.Buffer, values []string) uint32 {
-	packed := tsspPackedStringV2Payload(values)
+func writeTestTSSPAttachedStringFullBlock(buf *bytes.Buffer, values []string, codec byte) (uint32, error) {
+	encoded, err := testTSSPStringFullEncodedPayload(values, codec)
+	if err != nil {
+		return 0, err
+	}
 	start := buf.Len()
 	buf.WriteByte(34) // openGemini encoding.BlockStringFull.
 	writeUint32(buf, uint32(len(values)))
-	buf.WriteByte(0) // openGemini encoding stringUncompressed << 4.
-	writeUint32(buf, uint32(len(packed)))
-	writeUint32(buf, uint32(len(packed)))
-	buf.Write(packed)
-	return uint32(buf.Len() - start)
+	buf.Write(encoded)
+	return uint32(buf.Len() - start), nil
+}
+
+func testTSSPStringFullPayload(values []string, codec byte) ([]byte, error) {
+	encoded, err := testTSSPStringFullEncodedPayload(values, codec)
+	if err != nil {
+		return nil, err
+	}
+	var payload bytes.Buffer
+	payload.WriteByte(34) // openGemini encoding.BlockStringFull.
+	writeUint32(&payload, uint32(len(values)))
+	payload.Write(encoded)
+	return payload.Bytes(), nil
+}
+
+func testTSSPStringFullEncodedPayload(values []string, codec byte) ([]byte, error) {
+	packed := tsspPackedStringV2Payload(values)
+	compressed, err := testTSSPStringCompressedPayload(packed, codec)
+	if err != nil {
+		return nil, err
+	}
+	var payload bytes.Buffer
+	payload.WriteByte(codec << 4)
+	writeUint32(&payload, uint32(len(packed)))
+	writeUint32(&payload, uint32(len(compressed)))
+	payload.Write(compressed)
+	return payload.Bytes(), nil
+}
+
+func testTSSPStringCompressedPayload(packed []byte, codec byte) ([]byte, error) {
+	switch codec {
+	case 0:
+		return packed, nil
+	case 1:
+		return ksnappy.Encode(nil, packed), nil
+	case 2:
+		return testTSSPZSTDCompress(packed)
+	case 3:
+		dst := make([]byte, lz4.CompressBlockBound(len(packed)))
+		n, err := lz4.CompressBlock(packed, dst, nil)
+		if err != nil {
+			return nil, err
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("test LZ4 string compression produced empty output")
+		}
+		return dst[:n], nil
+	default:
+		return nil, fmt.Errorf("unsupported test TSSP string codec %d", codec)
+	}
 }
 
 func tsspPackedStringV2Payload(values []string) []byte {

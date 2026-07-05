@@ -739,6 +739,48 @@ func TestInspectTSSPDataBlockPayloadStringFullUncompressed(t *testing.T) {
 	}
 }
 
+func TestInspectTSSPDataBlockPayloadStringFullCompressed(t *testing.T) {
+	values := []string{
+		strings.Repeat("red-", 32),
+		strings.Repeat("blue-", 24),
+	}
+	for _, tc := range []struct {
+		name  string
+		codec byte
+	}{
+		{name: "snappy", codec: 1},
+		{name: "zstd", codec: 2},
+		{name: "lz4", codec: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := testTSSPStringFullPayload(values, tc.codec)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			info, ok, reason := inspectTSSPDataBlockPayload(payload)
+			if !ok {
+				t.Fatalf("inspect TSSP data block payload failed: %s", reason)
+			}
+			if got, want := info.Type, "string-full"; got != want {
+				t.Fatalf("type = %q, want %q", got, want)
+			}
+			if got, want := info.Rows, 2; got != want {
+				t.Fatalf("rows = %d, want %d", got, want)
+			}
+			if !info.RowsKnown || !info.ValueKnown || info.ValueNull {
+				t.Fatalf("known/null flags rows=%v value=%v null=%v, want true/true/false", info.RowsKnown, info.ValueKnown, info.ValueNull)
+			}
+			if got, want := info.Value, values[0]; got != want {
+				t.Fatalf("first value = %q, want %q", got, want)
+			}
+			if got, want := info.Values, values; !equalStrings(got, want) {
+				t.Fatalf("values = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
