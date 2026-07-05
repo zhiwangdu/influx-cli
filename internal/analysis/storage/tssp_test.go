@@ -894,11 +894,12 @@ func compressTestTSSPChunkMetaPayload(payload []byte, mode uint8) ([]byte, error
 }
 
 type testTSSPChunkSpec struct {
-	sid     uint64
-	minTime int64
-	maxTime int64
-	offset  int64
-	size    uint32
+	sid      uint64
+	minTime  int64
+	maxTime  int64
+	offset   int64
+	size     uint32
+	timeSize uint32
 }
 
 func testTSSPChunkMetaPayload(chunks ...testTSSPChunkSpec) []byte {
@@ -932,7 +933,7 @@ func writeTestTSSPChunkMeta(buf *bytes.Buffer, chunk testTSSPChunkSpec) {
 	writeGeminiInt64(buf, chunk.minTime)
 	writeGeminiInt64(buf, chunk.maxTime)
 	writeTestTSSPColumnMeta(buf, "value", 1, chunk.offset, chunk.size)
-	writeTestTSSPColumnMeta(buf, "time", 0, chunk.offset+int64(chunk.size), 16)
+	writeTestTSSPColumnMeta(buf, "time", 0, chunk.offset+int64(chunk.size), chunk.testTimeSize())
 }
 
 func writeTestTSSPSelfChunkMeta(buf *bytes.Buffer, header []string, chunk testTSSPChunkSpec) {
@@ -943,7 +944,14 @@ func writeTestTSSPSelfChunkMeta(buf *bytes.Buffer, header []string, chunk testTS
 	buf.Write(binary.AppendUvarint(nil, 1))
 	buf.Write(encodeTestTSSPInt64sWithScale(chunk.minTime, chunk.maxTime))
 	writeTestTSSPSelfColumnMeta(buf, header, "value", 1, chunk.offset, chunk.size)
-	writeTestTSSPSelfColumnMeta(buf, header, "time", 0, chunk.offset+int64(chunk.size), 16)
+	writeTestTSSPSelfColumnMeta(buf, header, "time", 0, chunk.offset+int64(chunk.size), chunk.testTimeSize())
+}
+
+func (chunk testTSSPChunkSpec) testTimeSize() uint32 {
+	if chunk.timeSize != 0 {
+		return chunk.timeSize
+	}
+	return 16
 }
 
 func writeTestTSSPColumnMeta(buf *bytes.Buffer, name string, typ byte, offset int64, size uint32) {

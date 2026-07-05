@@ -462,6 +462,103 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedMetaIndexSamplesOneRowValueBlocks(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 42, minTime: 333, maxTime: 333, offset: 1000, size: 13, timeSize: 13},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedOneRowData(filepath.Join(dir, tsspDetachedDataFileName), 1200, chunks[0], 99, 333); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 333)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_value_blocks"], "2"; got != want {
+		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_unknowns"], "0"; got != want {
+		t.Fatalf("data block probe value unknowns = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "integer-one:2"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeValueBlocks, 2; got != want {
+		t.Fatalf("data block probe value blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeValueUnknowns, 0; got != want {
+		t.Fatalf("data block probe value unknowns = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	sample := decode.CursorOutputSamples[0]
+	if got, want := sample.Key, "meta-index-id:42/value"; got != want {
+		t.Fatalf("sample key = %q, want %q", got, want)
+	}
+	if got, want := sample.Time, int64(333); got != want {
+		t.Fatalf("sample time = %d, want %d", got, want)
+	}
+	if got, want := sample.Type, "integer-one"; got != want {
+		t.Fatalf("sample type = %q, want %q", got, want)
+	}
+	if got, want := sample.OptimizedValue, "99"; got != want {
+		t.Fatalf("sample optimized value = %q, want %q", got, want)
+	}
+	if !sample.Matches {
+		t.Fatal("expected sample to be marked as matched optimized output")
+	}
+	if !containsString(decode.Recommendations, "sampled 1 detached TSSP one-row value output") {
+		t.Fatalf("recommendations = %v, want one-row value output recommendation", decode.Recommendations)
+	}
+}
+
+func TestInspectTSSPDetachedDataBlockEmptyRows(t *testing.T) {
+	payload := make([]byte, 5)
+	payload[0] = 42 // openGemini encoding.BlockIntegerEmpty.
+	binary.BigEndian.PutUint32(payload[1:5], 3)
+	info, ok, reason := inspectTSSPDetachedDataBlock(testTSSPDetachedDataPayload(payload))
+	if !ok {
+		t.Fatalf("inspect detached data block failed: %s", reason)
+	}
+	if got, want := info.Type, "integer-empty"; got != want {
+		t.Fatalf("type = %q, want %q", got, want)
+	}
+	if got, want := info.Rows, 3; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	if !info.RowsKnown {
+		t.Fatal("expected rows to be known")
+	}
+	if !info.ValueKnown || !info.ValueNull {
+		t.Fatalf("value known/null = %v/%v, want true/true", info.ValueKnown, info.ValueNull)
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
@@ -812,6 +909,22 @@ func writeTestTSSPDetachedData(path string, size int, chunks ...testTSSPChunkSpe
 	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+func writeTestTSSPDetachedOneRowData(path string, size int, chunk testTSSPChunkSpec, value, timestamp int64) error {
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+	for buf.Len() < size {
+		buf.WriteByte(0)
+	}
+	if err := writeTestTSSPDetachedIntegerOneBlock(buf.Bytes(), chunk.offset, chunk.size, value); err != nil {
+		return err
+	}
+	if err := writeTestTSSPDetachedIntegerOneBlock(buf.Bytes(), chunk.offset+int64(chunk.size), chunk.testTimeSize(), timestamp); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
 func writeTestTSSPDetachedDataBlock(data []byte, offset int64, size uint32) error {
 	if offset < 0 || int64(len(data)) < offset+int64(size) {
 		return nil
@@ -825,4 +938,26 @@ func writeTestTSSPDetachedDataBlock(data []byte, offset int64, size uint32) erro
 	binary.BigEndian.PutUint32(data[offset:], crc32.ChecksumIEEE(payload))
 	copy(data[offset+crc32.Size:], payload)
 	return nil
+}
+
+func writeTestTSSPDetachedIntegerOneBlock(data []byte, offset int64, size uint32, value int64) error {
+	if offset < 0 || int64(len(data)) < offset+int64(size) {
+		return nil
+	}
+	if size != crc32.Size+1+8 {
+		return nil
+	}
+	payload := make([]byte, int(size)-crc32.Size)
+	payload[0] = 18 // openGemini encoding.BlockIntegerOne.
+	binary.LittleEndian.PutUint64(payload[1:9], uint64(value))
+	binary.BigEndian.PutUint32(data[offset:], crc32.ChecksumIEEE(payload))
+	copy(data[offset+crc32.Size:], payload)
+	return nil
+}
+
+func testTSSPDetachedDataPayload(payload []byte) []byte {
+	block := make([]byte, crc32.Size+len(payload))
+	binary.BigEndian.PutUint32(block[:crc32.Size], crc32.ChecksumIEEE(payload))
+	copy(block[crc32.Size:], payload)
+	return block
 }

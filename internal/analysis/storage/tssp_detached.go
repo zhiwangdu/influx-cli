@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -133,6 +135,9 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["data_block_probe_row_count_unknowns"] = fmt.Sprint(dataProbe.RowCountUnknowns)
 			report.Extra["data_block_probe_row_count_mismatches"] = fmt.Sprint(dataProbe.RowCountMismatches)
 			report.Extra["data_block_probe_output_points"] = fmt.Sprint(dataProbe.OutputPoints)
+			report.Extra["data_block_probe_value_blocks"] = fmt.Sprint(dataProbe.ValueBlocks)
+			report.Extra["data_block_probe_value_unknowns"] = fmt.Sprint(dataProbe.ValueUnknowns)
+			report.Extra["data_block_probe_null_values"] = fmt.Sprint(dataProbe.NullValues)
 			if len(dataProbe.BlockTypes) > 0 {
 				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
 			}
@@ -351,10 +356,14 @@ type tsspDetachedDataProbe struct {
 	RowCountUnknowns   int
 	RowCountMismatches int
 	OutputPoints       int
+	ValueBlocks        int
+	ValueUnknowns      int
+	NullValues         int
 	BlockTypes         map[string]int
 	chunkAvailable     map[uint64]bool
 	chunkFailureReason map[uint64]string
 	chunkOutputPoints  map[uint64]int
+	valueSamples       []DecodePathCursorOutput
 }
 
 func (p *tsspDetachedDataProbe) Failures() int {
@@ -477,6 +486,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 			segmentAvailable := true
 			segmentRowsKnown := false
 			segmentRows := 0
+			segmentBlocks := map[string]tsspDetachedDataBlockInfo{}
 			for _, column := range chunk.Columns {
 				if segment < 0 || segment >= len(column.Segments) {
 					continue
@@ -518,6 +528,16 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				}
 				probe.ValidBlocks++
 				probe.BlockTypes[blockInfo.Type]++
+				segmentBlocks[column.Name] = blockInfo
+				if blockInfo.ValueKnown {
+					if blockInfo.ValueNull {
+						probe.NullValues += blockInfo.Rows
+					} else {
+						probe.ValueBlocks++
+					}
+				} else {
+					probe.ValueUnknowns++
+				}
 				if !blockInfo.RowsKnown {
 					probe.RowCountUnknowns++
 					chunkAvailable = false
@@ -540,6 +560,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
 				chunkOutputPoints += segmentRows
+				appendTSSPDetachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, options.BlockSampleLimit)
 			}
 		}
 		if chunkChecked {
@@ -556,9 +577,12 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 }
 
 type tsspDetachedDataBlockInfo struct {
-	Type      string
-	Rows      int
-	RowsKnown bool
+	Type       string
+	Rows       int
+	RowsKnown  bool
+	Value      string
+	ValueKnown bool
+	ValueNull  bool
 }
 
 func inspectTSSPDetachedDataBlock(block []byte) (tsspDetachedDataBlockInfo, bool, string) {
@@ -580,18 +604,57 @@ func inspectTSSPDetachedDataBlock(block []byte) (tsspDetachedDataBlockInfo, bool
 	case tsspDataBlockTypeIsOne(payload[0]):
 		info.Rows = 1
 		info.RowsKnown = true
+		if value, ok := decodeTSSPDetachedOneBlockValue(payload); ok {
+			info.Value = value
+			info.ValueKnown = true
+		}
 	case tsspDataBlockTypeIsFullOrEmpty(payload[0]):
 		if len(payload) < 5 {
 			return info, false, "segment_overlap_data_header_unavailable"
 		}
 		info.Rows = int(binary.BigEndian.Uint32(payload[1:5]))
 		info.RowsKnown = true
+		if tsspDataBlockTypeIsEmpty(payload[0]) {
+			info.ValueKnown = true
+			info.ValueNull = true
+		}
 	default:
 		if !validTSSPRegularDataBlockHeader(payload) {
 			return info, false, "segment_overlap_data_header_unavailable"
 		}
 	}
 	return info, true, ""
+}
+
+func decodeTSSPDetachedOneBlockValue(payload []byte) (string, bool) {
+	if len(payload) < 2 {
+		return "", false
+	}
+	// Block*One appends record.ColVal.Val directly; openGemini's supported
+	// targets store numeric ColVal bytes in little-endian native layout.
+	value := payload[1:]
+	switch payload[0] {
+	case 17:
+		if len(value) != 8 {
+			return "", false
+		}
+		f := math.Float64frombits(binary.LittleEndian.Uint64(value))
+		return strconv.FormatFloat(f, 'f', -1, 64), true
+	case 18:
+		if len(value) != 8 {
+			return "", false
+		}
+		return strconv.FormatInt(int64(binary.LittleEndian.Uint64(value)), 10), true
+	case 19:
+		if len(value) != 1 {
+			return "", false
+		}
+		return strconv.FormatBool(value[0] != 0), true
+	case 20:
+		return string(value), true
+	default:
+		return "", false
+	}
 }
 
 func tsspDataBlockTypeName(blockType byte) (string, bool) {
@@ -641,6 +704,10 @@ func tsspDataBlockTypeIsFullOrEmpty(blockType byte) bool {
 	return (blockType > 30 && blockType < 35) || (blockType > 40 && blockType < 45)
 }
 
+func tsspDataBlockTypeIsEmpty(blockType byte) bool {
+	return blockType > 40 && blockType < 45
+}
+
 func validTSSPRegularDataBlockHeader(payload []byte) bool {
 	if len(payload) < 13 {
 		return false
@@ -680,6 +747,50 @@ func (p *tsspDetachedDataProbe) chunkOutputPointsFor(chunk tsspChunkMeta) int {
 		return 0
 	}
 	return p.chunkOutputPoints[chunk.SID]
+}
+
+func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, sampleLimit int) {
+	if probe == nil || sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
+		return
+	}
+	timestamp, ok := tsspDetachedSegmentSampleTime(timeRange, blocks)
+	if !ok {
+		return
+	}
+	columnNames := make([]string, 0, len(blocks))
+	for columnName := range blocks {
+		columnNames = append(columnNames, columnName)
+	}
+	sort.Strings(columnNames)
+	for _, columnName := range columnNames {
+		block := blocks[columnName]
+		if columnName == "time" || !block.ValueKnown || block.ValueNull {
+			continue
+		}
+		probe.valueSamples = append(probe.valueSamples, DecodePathCursorOutput{
+			Key:            fmt.Sprintf("meta-index-id:%d/%s", chunk.SID, columnName),
+			Time:           timestamp,
+			Type:           block.Type,
+			OptimizedValue: block.Value,
+			Matches:        true,
+		})
+		if len(probe.valueSamples) >= sampleLimit {
+			return
+		}
+	}
+}
+
+func tsspDetachedSegmentSampleTime(timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo) (int64, bool) {
+	if block, ok := blocks["time"]; ok && block.ValueKnown && !block.ValueNull {
+		value, err := strconv.ParseInt(block.Value, 10, 64)
+		if err == nil {
+			return value, true
+		}
+	}
+	if timeRange.Min == timeRange.Max {
+		return timeRange.Min, true
+	}
+	return 0, false
 }
 
 func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options, dataValidation *tsspDetachedDataValidation, dataProbe *tsspDetachedDataProbe) *DecodePathSummary {
@@ -788,6 +899,10 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeBytes = dataProbe.BytesRead
 		summary.DataBlockProbeFailures = dataProbe.Failures()
 		summary.DataBlockProbeCRCMismatches = dataProbe.CRCMismatches
+		summary.DataBlockProbeValueBlocks = dataProbe.ValueBlocks
+		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
+		summary.DataBlockProbeNullValues = dataProbe.NullValues
+		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
@@ -1102,6 +1217,12 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 		recommendations = append(recommendations, fmt.Sprintf(
 			"materialized %d detached TSSP output point(s) from data block row counts",
 			summary.OptimizedValueOutputPoints,
+		))
+	}
+	if len(summary.CursorOutputSamples) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"sampled %d detached TSSP one-row value output(s) from data blocks",
+			len(summary.CursorOutputSamples),
 		))
 	}
 	if summary.DataBlockProbeFailures > 0 {

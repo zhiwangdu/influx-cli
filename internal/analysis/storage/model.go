@@ -233,6 +233,9 @@ type DecodePathSummary struct {
 	DataBlockProbeBytes          int64                     `json:"data_block_probe_bytes,omitempty"`
 	DataBlockProbeFailures       int                       `json:"data_block_probe_failures,omitempty"`
 	DataBlockProbeCRCMismatches  int                       `json:"data_block_probe_crc_mismatches,omitempty"`
+	DataBlockProbeValueBlocks    int                       `json:"data_block_probe_value_blocks,omitempty"`
+	DataBlockProbeValueUnknowns  int                       `json:"data_block_probe_value_unknowns,omitempty"`
+	DataBlockProbeNullValues     int                       `json:"data_block_probe_null_values,omitempty"`
 	BaselineCursorOutputPoints   int                       `json:"baseline_cursor_output_points,omitempty"`
 	OptimizedCursorOutputPoints  int                       `json:"optimized_cursor_output_points,omitempty"`
 	BaselineCursorReadCalls      int                       `json:"baseline_cursor_read_calls,omitempty"`
