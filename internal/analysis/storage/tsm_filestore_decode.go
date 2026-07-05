@@ -10,6 +10,7 @@ import (
 
 type tsmFileStoreData struct {
 	path       string
+	minTime    int64
 	maxTime    int64
 	entries    []tsmIndexEntry
 	tombstones []tsmTombstoneEntry
@@ -83,6 +84,7 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 			}
 		}
 	}
+	populateTSMFileStoreIteratorCost(summary, fileData, keys, options.QueryRange)
 
 	matchedKeys := map[string]struct{}{}
 	locationsByKey := map[string][]tsmFileStoreLocation{}
@@ -211,8 +213,12 @@ func readTSMFileStoreData(path string) (tsmFileStoreData, error) {
 		return tsmFileStoreData{}, fmt.Errorf("%s: TSM index has no entries", path)
 	}
 
+	minTime := entries[0].MinTime
 	maxTime := entries[0].MaxTime
 	for _, entry := range entries[1:] {
+		if entry.MinTime < minTime {
+			minTime = entry.MinTime
+		}
 		if entry.MaxTime > maxTime {
 			maxTime = entry.MaxTime
 		}
@@ -227,10 +233,47 @@ func readTSMFileStoreData(path string) (tsmFileStoreData, error) {
 	}
 	return tsmFileStoreData{
 		path:       path,
+		minTime:    minTime,
 		maxTime:    maxTime,
 		entries:    entries,
 		tombstones: tombstones,
 	}, nil
+}
+
+func populateTSMFileStoreIteratorCost(summary *DecodePathSummary, files []tsmFileStoreData, keys []string, queryRange TimeRange) {
+	if !queryRange.Set {
+		return
+	}
+	for _, key := range keys {
+		for _, file := range files {
+			if !tsmFileStoreCostOverlaps(file.minTime, file.maxTime, queryRange.Min, queryRange.Max) {
+				continue
+			}
+			countedFile := false
+			for _, entry := range file.entries {
+				if entry.Key != key {
+					continue
+				}
+				if !tsmFileStoreCostOverlaps(entry.MinTime, entry.MaxTime, queryRange.Min, queryRange.Max) {
+					continue
+				}
+				if tsmEntryFullyTombstoned(entry, file.tombstones) {
+					continue
+				}
+				summary.IteratorCostBlocks++
+				summary.IteratorCostBytes += int64(entry.Size)
+				countedFile = true
+			}
+			if countedFile {
+				summary.IteratorCostFiles++
+			}
+		}
+	}
+}
+
+func tsmFileStoreCostOverlaps(minTime, maxTime, queryMin, queryMax int64) bool {
+	// InfluxDB FileStore.cost uses this half-open overlap test.
+	return maxTime > queryMin && minTime < queryMax
 }
 
 func tsmFileStoreLocationsForKey(files []tsmFileStoreData, key string, options Options, summary *DecodePathSummary) []tsmFileStoreLocation {

@@ -765,6 +765,15 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
 		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.IteratorCostFiles, 2; got != want {
+		t.Fatalf("iterator cost files = %d, want %d", got, want)
+	}
+	if got, want := decode.IteratorCostBlocks, 2; got != want {
+		t.Fatalf("iterator cost blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.IteratorCostBytes, int64(112); got != want {
+		t.Fatalf("iterator cost bytes = %d, want %d", got, want)
+	}
 	if got, want := decode.BaselineCursorOutputPoints, 2; got != want {
 		t.Fatalf("baseline cursor output points = %d, want %d", got, want)
 	}
@@ -825,6 +834,39 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	}
 	if !decode.Samples[0].ValueOutputAvailable {
 		t.Fatal("expected first sample value output to be available")
+	}
+}
+
+func TestTSMFileStoreIteratorCostUsesHalfOpenRangeAndTombstones(t *testing.T) {
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := &DecodePathSummary{}
+	populateTSMFileStoreIteratorCost(summary, []tsmFileStoreData{{
+		path:    "000000001-000000001.tsm",
+		minTime: 10,
+		maxTime: 40,
+		entries: []tsmIndexEntry{
+			{Key: "cpu,host=a value", MinTime: 10, MaxTime: 20, Size: 16},
+			{Key: "cpu,host=a value", MinTime: 20, MaxTime: 30, Size: 32},
+			{Key: "cpu,host=a value", MinTime: 30, MaxTime: 40, Size: 64},
+			{Key: "cpu,host=a value", MinTime: 22, MaxTime: 28, Size: 128},
+		},
+		tombstones: []tsmTombstoneEntry{{
+			Key: "cpu,host=a value",
+			Min: 22,
+			Max: 28,
+		}},
+	}}, []string{"cpu,host=a value"}, queryRange)
+	if got, want := summary.IteratorCostFiles, 1; got != want {
+		t.Fatalf("iterator cost files = %d, want %d", got, want)
+	}
+	if got, want := summary.IteratorCostBlocks, 1; got != want {
+		t.Fatalf("iterator cost blocks = %d, want %d", got, want)
+	}
+	if got, want := summary.IteratorCostBytes, int64(32); got != want {
+		t.Fatalf("iterator cost bytes = %d, want %d", got, want)
 	}
 }
 

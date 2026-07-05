@@ -221,6 +221,9 @@ type DecodePathSummary struct {
 	OptimizedCursorOutputPoints  int                       `json:"optimized_cursor_output_points,omitempty"`
 	BaselineCursorReadCalls      int                       `json:"baseline_cursor_read_calls,omitempty"`
 	OptimizedCursorReadCalls     int                       `json:"optimized_cursor_read_calls,omitempty"`
+	IteratorCostFiles            int                       `json:"iterator_cost_files,omitempty"`
+	IteratorCostBlocks           int                       `json:"iterator_cost_blocks,omitempty"`
+	IteratorCostBytes            int64                     `json:"iterator_cost_bytes,omitempty"`
 	LocationBlocks               int                       `json:"location_blocks,omitempty"`
 	FilteredDecodeBlocks         int                       `json:"filtered_decode_blocks,omitempty"`
 	SavedDecodeBlocks            int                       `json:"saved_decode_blocks,omitempty"`
@@ -369,6 +372,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.BaselineCursorReadCalls > 0 || summary.OptimizedCursorReadCalls > 0 {
 		parts = append(parts, fmt.Sprintf("cursor_reads %d->%d", summary.BaselineCursorReadCalls, summary.OptimizedCursorReadCalls))
+	}
+	if summary.IteratorCostFiles > 0 || summary.IteratorCostBlocks > 0 || summary.IteratorCostBytes > 0 {
+		parts = append(parts, fmt.Sprintf("iterator_cost files=%d blocks=%d bytes=%d", summary.IteratorCostFiles, summary.IteratorCostBlocks, summary.IteratorCostBytes))
 	}
 	if summary.ValueOutputMismatches > 0 {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))

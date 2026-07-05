@@ -59,6 +59,9 @@ func TestReportResultIncludesTSMCursorDecodePathSummary(t *testing.T) {
 				SavedDecodeBytes:         128,
 				BaselineCursorReadCalls:  2,
 				OptimizedCursorReadCalls: 1,
+				IteratorCostFiles:        2,
+				IteratorCostBlocks:       3,
+				IteratorCostBytes:        256,
 				ValueOutputMismatches:    1,
 			},
 		}},
@@ -72,6 +75,7 @@ func TestReportResultIncludesTSMCursorDecodePathSummary(t *testing.T) {
 		"blocks 4->2",
 		"saved_bytes 128",
 		"cursor_reads 2->1",
+		"iterator_cost files=2 blocks=3 bytes=256",
 		"mismatches 1",
 	} {
 		if !strings.Contains(decodeText, want) {
