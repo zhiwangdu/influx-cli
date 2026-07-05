@@ -147,7 +147,7 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
-	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches = compareTSMOutputPoints(baselinePoints, optimizedPoints)
+	summarizeTSMCursorOutput(summary, baselinePoints, optimizedPoints, options.BlockSampleLimit)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
@@ -215,26 +215,63 @@ func addTSMOutputPoints(output map[tsmOutputPointKey]tsmPoint, key string, point
 	}
 }
 
-func compareTSMOutputPoints(baseline, optimized map[tsmOutputPointKey]tsmPoint) (int, int) {
-	compared := 0
-	mismatches := 0
+func summarizeTSMCursorOutput(summary *DecodePathSummary, baseline, optimized map[tsmOutputPointKey]tsmPoint, sampleLimit int) {
+	summary.BaselineCursorOutputPoints = len(baseline)
+	summary.OptimizedCursorOutputPoints = len(optimized)
+	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches, summary.CursorOutputSamples = compareTSMOutputPoints(baseline, optimized, sampleLimit)
+}
+
+func compareTSMOutputPoints(baseline, optimized map[tsmOutputPointKey]tsmPoint, sampleLimit int) (int, int, []DecodePathCursorOutput) {
+	keys := make([]tsmOutputPointKey, 0, len(baseline)+len(optimized))
 	seen := map[tsmOutputPointKey]struct{}{}
-	for key, baselinePoint := range baseline {
-		compared++
+	for key := range baseline {
+		keys = append(keys, key)
 		seen[key] = struct{}{}
-		optimizedPoint, ok := optimized[key]
-		if !ok || optimizedPoint.Value != baselinePoint.Value {
-			mismatches++
-		}
 	}
 	for key := range optimized {
 		if _, ok := seen[key]; ok {
 			continue
 		}
-		compared++
-		mismatches++
+		keys = append(keys, key)
 	}
-	return compared, mismatches
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].key != keys[j].key {
+			return keys[i].key < keys[j].key
+		}
+		if keys[i].timestamp != keys[j].timestamp {
+			return keys[i].timestamp < keys[j].timestamp
+		}
+		return keys[i].typ < keys[j].typ
+	})
+
+	compared := 0
+	mismatches := 0
+	samples := make([]DecodePathCursorOutput, 0)
+	for _, key := range keys {
+		compared++
+		baselinePoint, baselineOK := baseline[key]
+		optimizedPoint, optimizedOK := optimized[key]
+		matches := baselineOK && optimizedOK && optimizedPoint.Value == baselinePoint.Value
+		if !matches {
+			mismatches++
+		}
+		if sampleLimit > 0 && len(samples) < sampleLimit {
+			sample := DecodePathCursorOutput{
+				Key:     key.key,
+				Time:    key.timestamp,
+				Type:    tsmBlockTypeName(key.typ),
+				Matches: matches,
+			}
+			if baselineOK {
+				sample.BaselineValue = baselinePoint.Value
+			}
+			if optimizedOK {
+				sample.OptimizedValue = optimizedPoint.Value
+			}
+			samples = append(samples, sample)
+		}
+	}
+	return compared, mismatches, samples
 }
 
 func addTSMOutputTimestamps(outputByKey map[string]map[int64]struct{}, key string, timestamps []int64) {

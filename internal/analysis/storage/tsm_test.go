@@ -553,6 +553,22 @@ func TestAnalyzeTSMDecodePathComparesFloatValueOutput(t *testing.T) {
 	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
 		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineCursorOutputPoints, 2; got != want {
+		t.Fatalf("baseline cursor output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorOutputPoints, 2; got != want {
+		t.Fatalf("optimized cursor output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 2; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	firstSample := decode.CursorOutputSamples[0]
+	if firstSample.Key != "load,host=a value" || firstSample.Time != 20 || firstSample.Type != "float" {
+		t.Fatalf("first cursor output sample identity = %+v", firstSample)
+	}
+	if firstSample.BaselineValue != "20.5" || firstSample.OptimizedValue != "20.5" || !firstSample.Matches {
+		t.Fatalf("first cursor output sample values = %+v", firstSample)
+	}
 
 	data, err := readTSMFileStoreData(path)
 	if err != nil {
@@ -742,6 +758,22 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
 		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineCursorOutputPoints, 2; got != want {
+		t.Fatalf("baseline cursor output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorOutputPoints, 2; got != want {
+		t.Fatalf("optimized cursor output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 2; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	firstSample := decode.CursorOutputSamples[0]
+	if firstSample.Key != "cpu,host=a value" || firstSample.Time != 20 || firstSample.Type != "integer" {
+		t.Fatalf("first cursor output sample identity = %+v", firstSample)
+	}
+	if firstSample.BaselineValue != "20" || firstSample.OptimizedValue != "20" || !firstSample.Matches {
+		t.Fatalf("first cursor output sample values = %+v", firstSample)
 	}
 	if got, want := decode.SkippedByKeyBlocks, 1; got != want {
 		t.Fatalf("skipped by key blocks = %d, want %d", got, want)

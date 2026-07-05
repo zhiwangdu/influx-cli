@@ -209,6 +209,8 @@ type DecodePathSummary struct {
 	ComparedValueOutputPoints    int                       `json:"compared_value_output_points,omitempty"`
 	ValueOutputMismatches        int                       `json:"value_output_mismatches,omitempty"`
 	ValueOutputUnavailableBlocks int                       `json:"value_output_unavailable_blocks,omitempty"`
+	BaselineCursorOutputPoints   int                       `json:"baseline_cursor_output_points,omitempty"`
+	OptimizedCursorOutputPoints  int                       `json:"optimized_cursor_output_points,omitempty"`
 	LocationBlocks               int                       `json:"location_blocks,omitempty"`
 	FilteredDecodeBlocks         int                       `json:"filtered_decode_blocks,omitempty"`
 	SavedDecodeBlocks            int                       `json:"saved_decode_blocks,omitempty"`
@@ -225,6 +227,7 @@ type DecodePathSummary struct {
 	DecodeBlocksByType           map[string]int            `json:"decode_blocks_by_type,omitempty"`
 	Samples                      []DecodePathBlockDecision `json:"samples,omitempty"`
 	CursorWindows                []DecodePathCursorWindow  `json:"cursor_windows,omitempty"`
+	CursorOutputSamples          []DecodePathCursorOutput  `json:"cursor_output_samples,omitempty"`
 	Recommendations              []string                  `json:"recommendations,omitempty"`
 }
 
@@ -255,6 +258,15 @@ type DecodePathCursorWindow struct {
 	RequiresMerge   bool     `json:"requires_merge,omitempty"`
 	Reason          string   `json:"reason,omitempty"`
 	FirstBlockIndex int      `json:"first_block_index,omitempty"`
+}
+
+type DecodePathCursorOutput struct {
+	Key            string `json:"key"`
+	Time           int64  `json:"time"`
+	Type           string `json:"type"`
+	BaselineValue  string `json:"baseline_value,omitempty"`
+	OptimizedValue string `json:"optimized_value,omitempty"`
+	Matches        bool   `json:"matches"`
 }
 
 type BlockReport struct {

@@ -171,7 +171,7 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
-	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches = compareTSMOutputPoints(baselinePoints, optimizedPoints)
+	summarizeTSMCursorOutput(summary, baselinePoints, optimizedPoints, options.BlockSampleLimit)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
