@@ -215,6 +215,105 @@ func TestAnalyzeMergesetDirectoryExpansion(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
+	dir := t.TempDir()
+	partPath1 := filepath.Join(dir, "3_1_1847A3A45055EEF0")
+	if err := writeTestMergesetPart(partPath1, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6164",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	partPath2 := filepath.Join(dir, "2_1_1847A3A45055EEF1")
+	if err := writeTestMergesetPart(partPath2, mergesetPartMetadata{
+		ItemsCount:  2,
+		BlocksCount: 1,
+		FirstItem:   "7a61",
+		LastItem:    "7a62",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(report.Files), 2; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := decode.Mode, "mergeset-file-set-table-scan-ascending"; got != want {
+		t.Fatalf("decode mode = %q, want %q", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 2; got != want {
+		t.Fatalf("baseline blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
+		t.Fatalf("optimized blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeValues, 5; got != want {
+		t.Fatalf("baseline values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeValues, 5; got != want {
+		t.Fatalf("optimized values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedOutputValues, 5; got != want {
+		t.Fatalf("optimized output values = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchSeekCalls, 2; got != want {
+		t.Fatalf("table search seek calls = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
+		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchOutputValues, 5; got != want {
+		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowCount, 1; got != want {
+		t.Fatalf("merge window count = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowBlocks, 2; got != want {
+		t.Fatalf("merge window blocks = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 2; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Files, []string{partPath2}; !equalStrings(got, want) {
+		t.Fatalf("first cursor window files = %v, want %v", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 4; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].OptimizedValue, "aa"; got != want {
+		t.Fatalf("first cursor output sample = %q, want %q", got, want)
+	}
+	wantSecondOutput := []byte{'a', 'a', 0, 0, 0, 0, 0, 0, 0, 1}
+	if got := []byte(decode.CursorOutputSamples[1].OptimizedValue); !bytes.Equal(got, wantSecondOutput) {
+		t.Fatalf("second cursor output sample = %x, want %x", got, wantSecondOutput)
+	}
+	if got, want := decode.CursorOutputSamples[2].OptimizedValue, "ad"; got != want {
+		t.Fatalf("third cursor output sample = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[3].OptimizedValue, "za"; got != want {
+		t.Fatalf("fourth cursor output sample = %q, want %q", got, want)
+	}
+	if !containsString(decode.Recommendations, "TableSearch-style heap ordering") {
+		t.Fatalf("recommendations = %v, want file-set scan recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeMergesetBlocksMismatchNotice(t *testing.T) {
 	partPath := filepath.Join(t.TempDir(), "10_2_0000000000000001")
 	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{

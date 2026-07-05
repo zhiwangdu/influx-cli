@@ -3,7 +3,15 @@ package storage
 import (
 	"bytes"
 	"fmt"
+	"sort"
 )
+
+func buildMergesetFileSetDecodePathSummary(files []FileReport, options Options) *DecodePathSummary {
+	if len(options.QueryKeys) > 0 {
+		return buildMergesetFileSetSearchSummary(files, options)
+	}
+	return buildMergesetFileSetScanSummary(files, options)
+}
 
 func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *DecodePathSummary {
 	if len(options.QueryKeys) == 0 {
@@ -65,6 +73,46 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	return summary
 }
 
+func buildMergesetFileSetScanSummary(files []FileReport, options Options) *DecodePathSummary {
+	if len(options.QueryKeys) > 0 {
+		return nil
+	}
+	summary := &DecodePathSummary{
+		Mode:                 mergesetFileSetScanMode(options),
+		LocationBlocksByType: map[string]int{},
+		DecodeBlocksByType:   map[string]int{},
+	}
+	outputSamples := []DecodePathCursorOutput{}
+	includedParts := 0
+	for _, file := range files {
+		if file.Format != FormatMergeset || file.DecodePath == nil || !isMergesetTableScanSummary(file.DecodePath) {
+			continue
+		}
+		includedParts++
+		addMergesetFileScanSummary(summary, file.DecodePath, file.Path, options.BlockSampleLimit)
+		outputSamples = append(outputSamples, file.DecodePath.CursorOutputSamples...)
+	}
+	if includedParts == 0 {
+		return nil
+	}
+	summary.TableSearchSeekCalls = includedParts
+	summary.TableSearchHeapCandidates = includedParts
+	summary.TableSearchOutputValues = summary.OptimizedOutputValues
+	if includedParts > 1 {
+		summary.MergeWindowCount = 1
+		summary.MergeWindowBlocks = includedParts
+	}
+	populateMergesetFileSetScanOutputSamples(summary, outputSamples, options)
+	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
+	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
+	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
+	if summary.OptimizedDecodeBlocks > 0 {
+		summary.Amplification = float64(summary.BaselineDecodeBlocks) / float64(summary.OptimizedDecodeBlocks)
+	}
+	summary.Recommendations = mergesetFileSetScanRecommendations(summary)
+	return summary
+}
+
 func addMergesetFileSearchSummary(dst, src *DecodePathSummary, path string, sampleLimit int) {
 	dst.BaselineDecodeBlocks += src.BaselineDecodeBlocks
 	dst.OptimizedDecodeBlocks += src.OptimizedDecodeBlocks
@@ -80,6 +128,39 @@ func addMergesetFileSearchSummary(dst, src *DecodePathSummary, path string, samp
 	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
 	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
 	appendMergesetFileSearchSamples(dst, src, path, sampleLimit)
+}
+
+func addMergesetFileScanSummary(dst, src *DecodePathSummary, path string, sampleLimit int) {
+	dst.BaselineDecodeBlocks += src.BaselineDecodeBlocks
+	dst.OptimizedDecodeBlocks += src.OptimizedDecodeBlocks
+	dst.BaselineDecodeBytes += src.BaselineDecodeBytes
+	dst.OptimizedDecodeBytes += src.OptimizedDecodeBytes
+	dst.BaselineDecodeValues += src.BaselineDecodeValues
+	dst.OptimizedDecodeValues += src.OptimizedDecodeValues
+	dst.BaselineOutputValues += src.BaselineOutputValues
+	dst.OptimizedOutputValues += src.OptimizedOutputValues
+	dst.LocationBlocks += src.LocationBlocks
+	dst.FilteredDecodeBlocks += src.FilteredDecodeBlocks
+	dst.CursorWindowCount += src.CursorWindowCount
+	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
+	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
+	appendMergesetFileSearchSamples(dst, src, path, sampleLimit)
+	appendMergesetFileScanWindows(dst, src, path, sampleLimit)
+}
+
+func appendMergesetFileScanWindows(dst, src *DecodePathSummary, path string, sampleLimit int) {
+	if sampleLimit <= 0 {
+		return
+	}
+	for _, window := range src.CursorWindows {
+		if len(dst.CursorWindows) >= sampleLimit {
+			break
+		}
+		if len(window.Files) == 0 {
+			window.Files = []string{path}
+		}
+		dst.CursorWindows = append(dst.CursorWindows, window)
+	}
 }
 
 func populateMergesetFileSetCursorWindows(summary *DecodePathSummary, matchedKeyFiles map[string][]string, options Options) {
@@ -128,6 +209,24 @@ func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tabl
 	}
 }
 
+func populateMergesetFileSetScanOutputSamples(summary *DecodePathSummary, samples []DecodePathCursorOutput, options Options) {
+	if options.BlockSampleLimit <= 0 || len(samples) == 0 {
+		return
+	}
+	sort.SliceStable(samples, func(i, j int) bool {
+		cmp := bytes.Compare([]byte(samples[i].OptimizedValue), []byte(samples[j].OptimizedValue))
+		if options.CursorDescending {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+	limit := options.BlockSampleLimit
+	if limit > len(samples) {
+		limit = len(samples)
+	}
+	summary.CursorOutputSamples = append(summary.CursorOutputSamples, samples[:limit]...)
+}
+
 func appendMergesetFileSearchSamples(dst, src *DecodePathSummary, path string, sampleLimit int) {
 	if sampleLimit <= 0 {
 		return
@@ -148,6 +247,41 @@ func mergesetFileSetSearchMode(options Options) string {
 		return "mergeset-file-set-item-search-descending"
 	}
 	return "mergeset-file-set-item-search-ascending"
+}
+
+func mergesetFileSetScanMode(options Options) string {
+	if options.CursorDescending {
+		return "mergeset-file-set-table-scan-descending"
+	}
+	return "mergeset-file-set-table-scan-ascending"
+}
+
+func isMergesetTableScanSummary(summary *DecodePathSummary) bool {
+	return summary.Mode == "mergeset-table-scan-ascending" || summary.Mode == "mergeset-table-scan-descending"
+}
+
+func mergesetFileSetScanRecommendations(summary *DecodePathSummary) []string {
+	recommendations := []string{}
+	if summary.OptimizedOutputValues > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"scan %d decoded mergeset item(s) across %d analyzed part block(s)",
+			summary.OptimizedOutputValues,
+			summary.OptimizedDecodeBlocks,
+		))
+	}
+	if summary.MergeWindowCount > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"merge %d analyzed mergeset part cursor(s) with TableSearch-style heap ordering",
+			summary.MergeWindowBlocks,
+		))
+	}
+	if len(summary.CursorOutputSamples) > 0 {
+		recommendations = append(recommendations, "file-set scan output samples are ordered by decoded mergeset item bytes")
+	}
+	if len(recommendations) == 0 {
+		recommendations = append(recommendations, "mergeset file-set table scan has no decoded item payload candidates")
+	}
+	return recommendations
 }
 
 func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Options) []string {
