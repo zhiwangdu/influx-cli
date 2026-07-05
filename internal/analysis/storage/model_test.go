@@ -21,6 +21,9 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				BaselineReadSegments:  3,
 				OptimizedReadSegments: 1,
 				SavedReadSegments:     2,
+				IteratorCostFiles:     1,
+				IteratorCostBlocks:    3,
+				IteratorCostBytes:     273,
 				Recommendations: []string{
 					"read 1 overlapping TSSP segment(s) instead of 3 meta-index candidate segment(s)",
 				},
@@ -36,6 +39,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"blocks 3->1",
 		"saved_bytes 192",
 		"segments 3->1",
+		"iterator_cost files=1 blocks=3 bytes=273",
 	} {
 		if !strings.Contains(decodeText, want) {
 			t.Fatalf("decode path summary %q does not contain %q", decodeText, want)

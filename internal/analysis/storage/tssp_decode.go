@@ -40,6 +40,9 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 			continue
 		}
 
+		summary.IteratorCostFiles = 1
+		summary.IteratorCostBlocks += metaChunks
+		summary.IteratorCostBytes += int64(meta.Size)
 		summary.LocationBlocks += metaChunks
 		summary.BaselineDecodeBlocks += metaChunks
 		summary.LocationBlocksByType["chunk-meta"] += metaChunks
@@ -152,6 +155,9 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.OptimizedDecodeValues += src.OptimizedDecodeValues
 	dst.BaselineReadSegments += src.BaselineReadSegments
 	dst.OptimizedReadSegments += src.OptimizedReadSegments
+	dst.IteratorCostFiles += src.IteratorCostFiles
+	dst.IteratorCostBlocks += src.IteratorCostBlocks
+	dst.IteratorCostBytes += src.IteratorCostBytes
 	dst.LocationBlocks += src.LocationBlocks
 	dst.FilteredDecodeBlocks += src.FilteredDecodeBlocks
 	dst.SkippedByKeyBlocks += src.SkippedByKeyBlocks

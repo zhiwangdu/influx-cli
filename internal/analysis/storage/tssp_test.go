@@ -107,6 +107,15 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	if got, want := decode.SavedDecodeBytes, int64(192); got != want {
 		t.Fatalf("saved decode bytes = %d, want %d", got, want)
 	}
+	if got, want := decode.IteratorCostFiles, 1; got != want {
+		t.Fatalf("iterator cost files = %d, want %d", got, want)
+	}
+	if got, want := decode.IteratorCostBlocks, 3; got != want {
+		t.Fatalf("iterator cost blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.IteratorCostBytes, int64(273); got != want {
+		t.Fatalf("iterator cost bytes = %d, want %d", got, want)
+	}
 	if got, want := decode.SkippedBeforeSeekBlocks, 1; got != want {
 		t.Fatalf("skipped before seek blocks = %d, want %d", got, want)
 	}
@@ -380,6 +389,16 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.SavedDecodeValues, 4; got != want {
 		t.Fatalf("saved decode values = %d, want %d", got, want)
+	}
+	if got, want := decode.IteratorCostFiles, 2; got != want {
+		t.Fatalf("iterator cost files = %d, want %d", got, want)
+	}
+	if got, want := decode.IteratorCostBlocks, 6; got != want {
+		t.Fatalf("iterator cost blocks = %d, want %d", got, want)
+	}
+	wantCostBytes := report.Files[0].DecodePath.IteratorCostBytes + report.Files[1].DecodePath.IteratorCostBytes
+	if got := decode.IteratorCostBytes; got != wantCostBytes {
+		t.Fatalf("iterator cost bytes = %d, want child sum %d", got, wantCostBytes)
 	}
 	if got, want := decode.BaselineReadSegments, 6; got != want {
 		t.Fatalf("baseline read segments = %d, want %d", got, want)
