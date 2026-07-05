@@ -72,6 +72,27 @@ func TestExecutorQueryInjectsSessionContext(t *testing.T) {
 	}
 }
 
+func TestExecutorMeasurementsAliasUsesSameQuery(t *testing.T) {
+	fake := newFakeAdapter()
+	session := NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	})
+	executor := NewExecutor(session, fake)
+
+	if _, err := executor.Execute(context.Background(), ":msts"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.lastQuery.Raw != "SHOW MEASUREMENTS" {
+		t.Fatalf("query = %q, want SHOW MEASUREMENTS", fake.lastQuery.Raw)
+	}
+	if fake.lastQuery.Database != "metrics" || fake.lastQuery.RP != "autogen" {
+		t.Fatalf("query context = %q/%q, want metrics/autogen", fake.lastQuery.Database, fake.lastQuery.RP)
+	}
+}
+
 func newTestExecutor() *Executor {
 	session := NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"})
 	return NewExecutor(session, newFakeAdapter())

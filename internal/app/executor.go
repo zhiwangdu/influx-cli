@@ -93,7 +93,7 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 			table.AddRow(database)
 		}
 		return result.FromTable(table), nil
-	case ":measurements":
+	case ":measurements", ":msts":
 		q := query.New("SHOW MEASUREMENTS", e.Session.Database, e.Session.RP, e.Session.Precision)
 		return e.Adapter.Query(ctx, q)
 	case ":schema":
@@ -185,6 +185,7 @@ func helpResult() result.Result {
 	table.AddRow(":rp <rp>", "set current retention policy")
 	table.AddRow(":dbs", "show databases")
 	table.AddRow(":measurements", "show measurements in current database")
+	table.AddRow(":msts", "alias for :measurements")
 	table.AddRow(":schema <measurement>", "show field and tag keys for a measurement")
 	table.AddRow(":status", "show current session status")
 	table.AddRow(":help", "show commands")

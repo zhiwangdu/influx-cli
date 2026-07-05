@@ -62,6 +62,8 @@ REPL meta command：
 :db <db>
 :rp <rp>
 :dbs
+:measurements
+:msts
 :help
 :q
 ```
@@ -108,6 +110,7 @@ REPL meta command：
 
 ```text
 :measurements
+:msts
 :fields <measurement>
 :tags <measurement>
 :schema <measurement>
