@@ -118,11 +118,33 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 				))
 			}
 		}
+		dataProbe, probed, err := probeTSSPDetachedDataFile(filepath.Dir(path), chunkMetas, options, dataValidation)
+		report.Extra["data_block_probe_checked"] = fmt.Sprint(probed)
+		if err != nil {
+			report.Notices = append(report.Notices, fmt.Sprintf("detached data block probe unavailable: %v", err))
+			dataProbe = nil
+		} else if dataProbe != nil {
+			report.Extra["data_block_probe_blocks"] = fmt.Sprint(dataProbe.BlocksChecked)
+			report.Extra["data_block_probe_bytes"] = fmt.Sprint(dataProbe.BytesRead)
+			report.Extra["data_block_probe_valid_blocks"] = fmt.Sprint(dataProbe.ValidBlocks)
+			report.Extra["data_block_probe_failures"] = fmt.Sprint(dataProbe.Failures())
+			report.Extra["data_block_probe_crc_mismatches"] = fmt.Sprint(dataProbe.CRCMismatches)
+			if len(dataProbe.BlockTypes) > 0 {
+				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
+			}
+			if dataProbe.Failures() > 0 {
+				report.Notices = append(report.Notices, fmt.Sprintf(
+					"detached data block probe found %d invalid block(s), including %d crc mismatch(es)",
+					dataProbe.Failures(),
+					dataProbe.CRCMismatches,
+				))
+			}
+		}
 		if options.QueryRange.Set {
 			report.Extra["query_overlap_precision"] = "detached-chunk-meta"
 		}
 		populateTSSPDetachedChunkReports(&report, chunkMetas, options)
-		report.DecodePath = buildTSSPDetachedChunkDecodePathSummary(metaIndexes, chunkMetas, options, dataValidation)
+		report.DecodePath = buildTSSPDetachedChunkDecodePathSummary(metaIndexes, chunkMetas, options, dataValidation, dataProbe)
 	} else {
 		populateTSSPDetachedMetaIndexReports(&report, metaIndexes, options)
 		report.DecodePath = buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes, options)
@@ -312,6 +334,27 @@ type tsspDetachedDataValidation struct {
 	chunkValid    map[uint64]bool
 }
 
+type tsspDetachedDataProbe struct {
+	Checked            bool
+	BlocksChecked      int
+	ValidBlocks        int
+	BytesRead          int64
+	CRCMismatches      int
+	ShortBlocks        int
+	UnknownBlockTypes  int
+	ReadErrors         int
+	BlockTypes         map[string]int
+	chunkAvailable     map[uint64]bool
+	chunkFailureReason map[uint64]string
+}
+
+func (p *tsspDetachedDataProbe) Failures() int {
+	if p == nil {
+		return 0
+	}
+	return p.CRCMismatches + p.ShortBlocks + p.UnknownBlockTypes + p.ReadErrors
+}
+
 func validateTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta) (*tsspDetachedDataValidation, bool, error) {
 	path := filepath.Join(dir, tsspDetachedDataFileName)
 	f, err := os.Open(path)
@@ -375,7 +418,179 @@ func (v *tsspDetachedDataValidation) chunkDataAvailable(chunk tsspChunkMeta) boo
 	return v.chunkValid[chunk.SID]
 }
 
-func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options, dataValidation *tsspDetachedDataValidation) *DecodePathSummary {
+func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Options, validation *tsspDetachedDataValidation) (*tsspDetachedDataProbe, bool, error) {
+	if !options.QueryRange.Set || validation == nil || !validation.Checked {
+		return nil, false, nil
+	}
+	path := filepath.Join(dir, tsspDetachedDataFileName)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer f.Close()
+	header := make([]byte, tsspHeaderSize)
+	if _, err := io.ReadFull(f, header); err != nil {
+		return nil, true, err
+	}
+	if string(header[:len(tsspMagic)]) != tsspMagic {
+		return nil, true, fmt.Errorf("invalid detached TSSP data magic")
+	}
+
+	probe := &tsspDetachedDataProbe{
+		Checked:            true,
+		BlockTypes:         map[string]int{},
+		chunkAvailable:     map[uint64]bool{},
+		chunkFailureReason: map[uint64]string{},
+	}
+	idSet := queryMetaIndexIDSet(options.QueryMetaIndexIDs)
+	for _, chunk := range chunks {
+		if !tsspQueryMetaIndexSelected(chunk.SID, idSet) {
+			continue
+		}
+		if !validation.chunkDataAvailable(chunk) {
+			probe.chunkAvailable[chunk.SID] = false
+			probe.chunkFailureReason[chunk.SID] = "segment_overlap_data_range_unavailable"
+			continue
+		}
+		chunkChecked := false
+		chunkAvailable := true
+		chunkFailureReason := ""
+		for segment, timeRange := range chunk.TimeRanges {
+			if !options.QueryRange.Overlaps(timeRange.Min, timeRange.Max) {
+				continue
+			}
+			for _, column := range chunk.Columns {
+				if segment < 0 || segment >= len(column.Segments) {
+					continue
+				}
+				location := column.Segments[segment]
+				chunkChecked = true
+				probe.BlocksChecked++
+				probe.BytesRead += int64(location.Size)
+				if !tsspRangeInFile(location.Offset, int64(location.Size), validation.FileSize) {
+					probe.ReadErrors++
+					chunkAvailable = false
+					chunkFailureReason = "segment_overlap_data_range_unavailable"
+					continue
+				}
+				block := make([]byte, int(location.Size))
+				if _, err := f.ReadAt(block, location.Offset); err != nil {
+					probe.ReadErrors++
+					chunkAvailable = false
+					chunkFailureReason = "segment_overlap_data_read_unavailable"
+					continue
+				}
+				blockType, ok, reason := inspectTSSPDetachedDataBlock(block)
+				if !ok {
+					chunkAvailable = false
+					chunkFailureReason = reason
+					switch reason {
+					case "segment_overlap_data_crc_unavailable":
+						probe.CRCMismatches++
+					case "segment_overlap_data_header_unavailable":
+						probe.ShortBlocks++
+					default:
+						probe.UnknownBlockTypes++
+					}
+					continue
+				}
+				probe.ValidBlocks++
+				probe.BlockTypes[blockType]++
+			}
+		}
+		if chunkChecked {
+			probe.chunkAvailable[chunk.SID] = chunkAvailable
+			if !chunkAvailable {
+				probe.chunkFailureReason[chunk.SID] = chunkFailureReason
+			}
+		}
+	}
+	return probe, true, nil
+}
+
+func inspectTSSPDetachedDataBlock(block []byte) (string, bool, string) {
+	if len(block) < crc32.Size+1 {
+		return "", false, "segment_overlap_data_header_unavailable"
+	}
+	wantCRC := binary.BigEndian.Uint32(block[:crc32.Size])
+	payload := block[crc32.Size:]
+	if gotCRC := crc32.ChecksumIEEE(payload); gotCRC != wantCRC {
+		return "", false, "segment_overlap_data_crc_unavailable"
+	}
+	blockType, ok := tsspDataBlockTypeName(payload[0])
+	if !ok {
+		return "", false, "segment_overlap_data_header_unavailable"
+	}
+	return blockType, true, ""
+}
+
+func tsspDataBlockTypeName(blockType byte) (string, bool) {
+	switch blockType {
+	case 1:
+		return "integer", true
+	case 3:
+		return "float", true
+	case 4:
+		return "string", true
+	case 5:
+		return "boolean", true
+	case 17:
+		return "float-one", true
+	case 18:
+		return "integer-one", true
+	case 19:
+		return "boolean-one", true
+	case 20:
+		return "string-one", true
+	case 31:
+		return "float-full", true
+	case 32:
+		return "integer-full", true
+	case 33:
+		return "boolean-full", true
+	case 34:
+		return "string-full", true
+	case 41:
+		return "float-empty", true
+	case 42:
+		return "integer-empty", true
+	case 43:
+		return "boolean-empty", true
+	case 44:
+		return "string-empty", true
+	default:
+		return "", false
+	}
+}
+
+func tsspDetachedDataProbeTypeSummary(types map[string]int) string {
+	names := make([]string, 0, len(types))
+	for name := range types {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s:%d", name, types[name]))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (p *tsspDetachedDataProbe) chunkDataAvailable(chunk tsspChunkMeta) (bool, string, bool) {
+	if p == nil || !p.Checked {
+		return false, "", false
+	}
+	available, ok := p.chunkAvailable[chunk.SID]
+	if !ok {
+		return false, "", false
+	}
+	return available, p.chunkFailureReason[chunk.SID], true
+}
+
+func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options, dataValidation *tsspDetachedDataValidation, dataProbe *tsspDetachedDataProbe) *DecodePathSummary {
 	if !options.QueryRange.Set {
 		return nil
 	}
@@ -427,6 +642,8 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0)
 		optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples)
 		valueOutputAvailable := false
+		valueOutputChecked := false
+		valueUnavailableReason := ""
 
 		summary.LocationBlocks++
 		summary.LocationBlocksByType["detached-chunk-meta"]++
@@ -444,10 +661,21 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 			summary.OptimizedReadAtCalls += optimizedReadAtCalls
 			summary.DecodeBlocksByType["detached-chunk-meta"]++
 			if dataValidation != nil && dataValidation.Checked {
+				valueOutputChecked = true
 				valueOutputAvailable = dataValidation.chunkDataAvailable(chunk)
 				if !valueOutputAvailable {
-					summary.ValueOutputUnavailableBlocks++
+					valueUnavailableReason = "segment_overlap_data_range_unavailable"
 				}
+			}
+			if available, reason, ok := dataProbe.chunkDataAvailable(chunk); ok {
+				valueOutputChecked = true
+				valueOutputAvailable = available
+				if !valueOutputAvailable {
+					valueUnavailableReason = reason
+				}
+			}
+			if valueOutputChecked && !valueOutputAvailable {
+				summary.ValueOutputUnavailableBlocks++
 			}
 		} else if maxTime < options.QueryRange.Min {
 			summary.SkippedBeforeSeekBlocks++
@@ -455,9 +683,15 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 			summary.SkippedAfterRangeBlocks++
 		}
 		appendTSSPDetachedChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
-			baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, dataValidation != nil && dataValidation.Checked, valueOutputAvailable, options.BlockSampleLimit)
+			baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, valueOutputChecked, valueOutputAvailable, valueUnavailableReason, options.BlockSampleLimit)
 	}
 
+	if dataProbe != nil {
+		summary.DataBlockProbeBlocks = dataProbe.BlocksChecked
+		summary.DataBlockProbeBytes = dataProbe.BytesRead
+		summary.DataBlockProbeFailures = dataProbe.Failures()
+		summary.DataBlockProbeCRCMismatches = dataProbe.CRCMismatches
+	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
@@ -474,7 +708,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 }
 
 func appendTSSPDetachedChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32,
-	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, sampleLimit int) {
+	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, valueUnavailableReason string, sampleLimit int) {
 	if sampleLimit <= 0 || len(summary.Samples) >= sampleLimit {
 		return
 	}
@@ -483,7 +717,10 @@ func appendTSSPDetachedChunkDecodeSample(summary *DecodePathSummary, chunk tsspC
 	if decoded {
 		reason = "segment_overlap"
 		if valueOutputChecked && !valueOutputAvailable {
-			reason = "segment_overlap_data_range_unavailable"
+			reason = valueUnavailableReason
+			if reason == "" {
+				reason = "segment_overlap_data_unavailable"
+			}
 		}
 	}
 	summary.Samples = append(summary.Samples, DecodePathBlockDecision{
@@ -755,6 +992,19 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			"issue %d detached TSSP data ReadAt call(s) instead of %d candidate column-segment ReadAt call(s)",
 			summary.OptimizedReadAtCalls,
 			summary.BaselineReadAtCalls,
+		))
+	}
+	if summary.DataBlockProbeBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"verified %d detached TSSP data block(s) with CRC before value decode",
+			summary.DataBlockProbeBlocks-summary.DataBlockProbeFailures,
+		))
+	}
+	if summary.DataBlockProbeFailures > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"detached TSSP data block probe found %d invalid block(s), including %d crc mismatch(es)",
+			summary.DataBlockProbeFailures,
+			summary.DataBlockProbeCRCMismatches,
 		))
 	}
 	if summary.BaselineCursorReadCalls > summary.OptimizedCursorReadCalls {

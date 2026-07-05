@@ -277,7 +277,7 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTestTSSPDetachedData(filepath.Join(dir, tsspDetachedDataFileName), 2200); err != nil {
+	if err := writeTestTSSPDetachedData(filepath.Join(dir, tsspDetachedDataFileName), 2200, chunks...); err != nil {
 		t.Fatal(err)
 	}
 	queryRange, err := NewTimeRange(210, 220)
@@ -308,6 +308,21 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	}
 	if got, want := file.Extra["data_invalid_ranges"], "0"; got != want {
 		t.Fatalf("data invalid ranges = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_checked"], "true"; got != want {
+		t.Fatalf("data block probe checked = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_valid_blocks"], "2"; got != want {
+		t.Fatalf("data block probe valid blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_crc_mismatches"], "0"; got != want {
+		t.Fatalf("data block probe crc mismatches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "integer-full:2"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
 	}
 	if got, want := file.BlockCount, 2; got != want {
 		t.Fatalf("block count = %d, want %d", got, want)
@@ -370,6 +385,15 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
 		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeBlocks, 2; got != want {
+		t.Fatalf("data block probe blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFailures, 0; got != want {
+		t.Fatalf("data block probe failures = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeCRCMismatches, 0; got != want {
+		t.Fatalf("data block probe crc mismatches = %d, want %d", got, want)
+	}
 	if got, want := decode.LocationBlocksByType["detached-chunk-meta"], 2; got != want {
 		t.Fatalf("location detached chunk metadata blocks = %d, want %d", got, want)
 	}
@@ -418,6 +442,86 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if !containsString(decode.Recommendations, "detached TSSP data ReadAt") {
 		t.Fatalf("recommendations = %v, want detached data ReadAt recommendation", decode.Recommendations)
 	}
+	if !containsString(decode.Recommendations, "verified 2 detached TSSP data block") {
+		t.Fatalf("recommendations = %v, want detached data block probe recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 10, minTime: 100, maxTime: 150, offset: 1000, size: 40},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	dataPath := filepath.Join(dir, tsspDetachedDataFileName)
+	if err := writeTestTSSPDetachedData(dataPath, 1200, chunks...); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[chunks[0].offset+int64(crc32.Size)+1] ^= 0xff
+	if err := os.WriteFile(dataPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(100, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_valid_blocks"], "1"; got != want {
+		t.Fatalf("data block probe valid blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_failures"], "1"; got != want {
+		t.Fatalf("data block probe failures = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_crc_mismatches"], "1"; got != want {
+		t.Fatalf("data block probe crc mismatches = %q, want %q", got, want)
+	}
+	if !containsString(report.Notices, "detached data block probe found 1 invalid block") {
+		t.Fatalf("notices = %v, want data block probe notice", report.Notices)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 1; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeBlocks, 2; got != want {
+		t.Fatalf("data block probe blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFailures, 1; got != want {
+		t.Fatalf("data block probe failures = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeCRCMismatches, 1; got != want {
+		t.Fatalf("data block probe crc mismatches = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].Reason, "segment_overlap_data_crc_unavailable"; got != want {
+		t.Fatalf("sample reason = %q, want %q", got, want)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP data block probe found 1 invalid block") {
+		t.Fatalf("recommendations = %v, want data block probe failure recommendation", decode.Recommendations)
+	}
 }
 
 func TestAnalyzeTSSPDetachedMetaIndexBadDataRangeNotice(t *testing.T) {
@@ -433,7 +537,7 @@ func TestAnalyzeTSSPDetachedMetaIndexBadDataRangeNotice(t *testing.T) {
 	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTestTSSPDetachedData(filepath.Join(dir, tsspDetachedDataFileName), 2080); err != nil {
+	if err := writeTestTSSPDetachedData(filepath.Join(dir, tsspDetachedDataFileName), 2080, chunks...); err != nil {
 		t.Fatal(err)
 	}
 	queryRange, err := NewTimeRange(210, 220)
@@ -672,12 +776,35 @@ func writeTestTSSPDetachedChunkMeta(path string, chunks []testTSSPChunkSpec) ([]
 	return metaIndexes, os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
-func writeTestTSSPDetachedData(path string, size int) error {
+func writeTestTSSPDetachedData(path string, size int, chunks ...testTSSPChunkSpec) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsspMagic)
 	writeUint64(&buf, 2)
 	for buf.Len() < size {
 		buf.WriteByte(0)
 	}
+	for _, chunk := range chunks {
+		if err := writeTestTSSPDetachedDataBlock(buf.Bytes(), chunk.offset, chunk.size); err != nil {
+			return err
+		}
+		if err := writeTestTSSPDetachedDataBlock(buf.Bytes(), chunk.offset+int64(chunk.size), 16); err != nil {
+			return err
+		}
+	}
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPDetachedDataBlock(data []byte, offset int64, size uint32) error {
+	if offset < 0 || int64(len(data)) < offset+int64(size) {
+		return nil
+	}
+	if size < crc32.Size+5 {
+		return nil
+	}
+	payload := make([]byte, int(size)-crc32.Size)
+	payload[0] = 32 // openGemini encoding.BlockIntegerFull.
+	binary.BigEndian.PutUint32(payload[1:5], 1)
+	binary.BigEndian.PutUint32(data[offset:], crc32.ChecksumIEEE(payload))
+	copy(data[offset+crc32.Size:], payload)
+	return nil
 }
