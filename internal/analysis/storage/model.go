@@ -101,6 +101,8 @@ type BlockReport struct {
 	Type            string `json:"type"`
 	Offset          int64  `json:"offset,omitempty"`
 	SizeBytes       uint32 `json:"size_bytes,omitempty"`
+	ColumnCount     int    `json:"column_count,omitempty"`
+	SegmentCount    int    `json:"segment_count,omitempty"`
 	ValueCount      int    `json:"value_count,omitempty"`
 	QueryOverlaps   bool   `json:"query_overlaps,omitempty"`
 	ContainedChunks int    `json:"contained_chunks,omitempty"`
