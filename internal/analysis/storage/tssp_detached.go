@@ -560,7 +560,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
 				chunkOutputPoints += segmentRows
-				appendTSSPDetachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, options.BlockSampleLimit)
+				appendTSSPDetachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, options.QueryRange, options.BlockSampleLimit)
 			}
 		}
 		if chunkChecked {
@@ -581,6 +581,7 @@ type tsspDetachedDataBlockInfo struct {
 	Rows       int
 	RowsKnown  bool
 	Value      string
+	Values     []string
 	ValueKnown bool
 	ValueNull  bool
 }
@@ -613,6 +614,7 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 		info.RowsKnown = true
 		if value, ok := decodeTSSPDetachedOneBlockValue(payload); ok {
 			info.Value = value
+			info.Values = []string{value}
 			info.ValueKnown = true
 		}
 	case tsspDataBlockTypeIsFullOrEmpty(payload[0]):
@@ -624,6 +626,14 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 		if tsspDataBlockTypeIsEmpty(payload[0]) {
 			info.ValueKnown = true
 			info.ValueNull = true
+		} else if payload[0] == 32 {
+			if values, ok := decodeTSSPIntegerFullUncompressedValues(payload[5:], info.Rows); ok {
+				info.Values = values
+				if len(values) > 0 {
+					info.Value = values[0]
+				}
+				info.ValueKnown = true
+			}
 		}
 	default:
 		if !validTSSPRegularDataBlockHeader(payload) {
@@ -662,6 +672,25 @@ func decodeTSSPDetachedOneBlockValue(payload []byte) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func decodeTSSPIntegerFullUncompressedValues(encoded []byte, rows int) ([]string, bool) {
+	if rows < 0 || len(encoded) < 5 || encoded[0]>>4 != 4 {
+		return nil, false
+	}
+	rawLen := int(binary.BigEndian.Uint32(encoded[1:5]))
+	if rawLen%8 != 0 || len(encoded)-5 < rawLen {
+		return nil, false
+	}
+	if rows != rawLen/8 {
+		return nil, false
+	}
+	values := make([]string, 0, rows)
+	raw := encoded[5 : 5+rawLen]
+	for offset := 0; offset < len(raw); offset += 8 {
+		values = append(values, strconv.FormatInt(decodeGeminiInt64(raw[offset:offset+8]), 10))
+	}
+	return values, true
 }
 
 func tsspDataBlockTypeName(blockType byte) (string, bool) {
@@ -756,12 +785,8 @@ func (p *tsspDetachedDataProbe) chunkOutputPointsFor(chunk tsspChunkMeta) int {
 	return p.chunkOutputPoints[chunk.SID]
 }
 
-func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, sampleLimit int) {
+func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, queryRange TimeRange, sampleLimit int) {
 	if probe == nil || sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
-		return
-	}
-	timestamp, ok := tsspDetachedSegmentSampleTime(timeRange, blocks)
-	if !ok {
 		return
 	}
 	columnNames := sortedTSSPDataBlockColumns(blocks)
@@ -770,30 +795,55 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 		if columnName == "time" || !block.ValueKnown || block.ValueNull {
 			continue
 		}
-		probe.valueSamples = append(probe.valueSamples, DecodePathCursorOutput{
-			Key:            fmt.Sprintf("meta-index-id:%d/%s", chunk.SID, columnName),
-			Time:           timestamp,
-			Type:           block.Type,
-			OptimizedValue: block.Value,
-			Matches:        true,
-		})
-		if len(probe.valueSamples) >= sampleLimit {
-			return
+		timestamps, ok := tsspDataBlockSampleTimes(timeRange, blocks, len(block.Values))
+		if !ok {
+			continue
+		}
+		for i, value := range block.Values {
+			timestamp := timestamps[i]
+			if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
+				continue
+			}
+			probe.valueSamples = append(probe.valueSamples, DecodePathCursorOutput{
+				Key:            fmt.Sprintf("meta-index-id:%d/%s", chunk.SID, columnName),
+				Time:           timestamp,
+				Type:           block.Type,
+				OptimizedValue: value,
+				Matches:        true,
+			})
+			if len(probe.valueSamples) >= sampleLimit {
+				return
+			}
 		}
 	}
 }
 
-func tsspDetachedSegmentSampleTime(timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo) (int64, bool) {
+func tsspDataBlockSampleTimes(timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, rows int) ([]int64, bool) {
+	if rows <= 0 {
+		return nil, false
+	}
 	if block, ok := blocks["time"]; ok && block.ValueKnown && !block.ValueNull {
-		value, err := strconv.ParseInt(block.Value, 10, 64)
-		if err == nil {
-			return value, true
+		if len(block.Values) != rows {
+			return nil, false
 		}
+		timestamps := make([]int64, 0, rows)
+		for _, raw := range block.Values {
+			value, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				return nil, false
+			}
+			timestamps = append(timestamps, value)
+		}
+		return timestamps, true
 	}
 	if timeRange.Min == timeRange.Max {
-		return timeRange.Min, true
+		timestamps := make([]int64, rows)
+		for i := range timestamps {
+			timestamps[i] = timeRange.Min
+		}
+		return timestamps, true
 	}
-	return 0, false
+	return nil, false
 }
 
 func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options, dataValidation *tsspDetachedDataValidation, dataProbe *tsspDetachedDataProbe) *DecodePathSummary {
@@ -1224,7 +1274,7 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 	}
 	if len(summary.CursorOutputSamples) > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"sampled %d detached TSSP one-row value output(s) from data blocks",
+			"sampled %d detached TSSP value output(s) from data blocks",
 			len(summary.CursorOutputSamples),
 		))
 	}

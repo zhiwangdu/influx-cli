@@ -139,7 +139,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
 				chunkOutputPoints += segmentRows
-				appendTSSPAttachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, options.BlockSampleLimit)
+				appendTSSPAttachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, options.QueryRange, options.BlockSampleLimit)
 			}
 		}
 		if chunkChecked {
@@ -180,12 +180,8 @@ func (p *tsspAttachedDataProbe) chunkOutputPointsFor(chunk tsspChunkMeta) int {
 	return p.chunkOutputPoints[chunk.SID]
 }
 
-func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, sampleLimit int) {
+func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, queryRange TimeRange, sampleLimit int) {
 	if probe == nil || sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
-		return
-	}
-	timestamp, ok := tsspDetachedSegmentSampleTime(timeRange, blocks)
-	if !ok {
 		return
 	}
 	columnNames := sortedTSSPDataBlockColumns(blocks)
@@ -194,15 +190,25 @@ func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk
 		if columnName == "time" || !block.ValueKnown || block.ValueNull {
 			continue
 		}
-		probe.valueSamples = append(probe.valueSamples, DecodePathCursorOutput{
-			Key:            fmt.Sprintf("sid:%d/%s", chunk.SID, columnName),
-			Time:           timestamp,
-			Type:           block.Type,
-			OptimizedValue: block.Value,
-			Matches:        true,
-		})
-		if len(probe.valueSamples) >= sampleLimit {
-			return
+		timestamps, ok := tsspDataBlockSampleTimes(timeRange, blocks, len(block.Values))
+		if !ok {
+			continue
+		}
+		for i, value := range block.Values {
+			timestamp := timestamps[i]
+			if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
+				continue
+			}
+			probe.valueSamples = append(probe.valueSamples, DecodePathCursorOutput{
+				Key:            fmt.Sprintf("sid:%d/%s", chunk.SID, columnName),
+				Time:           timestamp,
+				Type:           block.Type,
+				OptimizedValue: value,
+				Matches:        true,
+			})
+			if len(probe.valueSamples) >= sampleLimit {
+				return
+			}
 		}
 	}
 }

@@ -523,7 +523,7 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(summary.CursorOutputSamples) > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"sampled %d TSSP one-row value output(s) from data blocks",
+			"sampled %d TSSP value output(s) from data blocks",
 			len(summary.CursorOutputSamples),
 		))
 	}
