@@ -168,9 +168,11 @@ func newFakeAdapter() *fakeAdapter {
 }
 
 type fakeAdapter struct {
-	lastQuery          query.Query
-	retentionPolicies  map[string][]adapter.RetentionPolicy
-	showDatabasesCalls int
+	lastQuery             query.Query
+	retentionPolicies     map[string][]adapter.RetentionPolicy
+	showDatabasesCalls    int
+	showMeasurementsCalls int
+	getSchemaCalls        int
 }
 
 func (f *fakeAdapter) Name() string {
@@ -200,15 +202,21 @@ func (f *fakeAdapter) ShowRetentionPolicies(ctx context.Context, db string) ([]a
 	return []adapter.RetentionPolicy{{Name: "autogen", Duration: "0s", ShardGroupDuration: "168h0m0s", ReplicaN: "1", Default: true}}, nil
 }
 
+func (f *fakeAdapter) ShowMeasurements(ctx context.Context, db, rp string) ([]string, error) {
+	f.showMeasurementsCalls++
+	return []string{"cpu", "disk", "mem"}, nil
+}
+
 func (f *fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
+	f.getSchemaCalls++
 	return schema.Snapshot{
 		Database:        scope.Database,
 		RetentionPolicy: scope.RetentionPolicy,
 		Measurements: []schema.Measurement{
 			{
 				Name:   scope.Measurement,
-				Fields: []schema.Field{{Name: "value", Type: "float"}},
-				Tags:   []schema.Tag{{Name: "host"}},
+				Fields: []schema.Field{{Name: "usage_idle", Type: "float"}, {Name: "value", Type: "float"}},
+				Tags:   []schema.Tag{{Name: "host"}, {Name: "region"}},
 			},
 		},
 	}, nil

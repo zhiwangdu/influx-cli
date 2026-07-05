@@ -17,6 +17,7 @@ type Adapter interface {
 	Query(ctx context.Context, q query.Query) (result.Result, error)
 	ShowDatabases(ctx context.Context) ([]string, error)
 	ShowRetentionPolicies(ctx context.Context, db string) ([]RetentionPolicy, error)
+	ShowMeasurements(ctx context.Context, db, rp string) ([]string, error)
 	GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error)
 }
 

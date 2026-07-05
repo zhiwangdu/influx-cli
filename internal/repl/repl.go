@@ -3,6 +3,7 @@ package repl
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -19,39 +20,87 @@ type Options struct {
 	History *history.Store
 }
 
-func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Writer, options Options) error {
-	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
+var errInputInterrupted = errors.New("input interrupted")
 
-	fmt.Fprintln(out, "Enter run | Ctrl+C cancel | :q quit | :help commands")
+type lineReader interface {
+	ReadLine(prompt string) (string, error)
+	Close() error
+}
+
+func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Writer, options Options) error {
+	reader := lineReader(newScannerLineReader(in, out))
+	if terminalReader, ok, err := newTerminalLineReader(ctx, executor, in, out); err != nil {
+		return err
+	} else if ok {
+		reader = terminalReader
+	}
+	return runWithReader(ctx, executor, reader, out, options)
+}
+
+func runWithReader(ctx context.Context, executor *app.Executor, reader lineReader, out io.Writer, options Options) error {
+	defer reader.Close()
+
+	fmt.Fprintln(out, "Enter run | \\ continue | Tab complete | Ctrl+C cancel | :q quit | :help commands")
+	var buffer statementBuffer
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		fmt.Fprint(out, executor.Session.Prompt())
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return err
-			}
-			return nil
+		prompt := executor.Session.Prompt()
+		if buffer.Active() {
+			prompt = "  -> "
 		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		line, err := reader.ReadLine(prompt)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			if errors.Is(err, errInputInterrupted) {
+				buffer.Reset()
+				continue
+			}
+			return err
+		}
+		if buffer.Active() {
+			trimmedLine := strings.TrimSpace(line)
+			if trimmedLine == ":cancel" || trimmedLine == ":clear" {
+				buffer.Reset()
+				fmt.Fprintln(out, "query cleared")
+				fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
+				continue
+			}
+			if strings.HasPrefix(trimmedLine, ":") {
+				fmt.Fprintln(out, "error: finish query with ; or cancel it first")
+				fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
+				continue
+			}
+		}
+		statement, ready := buffer.Add(line)
+		if !ready {
 			continue
 		}
-		if line == ":q" || strings.EqualFold(line, "q") {
+		statement = normalizeStatement(statement)
+		if statement == "" {
+			continue
+		}
+		if statement == ":q" || strings.EqualFold(statement, "q") {
 			return nil
+		}
+		if statement == ":cancel" || statement == ":clear" {
+			fmt.Fprintln(out, "no pending query")
+			fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
+			continue
 		}
 		// Render format is REPL-local UI state, so it is handled before app
 		// meta commands that mutate database/session context.
-		if handled, err := handleFormatCommand(line, &options, out); handled {
+		if handled, err := handleFormatCommand(statement, &options, out); handled {
 			if err != nil {
 				fmt.Fprintln(out, "error:", err)
 			}
 			fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 			continue
 		}
-		if handled, err := handleHistoryCommand(line, &options, out); handled {
+		if handled, err := handleHistoryCommand(statement, &options, out); handled {
 			if err != nil {
 				fmt.Fprintln(out, "error:", err)
 			}
@@ -59,7 +108,7 @@ func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Write
 			continue
 		}
 
-		res, err := executor.Execute(ctx, line)
+		res, err := executor.Execute(ctx, statement)
 		if err != nil {
 			fmt.Fprintln(out, "error:", err)
 			fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
@@ -74,13 +123,39 @@ func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Write
 		if strings.TrimSpace(output) != "" {
 			fmt.Fprintln(out, output)
 		}
-		if shouldPersistHistory(line) {
-			if err := persistHistory(executor, options.History, line); err != nil {
+		if shouldPersistHistory(statement) {
+			if err := persistHistory(executor, options.History, statement); err != nil {
 				fmt.Fprintln(out, "warning:", err)
 			}
 		}
 		fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 	}
+}
+
+type scannerLineReader struct {
+	scanner *bufio.Scanner
+	out     io.Writer
+}
+
+func newScannerLineReader(in io.Reader, out io.Writer) *scannerLineReader {
+	scanner := bufio.NewScanner(in)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	return &scannerLineReader{scanner: scanner, out: out}
+}
+
+func (r *scannerLineReader) ReadLine(prompt string) (string, error) {
+	fmt.Fprint(r.out, prompt)
+	if !r.scanner.Scan() {
+		if err := r.scanner.Err(); err != nil {
+			return "", err
+		}
+		return "", io.EOF
+	}
+	return r.scanner.Text(), nil
+}
+
+func (r *scannerLineReader) Close() error {
+	return nil
 }
 
 func handleFormatCommand(line string, options *Options, out io.Writer) (bool, error) {

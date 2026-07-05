@@ -105,8 +105,8 @@ REPL meta command：
 | 模块 | 交付内容 |
 | --- | --- |
 | history | query history 持久化 |
-| multiline | 多行 query 输入 |
-| autocomplete | db/rp/measurement/field/tag |
+| multiline | 多行 query 输入，支持 `\` 续行、pending query 分号结束和 `:cancel`/`:clear` |
+| autocomplete | Tab 补全 db/rp/measurement/field/tag |
 | schema cache | TTL + 手动刷新 |
 | openGemini | 兼容查询 adapter |
 | render | sparkline 细化，支持多 series 降级 |
@@ -122,6 +122,8 @@ REPL meta command：
 :tags <measurement>
 :schema <measurement>
 :refresh schema
+:cancel
+:clear
 ```
 
 ### 4.3 验收标准
@@ -129,7 +131,8 @@ REPL meta command：
 | 验收项 | 标准 |
 | --- | --- |
 | history | Ctrl+R 或命令可检索历史 |
-| autocomplete | Tab 能补全 db、measurement、field/tag |
+| multiline | REPL 可组装多行 InfluxQL/Flux query 并作为一次查询执行 |
+| autocomplete | Tab 能补全 db、rp、measurement、field/tag |
 | schema | `:schema cpu` 可展示 field/tag |
 | openGemini | 通过兼容接口执行基础 query |
 | render | 多 series 不产生不可读输出 |

@@ -57,3 +57,50 @@ func TestShowRetentionPoliciesPreservesDefaultFlag(t *testing.T) {
 		t.Fatalf("second policy = %#v, want raw non-default", policies[1])
 	}
 }
+
+func TestShowMeasurementsUsesDatabaseAndRetentionPolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/query" {
+			t.Fatalf("path = %q, want /query", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := r.Form.Get("q"), "SHOW MEASUREMENTS"; got != want {
+			t.Fatalf("query = %q, want %q", got, want)
+		}
+		if got, want := r.Form.Get("db"), "metrics"; got != want {
+			t.Fatalf("db = %q, want %q", got, want)
+		}
+		if got, want := r.Form.Get("rp"), "autogen"; got != want {
+			t.Fatalf("rp = %q, want %q", got, want)
+		}
+		io.WriteString(w, `{
+			"results": [
+				{
+					"statement_id": 0,
+					"series": [
+						{
+							"name": "measurements",
+							"columns": ["name"],
+							"values": [["mem"], ["cpu"]]
+						}
+					]
+				}
+			]
+		}`)
+	}))
+	defer server.Close()
+
+	adapter, err := New(Config{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurements, err := adapter.ShowMeasurements(context.Background(), "metrics", "autogen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(measurements) != 2 || measurements[0] != "cpu" || measurements[1] != "mem" {
+		t.Fatalf("measurements = %#v, want sorted cpu/mem", measurements)
+	}
+}

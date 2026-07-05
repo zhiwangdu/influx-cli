@@ -21,7 +21,7 @@ import (
 func TestRunChangesRenderFormat(t *testing.T) {
 	executor := app.NewExecutor(
 		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
-		fakeAdapter{},
+		&fakeAdapter{},
 	)
 	input := strings.NewReader(strings.Join([]string{
 		":format sparkline",
@@ -58,7 +58,7 @@ func TestRunChangesRenderFormat(t *testing.T) {
 func TestRunShowsCurrentDefaultFormat(t *testing.T) {
 	executor := app.NewExecutor(
 		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
-		fakeAdapter{},
+		&fakeAdapter{},
 	)
 	input := strings.NewReader(":format\n:q\n")
 	var out bytes.Buffer
@@ -74,7 +74,7 @@ func TestRunShowsCurrentDefaultFormat(t *testing.T) {
 func TestRunRejectsInvalidRenderFormatCommands(t *testing.T) {
 	executor := app.NewExecutor(
 		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
-		fakeAdapter{},
+		&fakeAdapter{},
 	)
 	input := strings.NewReader(strings.Join([]string{
 		":format sparkline",
@@ -102,15 +102,16 @@ func TestRunRejectsInvalidRenderFormatCommands(t *testing.T) {
 	}
 }
 
-func TestRunPersistsAndShowsQueryHistory(t *testing.T) {
+func TestRunExecutesMultilineQueryAndPersistsOneHistoryEntry(t *testing.T) {
 	store := history.NewStore(filepath.Join(t.TempDir(), "history.jsonl"), history.Options{})
+	fake := &fakeAdapter{}
 	executor := app.NewExecutor(
 		app.NewSession(config.Effective{Adapter: "fake", Database: "metrics", RetentionPolicy: "autogen", Precision: "rfc3339"}),
-		fakeAdapter{},
+		fake,
 	)
 	input := strings.NewReader(strings.Join([]string{
-		":format sparkline",
-		"SELECT mean(value) FROM cpu",
+		"SELECT mean(value)",
+		"FROM cpu;",
 		":history",
 		":q",
 		"",
@@ -124,6 +125,12 @@ func TestRunPersistsAndShowsQueryHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if got, want := len(fake.queries), 1; got != want {
+		t.Fatalf("query executions = %d, want %d", got, want)
+	}
+	if got, want := fake.queries[0].Raw, "SELECT mean(value)\nFROM cpu"; got != want {
+		t.Fatalf("executed query = %q, want %q", got, want)
+	}
 	entries, err := store.Search("", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +138,7 @@ func TestRunPersistsAndShowsQueryHistory(t *testing.T) {
 	if got, want := len(entries), 1; got != want {
 		t.Fatalf("history entries = %d, want %d", got, want)
 	}
-	if entries[0].Query != "SELECT mean(value) FROM cpu" {
+	if entries[0].Query != "SELECT mean(value)\nFROM cpu" {
 		t.Fatalf("history query = %q", entries[0].Query)
 	}
 	if entries[0].Database != "metrics" || entries[0].RetentionPolicy != "autogen" {
@@ -149,6 +156,68 @@ func TestRunPersistsAndShowsQueryHistory(t *testing.T) {
 	}
 }
 
+func TestRunRejectsMetaCommandDuringPendingQueryAndCancelClearsBuffer(t *testing.T) {
+	fake := &fakeAdapter{}
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		fake,
+	)
+	input := strings.NewReader(strings.Join([]string{
+		"SELECT mean(value)",
+		":status",
+		":cancel",
+		"SHOW DATABASES",
+		":q",
+		"",
+	}, "\n"))
+	var out bytes.Buffer
+
+	if err := Run(context.Background(), executor, input, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(fake.queries), 1; got != want {
+		t.Fatalf("query executions = %d, want %d", got, want)
+	}
+	if fake.queries[0].Raw != "SHOW DATABASES" {
+		t.Fatalf("query = %q, want SHOW DATABASES", fake.queries[0].Raw)
+	}
+	output := out.String()
+	if !strings.Contains(output, "finish query with ; or cancel it first") {
+		t.Fatalf("missing pending meta error:\n%s", output)
+	}
+	if !strings.Contains(output, "query cleared") {
+		t.Fatalf("missing clear confirmation:\n%s", output)
+	}
+}
+
+func TestRunCancelWithoutPendingQueryIsHandledLocally(t *testing.T) {
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{},
+	)
+	var out bytes.Buffer
+	if err := Run(context.Background(), executor, strings.NewReader(":cancel\n:q\n"), &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "no pending query") {
+		t.Fatalf("missing no pending query output:\n%s", out.String())
+	}
+}
+
+func TestRunDoesNotExecutePendingQueryAtEOF(t *testing.T) {
+	fake := &fakeAdapter{}
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		fake,
+	)
+	if err := Run(context.Background(), executor, strings.NewReader("SELECT mean(value)\n"), &bytes.Buffer{}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.queries) != 0 {
+		t.Fatalf("pending query was executed: %#v", fake.queries)
+	}
+}
+
 func TestRunSearchesHistoryByFilter(t *testing.T) {
 	store := history.NewStore(filepath.Join(t.TempDir(), "history.jsonl"), history.Options{})
 	if err := store.Append(history.Entry{Query: "SELECT mean(value) FROM cpu"}); err != nil {
@@ -159,7 +228,7 @@ func TestRunSearchesHistoryByFilter(t *testing.T) {
 	}
 	executor := app.NewExecutor(
 		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
-		fakeAdapter{},
+		&fakeAdapter{},
 	)
 	input := strings.NewReader(":history cpu\n:q\n")
 	var out bytes.Buffer
@@ -182,7 +251,7 @@ func TestRunSearchesHistoryByFilter(t *testing.T) {
 func TestRunRejectsInvalidHistoryLimit(t *testing.T) {
 	executor := app.NewExecutor(
 		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
-		fakeAdapter{},
+		&fakeAdapter{},
 	)
 	input := strings.NewReader(":history 0\n:q\n")
 	var out bytes.Buffer
@@ -197,17 +266,20 @@ func TestRunRejectsInvalidHistoryLimit(t *testing.T) {
 	}
 }
 
-type fakeAdapter struct{}
+type fakeAdapter struct {
+	queries []query.Query
+}
 
-func (fakeAdapter) Name() string {
+func (*fakeAdapter) Name() string {
 	return "fake"
 }
 
-func (fakeAdapter) Ping(ctx context.Context) error {
+func (*fakeAdapter) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (fakeAdapter) Query(ctx context.Context, q query.Query) (result.Result, error) {
+func (f *fakeAdapter) Query(ctx context.Context, q query.Query) (result.Result, error) {
+	f.queries = append(f.queries, q)
 	base := time.Unix(0, 0).UTC()
 	table := result.NewTable([]string{"time", "value"})
 	table.AddRow(base, 1.0)
@@ -230,14 +302,18 @@ func (fakeAdapter) Query(ctx context.Context, q query.Query) (result.Result, err
 	}, nil
 }
 
-func (fakeAdapter) ShowDatabases(ctx context.Context) ([]string, error) {
+func (*fakeAdapter) ShowDatabases(ctx context.Context) ([]string, error) {
 	return nil, nil
 }
 
-func (fakeAdapter) ShowRetentionPolicies(ctx context.Context, db string) ([]adapter.RetentionPolicy, error) {
+func (*fakeAdapter) ShowRetentionPolicies(ctx context.Context, db string) ([]adapter.RetentionPolicy, error) {
 	return nil, nil
 }
 
-func (fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
+func (*fakeAdapter) ShowMeasurements(ctx context.Context, db, rp string) ([]string, error) {
+	return []string{"cpu", "mem"}, nil
+}
+
+func (*fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
 	return schema.Snapshot{}, nil
 }

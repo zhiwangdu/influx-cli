@@ -206,10 +206,10 @@ REPL 必备能力：
 | 能力 | MVP | 说明 |
 | --- | --- | --- |
 | 单行 query | yes | 基础执行 |
-| 多行 query | phase 1 | 支持复杂 InfluxQL/Flux |
+| 多行 query | phase 1 | `\` 续行、pending query 分号结束、`:cancel`/`:clear` 清空 |
 | history | phase 1 | 本地持久化，可用 `:history`/`:hist` 检索 |
-| autocomplete | phase 1 | db/rp/measurement/field/tag |
-| meta command | MVP/Phase 1 | `:use`、`:db`、`:dbs`、`:rps`、`:schema`、`:format`、`:history` |
+| autocomplete | phase 1 | Tab 补全 db/rp/measurement/field/tag，带 schema cache |
+| meta command | MVP/Phase 1 | `:use`、`:db`、`:dbs`、`:rps`、`:schema`、`:refresh schema`、`:format`、`:history`、`:cancel` |
 
 ### 8.3 TUI 模式
 
@@ -263,10 +263,10 @@ db: metrics | rp: autogen | mode: influxql | latency: 12ms | ok
 | 能力 | 说明 |
 | --- | --- |
 | InfluxQL 输入 | MVP 必须支持 |
-| meta command | `:use`、`:db`、`:dbs`、`:rps`、`:measurements`、`:msts`、`:schema`、`:format`、`:history` |
+| meta command | `:use`、`:db`、`:dbs`、`:rps`、`:measurements`、`:msts`、`:schema`、`:refresh schema`、`:format`、`:history`、`:cancel` |
 | history search | Phase 1 |
-| autocomplete | Phase 1 |
-| multiline | Phase 1 |
+| autocomplete | Phase 1，Tab 补全 db/rp/measurement/field/tag |
+| multiline | Phase 1，`\` 续行和 pending query 分号结束 |
 | syntax hint | Phase 2 |
 
 ### 9.3 Result View

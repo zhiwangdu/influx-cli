@@ -170,6 +170,16 @@ func (a *Adapter) ShowRetentionPolicies(ctx context.Context, db string) ([]adapt
 	return policies, nil
 }
 
+func (a *Adapter) ShowMeasurements(ctx context.Context, db, rp string) ([]string, error) {
+	res, err := a.Query(ctx, query.New("SHOW MEASUREMENTS", db, rp, a.defaultPrecision))
+	if err != nil {
+		return nil, err
+	}
+	values := valuesFromColumn(res.Table, "name")
+	sort.Strings(values)
+	return values, nil
+}
+
 func (a *Adapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
 	if strings.TrimSpace(scope.Measurement) == "" {
 		return schema.Snapshot{}, fmt.Errorf("measurement is required for schema lookup")

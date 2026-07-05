@@ -13,12 +13,17 @@ import (
 )
 
 type Executor struct {
-	Session *Session
-	Adapter adapter.Adapter
+	Session         *Session
+	Adapter         adapter.Adapter
+	completionCache *completionCache
 }
 
 func NewExecutor(session *Session, adapter adapter.Adapter) *Executor {
-	return &Executor{Session: session, Adapter: adapter}
+	return &Executor{
+		Session:         session,
+		Adapter:         adapter,
+		completionCache: newCompletionCache(60 * time.Second),
+	}
 }
 
 func (e *Executor) Execute(ctx context.Context, input string) (result.Result, error) {
@@ -124,6 +129,12 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 			return result.Result{}, err
 		}
 		return result.SchemaResult(snapshot), nil
+	case ":refresh":
+		if len(fields) != 2 || strings.ToLower(fields[1]) != "schema" {
+			return result.Result{}, fmt.Errorf("usage: :refresh schema")
+		}
+		e.RefreshSchemaCache()
+		return statusResult("schema_cache", "refreshed"), nil
 	case ":status":
 		table := result.NewTable([]string{"key", "value"})
 		table.AddRow("db", e.Session.Database)
@@ -217,10 +228,13 @@ func helpResult() result.Result {
 	table.AddRow(":measurements", "show measurements in current database")
 	table.AddRow(":msts", "alias for :measurements")
 	table.AddRow(":schema <measurement>", "show field and tag keys for a measurement")
+	table.AddRow(":refresh schema", "clear autocomplete schema cache")
 	table.AddRow(":format [format]", "show or set REPL render format: auto, table, sparkline, json")
 	table.AddRow(":fmt [format]", "alias for :format")
 	table.AddRow(":history [limit] [filter]", "show recent REPL query history")
 	table.AddRow(":hist [limit] [filter]", "alias for :history")
+	table.AddRow(":cancel", "clear pending multiline query")
+	table.AddRow(":clear", "alias for :cancel")
 	table.AddRow(":status", "show current session status")
 	table.AddRow(":help", "show commands")
 	table.AddRow(":q", "quit")
