@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 )
 
 const (
@@ -35,6 +36,14 @@ type tsmIndexEntry struct {
 	ValueCount          int
 	ValueCountAvailable bool
 	Timestamps          []int64
+	Points              []tsmPoint
+	PointsAvailable     bool
+}
+
+type tsmPoint struct {
+	Timestamp int64
+	Type      byte
+	Value     string
 }
 
 func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, error) {
@@ -137,7 +146,7 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 func populateTSMBlockValueCounts(f *os.File, entries []tsmIndexEntry) []error {
 	errs := make([]error, len(entries))
 	for i := range entries {
-		timestamps, err := readTSMBlockTimestamps(f, entries[i])
+		timestamps, points, pointsAvailable, err := readTSMBlockTimestampsAndPoints(f, entries[i])
 		if err != nil {
 			errs[i] = err
 			continue
@@ -145,6 +154,8 @@ func populateTSMBlockValueCounts(f *os.File, entries []tsmIndexEntry) []error {
 		entries[i].ValueCount = len(timestamps)
 		entries[i].ValueCountAvailable = true
 		entries[i].Timestamps = timestamps
+		entries[i].Points = points
+		entries[i].PointsAvailable = pointsAvailable
 	}
 	return errs
 }
@@ -223,23 +234,28 @@ func readTSMBlockValueCount(f *os.File, entry tsmIndexEntry) (int, error) {
 }
 
 func readTSMBlockTimestamps(f *os.File, entry tsmIndexEntry) ([]int64, error) {
+	timestamps, _, _, err := readTSMBlockTimestampsAndPoints(f, entry)
+	return timestamps, err
+}
+
+func readTSMBlockTimestampsAndPoints(f *os.File, entry tsmIndexEntry) ([]int64, []tsmPoint, bool, error) {
 	if entry.Size <= tsmBlockCRCSize {
-		return nil, fmt.Errorf("short block size %d", entry.Size)
+		return nil, nil, false, fmt.Errorf("short block size %d", entry.Size)
 	}
 	blockSize := int(entry.Size) - tsmBlockCRCSize
 	raw := make([]byte, int(entry.Size))
 	if _, err := f.ReadAt(raw, entry.Offset); err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
 	checksum := binary.BigEndian.Uint32(raw[:tsmBlockCRCSize])
 	block := raw[tsmBlockCRCSize:]
 	if crc32.ChecksumIEEE(block) != checksum {
-		return nil, fmt.Errorf("crc mismatch")
+		return nil, nil, false, fmt.Errorf("crc mismatch")
 	}
 	if len(block) != blockSize {
-		return nil, fmt.Errorf("short block read")
+		return nil, nil, false, fmt.Errorf("short block read")
 	}
-	return tsmBlockTimestamps(block)
+	return tsmBlockTimestampsAndPoints(block)
 }
 
 func tsmBlockCount(block []byte) (int, error) {
@@ -251,26 +267,44 @@ func tsmBlockCount(block []byte) (int, error) {
 }
 
 func tsmBlockTimestamps(block []byte) ([]int64, error) {
+	timestamps, _, _, err := tsmBlockTimestampsAndPoints(block)
+	return timestamps, err
+}
+
+func tsmBlockTimestampsAndPoints(block []byte) ([]int64, []tsmPoint, bool, error) {
 	if len(block) <= 1 {
-		return nil, fmt.Errorf("short encoded block")
+		return nil, nil, false, fmt.Errorf("short encoded block")
 	}
-	timestampBlock, err := unpackTSMBlockTimestamps(block[1:])
+	timestampBlock, valueBlock, err := unpackTSMBlockParts(block[1:])
 	if err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
-	return decodeTSMTimestamps(timestampBlock)
+	timestamps, err := decodeTSMTimestamps(timestampBlock)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	points, err := decodeTSMBlockPoints(block[0], timestamps, valueBlock)
+	if err != nil {
+		return timestamps, nil, false, nil
+	}
+	return timestamps, points, true, nil
 }
 
 func unpackTSMBlockTimestamps(block []byte) ([]byte, error) {
+	timestamps, _, err := unpackTSMBlockParts(block)
+	return timestamps, err
+}
+
+func unpackTSMBlockParts(block []byte) ([]byte, []byte, error) {
 	tsLen, n := binary.Uvarint(block)
 	if n <= 0 {
-		return nil, fmt.Errorf("unable to read timestamp block length")
+		return nil, nil, fmt.Errorf("unable to read timestamp block length")
 	}
 	end := n + int(tsLen)
 	if end > len(block) {
-		return nil, fmt.Errorf("timestamp block exceeds encoded block length")
+		return nil, nil, fmt.Errorf("timestamp block exceeds encoded block length")
 	}
-	return block[n:end], nil
+	return block[n:end], block[end:], nil
 }
 
 func countTSMTimestamps(b []byte) (int, error) {
@@ -418,17 +452,145 @@ func decodeTSMSimple8bValues(b []byte) ([]uint64, error) {
 		width := widths[selector]
 		if width == 0 {
 			for i := 0; i < n; i++ {
-				values = append(values, 0)
+				values = append(values, 1)
 			}
 			continue
 		}
-		mask := uint64(1<<width) - 1
+		mask := (uint64(1) << width) - 1
 		for i := 0; i < n; i++ {
 			values = append(values, word&mask)
 			word >>= width
 		}
 	}
 	return values, nil
+}
+
+func decodeTSMBlockPoints(blockType byte, timestamps []int64, valueBlock []byte) ([]tsmPoint, error) {
+	switch blockType {
+	case tsmBlockInteger:
+		values, err := decodeTSMIntegerValues(valueBlock)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != len(timestamps) {
+			return nil, fmt.Errorf("integer value count %d does not match timestamp count %d", len(values), len(timestamps))
+		}
+		points := make([]tsmPoint, len(values))
+		for i, value := range values {
+			points[i] = tsmPoint{Timestamp: timestamps[i], Type: blockType, Value: strconv.FormatInt(value, 10)}
+		}
+		return points, nil
+	case tsmBlockUnsigned:
+		values, err := decodeTSMUnsignedValues(valueBlock)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != len(timestamps) {
+			return nil, fmt.Errorf("unsigned value count %d does not match timestamp count %d", len(values), len(timestamps))
+		}
+		points := make([]tsmPoint, len(values))
+		for i, value := range values {
+			points[i] = tsmPoint{Timestamp: timestamps[i], Type: blockType, Value: strconv.FormatUint(value, 10)}
+		}
+		return points, nil
+	default:
+		return nil, fmt.Errorf("value decode unsupported for TSM block type %d", blockType)
+	}
+}
+
+func decodeTSMIntegerValues(b []byte) ([]int64, error) {
+	if len(b) == 0 {
+		return []int64{}, nil
+	}
+	encoding := b[0] >> 4
+	switch encoding {
+	case 0:
+		return decodeTSMIntegerRawValues(b[1:])
+	case 1:
+		return decodeTSMIntegerSimple8bValues(b[1:])
+	case 2:
+		return decodeTSMIntegerRLEValues(b[1:])
+	default:
+		return nil, fmt.Errorf("unknown integer encoding %d", encoding)
+	}
+}
+
+func decodeTSMUnsignedValues(b []byte) ([]uint64, error) {
+	values, err := decodeTSMIntegerValues(b)
+	if err != nil {
+		return nil, err
+	}
+	unsigned := make([]uint64, len(values))
+	for i, value := range values {
+		unsigned[i] = uint64(value)
+	}
+	return unsigned, nil
+}
+
+func decodeTSMIntegerRawValues(b []byte) ([]int64, error) {
+	if len(b)%8 != 0 {
+		return nil, fmt.Errorf("invalid raw integer byte length %d", len(b))
+	}
+	values := make([]int64, len(b)/8)
+	var previous int64
+	for i := range values {
+		previous += tsmZigZagDecode(binary.BigEndian.Uint64(b[i*8 : i*8+8]))
+		values[i] = previous
+	}
+	return values, nil
+}
+
+func decodeTSMIntegerSimple8bValues(b []byte) ([]int64, error) {
+	if len(b) < 8 {
+		return nil, fmt.Errorf("short packed integer block")
+	}
+	deltas, err := decodeTSMSimple8bValues(b[8:])
+	if err != nil {
+		return nil, err
+	}
+	values := make([]int64, 0, len(deltas)+1)
+	previous := tsmZigZagDecode(binary.BigEndian.Uint64(b[:8]))
+	values = append(values, previous)
+	for _, delta := range deltas {
+		previous += tsmZigZagDecode(delta)
+		values = append(values, previous)
+	}
+	return values, nil
+}
+
+func decodeTSMIntegerRLEValues(b []byte) ([]int64, error) {
+	if len(b) < 8 {
+		return nil, fmt.Errorf("short RLE integer block")
+	}
+	offset := 0
+	first := tsmZigZagDecode(binary.BigEndian.Uint64(b[offset : offset+8]))
+	offset += 8
+	deltaValue, n := binary.Uvarint(b[offset:])
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid RLE integer delta")
+	}
+	offset += n
+	count, n := binary.Uvarint(b[offset:])
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid RLE integer count")
+	}
+	count++
+	values := make([]int64, int(count))
+	value := first
+	delta := tsmZigZagDecode(deltaValue)
+	for i := range values {
+		values[i] = value
+		value += delta
+	}
+	return values, nil
+}
+
+func tsmZigZagEncode(v int64) uint64 {
+	return uint64(uint64(v<<1) ^ uint64(v>>63))
+}
+
+func tsmZigZagDecode(v uint64) int64 {
+	return int64((v >> 1) ^ uint64((int64(v&1)<<63)>>63))
 }
 
 func countSimple8bWords(b []byte) (int, error) {

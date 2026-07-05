@@ -443,19 +443,87 @@ func TestAnalyzeTSMDecodePathDeduplicatesOutputTimestamps(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMDecodePathComparesIntegerValueOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}, values: []int64{1, 2, 3}},
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}, values: []int64{20, 30, 40}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if got, want := decode.BaselineValueOutputPoints, 4; got != want {
+		t.Fatalf("baseline value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 4; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ComparedValueOutputPoints, 2; got != want {
+		t.Fatalf("compared value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputMismatches, 0; got != want {
+		t.Fatalf("value output mismatches = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].ValueOutputPoints, 2; got != want {
+		t.Fatalf("first sample value output points = %d, want %d", got, want)
+	}
+	if !decode.Samples[0].ValueOutputAvailable {
+		t.Fatal("expected first sample value output to be available")
+	}
+
+	data, err := readTSMFileStoreData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := map[tsmOutputPointKey]tsmPoint{}
+	for _, entry := range data.entries {
+		points, ok := tsmOutputPoints(entry, nil, queryRange)
+		if !ok {
+			t.Fatalf("points unavailable for entry %+v", entry)
+		}
+		addTSMOutputPoints(baseline, entry.Key, points)
+	}
+	for timestamp, want := range map[int64]string{20: "20", 30: "30"} {
+		point, ok := baseline[tsmOutputPointKey{key: "cpu,host=a value", timestamp: timestamp, typ: tsmBlockInteger}]
+		if !ok {
+			t.Fatalf("missing merged point at %d", timestamp)
+		}
+		if point.Value != want {
+			t.Fatalf("merged point at %d = %q, want %q", timestamp, point.Value, want)
+		}
+	}
+}
+
 func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "000000001-000000001.tsm")
 	if err := writeTestTSMWithBlocks(path1, []testTSMBlockSpec{
-		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}},
-		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 100, maxTime: 120, timestamps: []int64{100, 10, 10}},
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}, values: []int64{1, 2, 3}},
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 100, maxTime: 120, timestamps: []int64{100, 10, 10}, values: []int64{100, 110, 120}},
 		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	path2 := filepath.Join(dir, "000000002-000000001.tsm")
 	if err := writeTestTSMWithBlocks(path2, []testTSMBlockSpec{
-		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}},
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}, values: []int64{20, 30, 40}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -490,13 +558,13 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	if got, want := decode.SavedDecodeBlocks, 1; got != want {
 		t.Fatalf("saved decode blocks = %d, want %d", got, want)
 	}
-	if got, want := decode.BaselineDecodeBytes, int64(96); got != want {
+	if got, want := decode.BaselineDecodeBytes, int64(168); got != want {
 		t.Fatalf("baseline decode bytes = %d, want %d", got, want)
 	}
-	if got, want := decode.OptimizedDecodeBytes, int64(64); got != want {
+	if got, want := decode.OptimizedDecodeBytes, int64(112); got != want {
 		t.Fatalf("optimized decode bytes = %d, want %d", got, want)
 	}
-	if got, want := decode.SavedDecodeBytes, int64(32); got != want {
+	if got, want := decode.SavedDecodeBytes, int64(56); got != want {
 		t.Fatalf("saved decode bytes = %d, want %d", got, want)
 	}
 	if got, want := decode.BaselineDecodeValues, 9; got != want {
@@ -519,6 +587,21 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.DuplicateOutputValues, 2; got != want {
 		t.Fatalf("duplicate output values = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineValueOutputPoints, 4; got != want {
+		t.Fatalf("baseline value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 4; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ComparedValueOutputPoints, 2; got != want {
+		t.Fatalf("compared value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputMismatches, 0; got != want {
+		t.Fatalf("value output mismatches = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
 	}
 	if got, want := decode.SkippedByKeyBlocks, 1; got != want {
 		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
@@ -544,7 +627,7 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	if got, want := decode.Samples[0].Path, path1; got != want {
 		t.Fatalf("first sample path = %q, want %q", got, want)
 	}
-	if got, want := decode.Samples[0].SizeBytes, uint32(32); got != want {
+	if got, want := decode.Samples[0].SizeBytes, uint32(56); got != want {
 		t.Fatalf("first sample size = %d, want %d", got, want)
 	}
 	if got, want := decode.Samples[0].ValueCount, 3; got != want {
@@ -552,6 +635,44 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.Samples[0].OutputValues, 2; got != want {
 		t.Fatalf("first sample output values = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].ValueOutputPoints, 2; got != want {
+		t.Fatalf("first sample value output points = %d, want %d", got, want)
+	}
+	if !decode.Samples[0].ValueOutputAvailable {
+		t.Fatal("expected first sample value output to be available")
+	}
+}
+
+func TestDecodeTSMSimple8bSelectorRunsAreOnes(t *testing.T) {
+	values, err := decodeTSMSimple8bValues(make([]byte, 8))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(values), 240; got != want {
+		t.Fatalf("values = %d, want %d", got, want)
+	}
+	for i, value := range values {
+		if value != 1 {
+			t.Fatalf("value %d = %d, want 1", i, value)
+		}
+	}
+}
+
+func TestDecodeTSMUnsignedValuesUsesIntegerEncoding(t *testing.T) {
+	encoded := testTSMUnsignedValueBlock([]uint64{1, 3, 6})
+	values, err := decodeTSMUnsignedValues(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []uint64{1, 3, 6}
+	if len(values) != len(want) {
+		t.Fatalf("values = %v, want %v", values, want)
+	}
+	for i := range want {
+		if values[i] != want[i] {
+			t.Fatalf("values = %v, want %v", values, want)
+		}
 	}
 }
 
@@ -712,6 +833,7 @@ type testTSMBlockSpec struct {
 	minTime    int64
 	maxTime    int64
 	timestamps []int64
+	values     []int64
 }
 
 func writeTestTSMWithBlocks(path string, specs []testTSMBlockSpec) error {
@@ -729,7 +851,7 @@ func writeTestTSMWithBlocks(path string, specs []testTSMBlockSpec) error {
 	groupsByKey := map[string]*indexGroup{}
 	var groupKeys []string
 	for _, spec := range specs {
-		block := testTSMBlock(spec.typ, spec.timestamps)
+		block := testTSMBlock(spec.typ, spec.timestamps, spec.values)
 		offset := int64(buf.Len())
 		buf.Write(testTSMBlockWithCRC(block))
 		groupKey := string([]byte{spec.typ}) + spec.key
@@ -807,7 +929,7 @@ func writeTestTSMTombstoneEntry(buf *gzip.Writer, entry tsmTombstoneEntry) error
 	return err
 }
 
-func testTSMBlock(blockType byte, timestamps []int64) []byte {
+func testTSMBlock(blockType byte, timestamps, values []int64) []byte {
 	var ts bytes.Buffer
 	ts.WriteByte(0)
 	for _, timestamp := range timestamps {
@@ -819,7 +941,39 @@ func testTSMBlock(blockType byte, timestamps []int64) []byte {
 	block.WriteByte(blockType)
 	block.Write(binary.AppendUvarint(nil, uint64(ts.Len())))
 	block.Write(ts.Bytes())
+	if blockType == tsmBlockInteger && len(values) > 0 {
+		block.Write(testTSMIntegerValueBlock(values))
+	} else {
+		block.WriteByte(0)
+	}
+	return block.Bytes()
+}
+
+func testTSMIntegerValueBlock(values []int64) []byte {
+	var block bytes.Buffer
 	block.WriteByte(0)
+	var previous int64
+	for _, value := range values {
+		delta := value - previous
+		previous = value
+		var b [8]byte
+		binary.BigEndian.PutUint64(b[:], tsmZigZagEncode(delta))
+		block.Write(b[:])
+	}
+	return block.Bytes()
+}
+
+func testTSMUnsignedValueBlock(values []uint64) []byte {
+	var block bytes.Buffer
+	block.WriteByte(0)
+	var previous uint64
+	for _, value := range values {
+		delta := value - previous
+		previous = value
+		var b [8]byte
+		binary.BigEndian.PutUint64(b[:], tsmZigZagEncode(int64(delta)))
+		block.Write(b[:])
+	}
 	return block.Bytes()
 }
 

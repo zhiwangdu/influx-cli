@@ -32,6 +32,8 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	matchedKeys := map[string]struct{}{}
 	locationsByKey := map[string][]tsmCursorCandidate{}
 	outputByKey := map[string]map[int64]struct{}{}
+	baselinePoints := map[tsmOutputPointKey]tsmPoint{}
+	optimizedPoints := map[tsmOutputPointKey]tsmPoint{}
 	for i, entry := range entries {
 		typeName := tsmBlockTypeName(entry.Type)
 		selectedKey := tsmQueryKeySelected(entry.Key, keySet)
@@ -43,6 +45,8 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 		decoded := false
 		reason := "query_overlap"
 		outputTimestamps := []int64(nil)
+		outputPoints := []tsmPoint(nil)
+		valueOutputAvailable := false
 
 		switch {
 		case !selectedKey:
@@ -65,6 +69,11 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			}
 			outputTimestamps = tsmOutputTimestamps(entry, tombstones, options.QueryRange)
 			summary.BaselineOutputValues += len(outputTimestamps)
+			outputPoints, valueOutputAvailable = tsmOutputPoints(entry, tombstones, options.QueryRange)
+			if valueOutputAvailable {
+				summary.BaselineValueOutputPoints += len(outputPoints)
+				addTSMOutputPoints(baselinePoints, entry.Key, outputPoints)
+			}
 			summary.LocationBlocksByType[typeName]++
 			summary.SkippedAfterRangeBlocks++
 			reason = "outside_query_range"
@@ -85,6 +94,15 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			summary.BaselineOutputValues += len(outputTimestamps)
 			summary.OptimizedOutputValues += len(outputTimestamps)
 			addTSMOutputTimestamps(outputByKey, entry.Key, outputTimestamps)
+			outputPoints, valueOutputAvailable = tsmOutputPoints(entry, tombstones, options.QueryRange)
+			if valueOutputAvailable {
+				summary.BaselineValueOutputPoints += len(outputPoints)
+				summary.OptimizedValueOutputPoints += len(outputPoints)
+				addTSMOutputPoints(baselinePoints, entry.Key, outputPoints)
+				addTSMOutputPoints(optimizedPoints, entry.Key, outputPoints)
+			} else {
+				summary.ValueOutputUnavailableBlocks++
+			}
 			summary.LocationBlocksByType[typeName]++
 			summary.DecodeBlocksByType[typeName]++
 			decoded = true
@@ -97,16 +115,18 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 
 		if len(summary.Samples) < options.BlockSampleLimit {
 			summary.Samples = append(summary.Samples, DecodePathBlockDecision{
-				Key:               entry.Key,
-				MinTime:           entry.MinTime,
-				MaxTime:           entry.MaxTime,
-				Type:              typeName,
-				SizeBytes:         entry.Size,
-				ValueCount:        entry.ValueCount,
-				OutputValues:      len(outputTimestamps),
-				LocationCandidate: locationCandidate,
-				Decoded:           decoded,
-				Reason:            reason,
+				Key:                  entry.Key,
+				MinTime:              entry.MinTime,
+				MaxTime:              entry.MaxTime,
+				Type:                 typeName,
+				SizeBytes:            entry.Size,
+				ValueCount:           entry.ValueCount,
+				OutputValues:         len(outputTimestamps),
+				ValueOutputPoints:    len(outputPoints),
+				ValueOutputAvailable: valueOutputAvailable,
+				LocationCandidate:    locationCandidate,
+				Decoded:              decoded,
+				Reason:               reason,
 			})
 		}
 	}
@@ -127,6 +147,7 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
+	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches = compareTSMOutputPoints(baselinePoints, optimizedPoints)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
@@ -159,6 +180,61 @@ func tsmTimestampTombstoned(key string, timestamp int64, tombstones []tsmTombsto
 		}
 	}
 	return false
+}
+
+func tsmOutputPoints(entry tsmIndexEntry, tombstones []tsmTombstoneEntry, queryRange TimeRange) ([]tsmPoint, bool) {
+	if !queryRange.Set || !entry.PointsAvailable {
+		return nil, entry.PointsAvailable
+	}
+	points := make([]tsmPoint, 0)
+	for _, point := range entry.Points {
+		if point.Timestamp < queryRange.Min || point.Timestamp > queryRange.Max {
+			continue
+		}
+		if tsmTimestampTombstoned(entry.Key, point.Timestamp, tombstones) {
+			continue
+		}
+		points = append(points, point)
+	}
+	return points, true
+}
+
+type tsmOutputPointKey struct {
+	key       string
+	timestamp int64
+	typ       byte
+}
+
+func addTSMOutputPoints(output map[tsmOutputPointKey]tsmPoint, key string, points []tsmPoint) {
+	for _, point := range points {
+		output[tsmOutputPointKey{
+			key:       key,
+			timestamp: point.Timestamp,
+			typ:       point.Type,
+		}] = point
+	}
+}
+
+func compareTSMOutputPoints(baseline, optimized map[tsmOutputPointKey]tsmPoint) (int, int) {
+	compared := 0
+	mismatches := 0
+	seen := map[tsmOutputPointKey]struct{}{}
+	for key, baselinePoint := range baseline {
+		compared++
+		seen[key] = struct{}{}
+		optimizedPoint, ok := optimized[key]
+		if !ok || optimizedPoint.Value != baselinePoint.Value {
+			mismatches++
+		}
+	}
+	for key := range optimized {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		compared++
+		mismatches++
+	}
+	return compared, mismatches
 }
 
 func addTSMOutputTimestamps(outputByKey map[string]map[int64]struct{}, key string, timestamps []int64) {
@@ -337,6 +413,18 @@ func tsmDecodeRecommendations(summary *DecodePathSummary) []string {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"%d key(s) have overlapping query blocks and may require merge/dedup work",
 			summary.MergeWindowKeys,
+		))
+	}
+	if summary.ValueOutputUnavailableBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"value-output comparison is partial because %d decoded block(s) use unsupported value types or encodings",
+			summary.ValueOutputUnavailableBlocks,
+		))
+	}
+	if summary.ValueOutputMismatches > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"value-output comparison found %d optimized/baseline point mismatch(es)",
+			summary.ValueOutputMismatches,
 		))
 	}
 	if len(recommendations) == 0 && summary.FilteredDecodeBlocks > 0 {

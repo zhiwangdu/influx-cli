@@ -87,6 +87,8 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	matchedKeys := map[string]struct{}{}
 	locationsByKey := map[string][]tsmFileStoreLocation{}
 	outputByKey := map[string]map[int64]struct{}{}
+	baselinePoints := map[tsmOutputPointKey]tsmPoint{}
+	optimizedPoints := map[tsmOutputPointKey]tsmPoint{}
 	for _, key := range keys {
 		if _, ok := allKeys[key]; ok {
 			matchedKeys[key] = struct{}{}
@@ -99,12 +101,17 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 		for _, location := range locations {
 			typeName := tsmBlockTypeName(location.entry.Type)
 			outputTimestamps := tsmOutputTimestamps(location.entry, location.tombstones, options.QueryRange)
+			outputPoints, valueOutputAvailable := tsmOutputPoints(location.entry, location.tombstones, options.QueryRange)
 			summary.LocationBlocks++
 			summary.BaselineDecodeBytes += int64(location.entry.Size)
 			if location.entry.ValueCountAvailable {
 				summary.BaselineDecodeValues += location.entry.ValueCount
 			}
 			summary.BaselineOutputValues += len(outputTimestamps)
+			if valueOutputAvailable {
+				summary.BaselineValueOutputPoints += len(outputPoints)
+				addTSMOutputPoints(baselinePoints, location.entry.Key, outputPoints)
+			}
 			summary.LocationBlocksByType[typeName]++
 			if location.decoded {
 				summary.FilteredDecodeBlocks++
@@ -114,6 +121,12 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 				}
 				summary.OptimizedOutputValues += len(outputTimestamps)
 				addTSMOutputTimestamps(outputByKey, location.entry.Key, outputTimestamps)
+				if valueOutputAvailable {
+					summary.OptimizedValueOutputPoints += len(outputPoints)
+					addTSMOutputPoints(optimizedPoints, location.entry.Key, outputPoints)
+				} else {
+					summary.ValueOutputUnavailableBlocks++
+				}
 				summary.DecodeBlocksByType[typeName]++
 			} else {
 				summary.SkippedAfterRangeBlocks++
@@ -124,17 +137,19 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 					reason = "outside_query_range"
 				}
 				summary.Samples = append(summary.Samples, DecodePathBlockDecision{
-					Path:              location.path,
-					Key:               location.entry.Key,
-					MinTime:           location.entry.MinTime,
-					MaxTime:           location.entry.MaxTime,
-					Type:              typeName,
-					SizeBytes:         location.entry.Size,
-					ValueCount:        location.entry.ValueCount,
-					OutputValues:      len(outputTimestamps),
-					LocationCandidate: true,
-					Decoded:           location.decoded,
-					Reason:            reason,
+					Path:                 location.path,
+					Key:                  location.entry.Key,
+					MinTime:              location.entry.MinTime,
+					MaxTime:              location.entry.MaxTime,
+					Type:                 typeName,
+					SizeBytes:            location.entry.Size,
+					ValueCount:           location.entry.ValueCount,
+					OutputValues:         len(outputTimestamps),
+					ValueOutputPoints:    len(outputPoints),
+					ValueOutputAvailable: valueOutputAvailable,
+					LocationCandidate:    true,
+					Decoded:              location.decoded,
+					Reason:               reason,
 				})
 			}
 		}
@@ -156,6 +171,7 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
+	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches = compareTSMOutputPoints(baselinePoints, optimizedPoints)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
