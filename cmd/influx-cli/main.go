@@ -210,7 +210,7 @@ func renderOptions(effective config.Effective, flags *globalFlags) render.Option
 		width = envInt("COLUMNS", 80)
 	}
 	return render.Options{
-		Format:    firstNonEmpty(effective.Render, render.FormatAuto),
+		Format:    firstNonEmpty(effective.Render, render.FormatTable),
 		Width:     width,
 		MaxRows:   flags.maxRows,
 		MaxSeries: flags.maxSeries,

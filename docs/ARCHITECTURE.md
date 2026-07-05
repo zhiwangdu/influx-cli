@@ -347,7 +347,9 @@ openGemini 初期可走 InfluxDB 兼容查询接口。
 
 ## 8. Visualization Layer
 
-### 8.1 Auto Render Selection
+### 8.1 Render Mode Selection
+
+MVP 默认 render mode 为 `table`。`auto` 是显式选择的模式，用于根据 result shape 自动选择 sparkline、chart 或 table。
 
 ```text
 Result
@@ -427,7 +429,7 @@ key press
   -> if execute: run async query command
   -> query result message
   -> normalize result
-  -> auto choose render mode
+  -> choose renderer from user-selected/default render mode
   -> update context/status
 ```
 
@@ -587,7 +589,7 @@ profiles:
     precision: ns
 defaults:
   profile: local
-  render: auto
+  render: table
   timeout: 10s
 ```
 
@@ -636,7 +638,7 @@ defaults:
 
 1. `influx-cli query "SHOW DATABASES"`。
 2. `influx-cli repl` 后 `:use metrics` 或 `:use metrics.autogen`。
-3. time series query 自动输出 sparkline。
+3. time series query 默认输出 table；使用 `--format auto`、`--format sparkline` 或 REPL `:format sparkline` 时输出 sparkline。
 4. 错误 query 返回明确错误。
 5. TUI 尺寸变化不崩溃。
 

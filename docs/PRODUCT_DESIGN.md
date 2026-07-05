@@ -98,7 +98,7 @@ TSDB 问题常常同时横跨查询语句、索引、文件布局和内部指标
 
 ### 6.4 Zero-switch Analytics
 
-用户不用在终端、Grafana、脚本、数据库日志和 storage 工具之间反复切换。MVP 先覆盖 query + sparkline + statusline，后续逐步加入 profiler 和 storage analyzer。
+用户不用在终端、Grafana、脚本、数据库日志和 storage 工具之间反复切换。MVP 先覆盖 query + table/sparkline + statusline，后续逐步加入 profiler 和 storage analyzer。
 
 ## 7. 主要使用场景
 
@@ -113,7 +113,7 @@ SELECT mean(usage_idle) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)
 系统行为：
 
 1. 识别 time + numeric value。
-2. 默认渲染 sparkline 或 ASCII line chart。
+2. 默认以 table 渲染；用户可用 `--format auto`、`--format sparkline` 或 REPL `:format` 切换趋势渲染。
 3. statusline 展示 db、rp、latency、result points。
 4. context panel 展示 measurement schema 和字段类型。
 
@@ -123,8 +123,8 @@ SELECT mean(usage_idle) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)
 
 系统行为：
 
-1. 自动识别趋势数据。
-2. 以 sparkline 展示变化。
+1. 默认保留 table 输出，便于检查原始点。
+2. 显式切换到 auto 或 sparkline 后，以 sparkline 展示变化。
 3. 标出 spike、空洞、突增。
 4. 给出“可能与 series cardinality 或写入峰值有关”的 hints。
 
@@ -184,6 +184,7 @@ influx-cli watch "SELECT mean(value) FROM cpu WHERE time > now() - 10m GROUP BY 
 ```bash
 influx-cli query "SELECT * FROM cpu LIMIT 10"
 influx-cli query --format table "SHOW MEASUREMENTS"
+influx-cli query --format sparkline "SELECT mean(value) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)"
 influx-cli watch "SELECT mean(value) FROM cpu WHERE time > now() - 10m GROUP BY time(10s)"
 influx-cli repl
 ```
@@ -196,6 +197,7 @@ influx-cli repl
 influx> :use metrics
 influx> :use metrics.autogen
 influx> :db metrics
+influx[metrics/autogen]> :format sparkline
 influx[metrics/autogen]> SELECT mean(value) FROM cpu WHERE time > now() - 1h
 ```
 
@@ -207,7 +209,7 @@ REPL 必备能力：
 | 多行 query | phase 1 | 支持复杂 InfluxQL/Flux |
 | history | phase 1 | 本地持久化 |
 | autocomplete | phase 1 | db/rp/measurement/field/tag |
-| meta command | MVP | `:use`、`:db`、`:dbs`、`:rps`、`:schema` |
+| meta command | MVP | `:use`、`:db`、`:dbs`、`:rps`、`:schema`、`:format` |
 
 ### 8.3 TUI 模式
 
@@ -261,7 +263,7 @@ db: metrics | rp: autogen | mode: influxql | latency: 12ms | ok
 | 能力 | 说明 |
 | --- | --- |
 | InfluxQL 输入 | MVP 必须支持 |
-| meta command | `:use`、`:db`、`:dbs`、`:rps`、`:measurements`、`:msts`、`:schema` |
+| meta command | `:use`、`:db`、`:dbs`、`:rps`、`:measurements`、`:msts`、`:schema`、`:format` |
 | history search | Phase 1 |
 | autocomplete | Phase 1 |
 | multiline | Phase 1 |
@@ -275,8 +277,8 @@ db: metrics | rp: autogen | mode: influxql | latency: 12ms | ok
 
 | 模式 | 用途 |
 | --- | --- |
-| table | 默认兜底，适合 schema 和 SHOW 查询 |
-| sparkline | 趋势数据默认推荐 |
+| table | 默认渲染，适合 schema、SHOW 查询和原始点检查 |
+| sparkline | 趋势数据的显式渲染模式 |
 | ASCII chart | 多点趋势和对比 |
 | summary | explain、profiler、analysis result |
 
@@ -344,7 +346,7 @@ Ctrl+Enter run | Ctrl+R history | Tab complete | 1 table | 2 spark | 3 chart | q
 MVP 只做三件事：
 
 1. REPL + query execution。
-2. sparkline 趋势展示。
+2. table 默认输出和 sparkline 趋势展示。
 3. statusline 上下文状态。
 
 MVP 必须包含：
@@ -380,7 +382,7 @@ MVP 明确不做：
 | 单次 query 输出 | 支持 table/sparkline |
 | REPL 上下文切换 | `:use db` 自动选择默认 RP，`:use db.rp` 可直接指定 RP，`:db db` 自动选择默认 RP |
 | 错误可理解 | 网络、认证、语法错误有明确提示 |
-| 趋势观察 | time + numeric 自动 sparkline |
+| 趋势观察 | 通过 `--format auto`、`--format sparkline` 或 REPL `:format` 展示 sparkline |
 
 ### 13.2 中期指标
 

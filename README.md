@@ -55,8 +55,8 @@ The first implementation phase should stay narrow:
 
 1. CLI query execution.
 2. REPL with session context.
-3. Table output.
-4. Sparkline output for time-series results.
+3. Table output by default.
+4. Sparkline output for time-series results when selected.
 5. Statusline showing db/rp/mode/latency/error.
 
 Do not start with a full dashboard, plugin system, storage parser, or query optimizer.
@@ -68,7 +68,7 @@ Do not start with a full dashboard, plugin system, storage parser, or query opti
 | Language | Go |
 | CLI | Cobra |
 | TUI | Bubble Tea, Lip Gloss, Bubbles planned for later phases |
-| Visualization | Built-in sparkline first, ASCII chart later |
+| Visualization | Table default, built-in sparkline selectable, ASCII chart later |
 | Initial adapter | InfluxDB 1.x HTTP query API |
 | Compatible target | openGemini via InfluxDB-compatible query path |
 

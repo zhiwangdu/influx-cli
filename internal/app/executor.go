@@ -217,6 +217,8 @@ func helpResult() result.Result {
 	table.AddRow(":measurements", "show measurements in current database")
 	table.AddRow(":msts", "alias for :measurements")
 	table.AddRow(":schema <measurement>", "show field and tag keys for a measurement")
+	table.AddRow(":format [format]", "show or set REPL render format: auto, table, sparkline, json")
+	table.AddRow(":fmt [format]", "alias for :format")
 	table.AddRow(":status", "show current session status")
 	table.AddRow(":help", "show commands")
 	table.AddRow(":q", "quit")

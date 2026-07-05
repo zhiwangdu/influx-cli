@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhiwangdu/influx-cli/internal/render"
 	"gopkg.in/yaml.v3"
 )
 
@@ -111,7 +112,7 @@ func Resolve(path string, overrides Overrides, getenv EnvGetter) (Effective, err
 		Database:        profile.Database,
 		RetentionPolicy: profile.RetentionPolicy,
 		Precision:       firstNonEmpty(profile.Precision, "rfc3339"),
-		Render:          firstNonEmpty(file.Defaults.Render, "auto"),
+		Render:          firstNonEmpty(file.Defaults.Render, "table"),
 		ConfigPath:      path,
 		ConfigFound:     found,
 	}
@@ -148,6 +149,9 @@ func (e Effective) Validate() error {
 	}
 	if e.Render == "" {
 		return errors.New("render format is required")
+	}
+	if _, err := render.NormalizeFormat(e.Render); err != nil {
+		return err
 	}
 	return nil
 }

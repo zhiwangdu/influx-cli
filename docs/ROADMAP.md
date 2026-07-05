@@ -65,6 +65,8 @@ REPL meta command：
 :rps [db]     # show named/current DB RP details; without current DB, show all DBs
 :measurements
 :msts
+:format [auto|table|sparkline|json]
+:fmt [auto|table|sparkline|json]
 :help
 :q
 ```
@@ -76,7 +78,8 @@ REPL meta command：
 | 连接 | 能连接本地 InfluxDB 兼容接口 |
 | 查询 | `SHOW DATABASES` 和基础 `SELECT` 可执行 |
 | 表格 | SHOW 查询以 table 输出 |
-| sparkline | time + numeric 查询自动输出 sparkline |
+| 默认渲染 | 未指定 format 时以 table 输出 |
+| sparkline | 通过 `--format auto`、`--format sparkline` 或 REPL `:format sparkline` 输出 time + numeric 趋势 |
 | 状态 | 显示 db/rp/latency/last error |
 | 错误 | 认证失败、连接失败、语法错误可读 |
 | 测试 | render、result normalize、config 有单测 |
@@ -325,7 +328,7 @@ influx-cli ingest out-of-order --ratio 0.1
 
 | 风险 | 影响 | 应对 |
 | --- | --- | --- |
-| 一开始做太大 | 项目难以交付 | Phase 0 只做 query/sparkline/statusline |
+| 一开始做太大 | 项目难以交付 | Phase 0 只做 query/table/sparkline/statusline |
 | TUI 复杂度过高 | 查询链路不稳定 | CLI/REPL 先稳定，TUI 复用核心 |
 | 方言 parser 过重 | 实现周期拉长 | MVP 先轻量识别和透传 |
 | InfluxDB/openGemini 差异 | adapter 分叉 | 先抽公共 HTTP query client |

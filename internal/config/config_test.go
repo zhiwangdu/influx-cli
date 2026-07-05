@@ -98,6 +98,9 @@ func TestResolveUsesBuiltInDefaultsWhenConfigIsMissing(t *testing.T) {
 	if effective.Precision != "rfc3339" {
 		t.Fatalf("precision = %q, want rfc3339", effective.Precision)
 	}
+	if effective.Render != "table" {
+		t.Fatalf("render = %q, want table", effective.Render)
+	}
 	if effective.Timeout.String() != "10s" {
 		t.Fatalf("timeout = %s, want 10s", effective.Timeout)
 	}
@@ -112,6 +115,25 @@ func TestResolveErrorsForMissingProfileInExistingConfig(t *testing.T) {
 	_, err := Resolve(path, Overrides{Profile: "missing"}, mapEnv(nil))
 	if err == nil {
 		t.Fatal("expected missing profile error")
+	}
+}
+
+func TestResolveErrorsForUnknownRenderFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := []byte(`
+defaults:
+  render: wide
+`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Resolve(path, Overrides{}, mapEnv(nil))
+	if err == nil {
+		t.Fatal("expected unknown render format error")
+	}
+	if !strings.Contains(err.Error(), `unknown render format "wide"`) {
+		t.Fatalf("error = %q, want unknown render format", err)
 	}
 }
 

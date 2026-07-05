@@ -24,9 +24,9 @@ type Options struct {
 }
 
 func Render(res result.Result, options Options) (string, string, error) {
-	format := strings.ToLower(strings.TrimSpace(options.Format))
-	if format == "" {
-		format = FormatAuto
+	format, err := NormalizeFormat(options.Format)
+	if err != nil {
+		return "", "", err
 	}
 	if format == FormatAuto {
 		if len(res.Series) > 0 {
@@ -47,7 +47,19 @@ func Render(res result.Result, options Options) (string, string, error) {
 			return "", "", fmt.Errorf("render json: %w", err)
 		}
 		return string(body), FormatJSON, nil
+	}
+	return "", "", fmt.Errorf("unknown render format %q", options.Format)
+}
+
+func NormalizeFormat(format string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(format))
+	if normalized == "" {
+		return FormatTable, nil
+	}
+	switch normalized {
+	case FormatAuto, FormatTable, FormatSparkline, FormatJSON:
+		return normalized, nil
 	default:
-		return "", "", fmt.Errorf("unknown render format %q", options.Format)
+		return "", fmt.Errorf("unknown render format %q", format)
 	}
 }
