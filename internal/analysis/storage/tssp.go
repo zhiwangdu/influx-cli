@@ -200,7 +200,35 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 	} else {
 		populateTSSPMetaIndexReports(&report, metaIndexes, options)
 	}
-	report.DecodePath = buildTSSPDecodePathSummary(metaIndexes, chunkMetas, options)
+	var dataProbe *tsspAttachedDataProbe
+	if expanded {
+		var dataProbed bool
+		dataProbe, dataProbed, err = probeTSSPAttachedDataBlocks(f, info.Size(), trailer, chunkMetas, options)
+		report.Extra["data_block_probe_checked"] = fmt.Sprint(dataProbed)
+		if err != nil {
+			report.Notices = append(report.Notices, fmt.Sprintf("TSSP data block probe unavailable: %v", err))
+			dataProbe = nil
+		} else if dataProbe != nil {
+			report.Extra["data_block_probe_blocks"] = fmt.Sprint(dataProbe.BlocksChecked)
+			report.Extra["data_block_probe_bytes"] = fmt.Sprint(dataProbe.BytesRead)
+			report.Extra["data_block_probe_valid_blocks"] = fmt.Sprint(dataProbe.ValidBlocks)
+			report.Extra["data_block_probe_failures"] = fmt.Sprint(dataProbe.Failures())
+			report.Extra["data_block_probe_row_count_blocks"] = fmt.Sprint(dataProbe.RowCountBlocks)
+			report.Extra["data_block_probe_row_count_unknowns"] = fmt.Sprint(dataProbe.RowCountUnknowns)
+			report.Extra["data_block_probe_row_count_mismatches"] = fmt.Sprint(dataProbe.RowCountMismatches)
+			report.Extra["data_block_probe_output_points"] = fmt.Sprint(dataProbe.OutputPoints)
+			report.Extra["data_block_probe_value_blocks"] = fmt.Sprint(dataProbe.ValueBlocks)
+			report.Extra["data_block_probe_value_unknowns"] = fmt.Sprint(dataProbe.ValueUnknowns)
+			report.Extra["data_block_probe_null_values"] = fmt.Sprint(dataProbe.NullValues)
+			if len(dataProbe.BlockTypes) > 0 {
+				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
+			}
+			if dataProbe.Failures() > 0 {
+				report.Notices = append(report.Notices, fmt.Sprintf("TSSP data block probe found %d invalid block(s)", dataProbe.Failures()))
+			}
+		}
+	}
+	report.DecodePath = buildTSSPDecodePathSummary(metaIndexes, chunkMetas, options, dataProbe)
 	if !expanded && options.QueryRange.Set {
 		report.Extra["query_overlap_precision"] = "meta-index"
 		report.Notices = append(report.Notices, "TSSP query overlap is estimated at meta-index granularity; individual chunk overlap requires chunk metadata expansion")

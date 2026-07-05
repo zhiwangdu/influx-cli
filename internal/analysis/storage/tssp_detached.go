@@ -586,14 +586,21 @@ type tsspDetachedDataBlockInfo struct {
 }
 
 func inspectTSSPDetachedDataBlock(block []byte) (tsspDetachedDataBlockInfo, bool, string) {
-	var info tsspDetachedDataBlockInfo
 	if len(block) < crc32.Size+1 {
-		return info, false, "segment_overlap_data_header_unavailable"
+		return tsspDetachedDataBlockInfo{}, false, "segment_overlap_data_header_unavailable"
 	}
 	wantCRC := binary.BigEndian.Uint32(block[:crc32.Size])
 	payload := block[crc32.Size:]
 	if gotCRC := crc32.ChecksumIEEE(payload); gotCRC != wantCRC {
-		return info, false, "segment_overlap_data_crc_unavailable"
+		return tsspDetachedDataBlockInfo{}, false, "segment_overlap_data_crc_unavailable"
+	}
+	return inspectTSSPDataBlockPayload(payload)
+}
+
+func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, bool, string) {
+	var info tsspDetachedDataBlockInfo
+	if len(payload) < 1 {
+		return info, false, "segment_overlap_data_header_unavailable"
 	}
 	blockType, ok := tsspDataBlockTypeName(payload[0])
 	if !ok {
@@ -757,11 +764,7 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 	if !ok {
 		return
 	}
-	columnNames := make([]string, 0, len(blocks))
-	for columnName := range blocks {
-		columnNames = append(columnNames, columnName)
-	}
-	sort.Strings(columnNames)
+	columnNames := sortedTSSPDataBlockColumns(blocks)
 	for _, columnName := range columnNames {
 		block := blocks[columnName]
 		if columnName == "time" || !block.ValueKnown || block.ValueNull {

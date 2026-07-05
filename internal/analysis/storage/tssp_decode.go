@@ -7,7 +7,7 @@ import (
 
 const maxTSSPReadAtRangeSamples = 8
 
-func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options) *DecodePathSummary {
+func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options, dataProbe *tsspAttachedDataProbe) *DecodePathSummary {
 	if !options.QueryRange.Set {
 		return nil
 	}
@@ -70,6 +70,10 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 			baselineBytes := tsspChunkSegmentBytes(chunk)
 			baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0)
 			optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples)
+			valueOutputChecked := false
+			valueOutputAvailable := false
+			valueUnavailableReason := ""
+			valueOutputPoints := 0
 
 			summary.BaselineDecodeBytes += int64(baselineBytes)
 			summary.BaselineDecodeValues += segmentCount
@@ -83,17 +87,40 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 				summary.OptimizedReadSegments += outputSegments
 				summary.OptimizedReadAtCalls += optimizedReadAtCalls
 				summary.DecodeBlocksByType["chunk-meta"]++
+				if available, reason, ok := dataProbe.chunkDataAvailable(chunk); ok {
+					valueOutputChecked = true
+					valueOutputAvailable = available
+					if !valueOutputAvailable {
+						valueUnavailableReason = reason
+					} else {
+						valueOutputPoints = dataProbe.chunkOutputPointsFor(chunk)
+					}
+				}
+				if valueOutputChecked && !valueOutputAvailable {
+					summary.ValueOutputUnavailableBlocks++
+				} else if valueOutputAvailable {
+					summary.OptimizedValueOutputPoints += valueOutputPoints
+				}
 			} else if maxTime < options.QueryRange.Min {
 				summary.SkippedBeforeSeekBlocks++
 			} else {
 				summary.SkippedAfterRangeBlocks++
 			}
 			appendTSSPChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
-				baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, options.BlockSampleLimit)
+				baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, valueOutputChecked, valueOutputAvailable, valueOutputPoints, valueUnavailableReason, options.BlockSampleLimit)
 			appendTSSPChunkCursorWindow(summary, chunk, minTime, maxTime, segmentCount, outputSegments, options.BlockSampleLimit)
 		}
 	}
 
+	if dataProbe != nil {
+		summary.DataBlockProbeBlocks = dataProbe.BlocksChecked
+		summary.DataBlockProbeBytes = dataProbe.BytesRead
+		summary.DataBlockProbeFailures = dataProbe.Failures()
+		summary.DataBlockProbeValueBlocks = dataProbe.ValueBlocks
+		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
+		summary.DataBlockProbeNullValues = dataProbe.NullValues
+		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
+	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
@@ -227,6 +254,15 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.OptimizedCursorReadCalls += src.OptimizedCursorReadCalls
 	dst.BaselineReadAtCalls += src.BaselineReadAtCalls
 	dst.OptimizedReadAtCalls += src.OptimizedReadAtCalls
+	dst.OptimizedValueOutputPoints += src.OptimizedValueOutputPoints
+	dst.ValueOutputUnavailableBlocks += src.ValueOutputUnavailableBlocks
+	dst.DataBlockProbeBlocks += src.DataBlockProbeBlocks
+	dst.DataBlockProbeBytes += src.DataBlockProbeBytes
+	dst.DataBlockProbeFailures += src.DataBlockProbeFailures
+	dst.DataBlockProbeCRCMismatches += src.DataBlockProbeCRCMismatches
+	dst.DataBlockProbeValueBlocks += src.DataBlockProbeValueBlocks
+	dst.DataBlockProbeValueUnknowns += src.DataBlockProbeValueUnknowns
+	dst.DataBlockProbeNullValues += src.DataBlockProbeNullValues
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
 	dst.IteratorCostBytes += src.IteratorCostBytes
@@ -270,6 +306,12 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 		}
 		dst.CursorWindows = append(dst.CursorWindows, window)
 	}
+	for _, output := range src.CursorOutputSamples {
+		if len(dst.CursorOutputSamples) >= sampleLimit {
+			break
+		}
+		dst.CursorOutputSamples = append(dst.CursorOutputSamples, output)
+	}
 }
 
 func populateTSSPDecodeSeriesMatches(summary *DecodePathSummary, metaIndexes []tsspMetaIndex) {
@@ -309,7 +351,7 @@ func appendTSSPMetaIndexDecodeSample(summary *DecodePathSummary, meta tsspMetaIn
 }
 
 func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32,
-	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, sampleLimit int) {
+	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, valueOutputPoints int, valueUnavailableReason string, sampleLimit int) {
 	if sampleLimit <= 0 || len(summary.Samples) >= sampleLimit {
 		return
 	}
@@ -317,6 +359,12 @@ func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta
 	decoded := outputSegments > 0
 	if decoded {
 		reason = "segment_overlap"
+		if valueOutputChecked && !valueOutputAvailable {
+			reason = valueUnavailableReason
+			if reason == "" {
+				reason = "segment_overlap_data_unavailable"
+			}
+		}
 	}
 	summary.Samples = append(summary.Samples, DecodePathBlockDecision{
 		Key:                   fmt.Sprintf("sid:%d", chunk.SID),
@@ -327,6 +375,8 @@ func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta
 		SizeBytes:             sizeBytes,
 		SegmentCount:          segmentCount,
 		OutputSegments:        outputSegments,
+		ValueOutputPoints:     valueOutputPoints,
+		ValueOutputAvailable:  valueOutputChecked && valueOutputAvailable,
 		BaselineReadAtCalls:   baselineReadAtCalls,
 		OptimizedReadAtCalls:  optimizedReadAtCalls,
 		LocationCandidate:     true,
@@ -457,6 +507,30 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			"issue %d TSSP ReadAt call(s) instead of %d candidate column-segment ReadAt call(s)",
 			summary.OptimizedReadAtCalls,
 			summary.BaselineReadAtCalls,
+		))
+	}
+	if summary.DataBlockProbeBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"verified %d TSSP data block(s) before value decode",
+			summary.DataBlockProbeBlocks-summary.DataBlockProbeFailures,
+		))
+	}
+	if summary.OptimizedValueOutputPoints > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"materialized %d TSSP output point(s) from data block row counts",
+			summary.OptimizedValueOutputPoints,
+		))
+	}
+	if len(summary.CursorOutputSamples) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"sampled %d TSSP one-row value output(s) from data blocks",
+			len(summary.CursorOutputSamples),
+		))
+	}
+	if summary.DataBlockProbeFailures > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"TSSP data block probe found %d invalid block(s)",
+			summary.DataBlockProbeFailures,
 		))
 	}
 	if len(recommendations) == 0 && summary.FilteredDecodeBlocks > 0 {

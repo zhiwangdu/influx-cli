@@ -191,6 +191,81 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPSamplesAttachedOneRowValueBlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithOneRowData(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 333)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_checked"], "true"; got != want {
+		t.Fatalf("data block probe checked = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_valid_blocks"], "2"; got != want {
+		t.Fatalf("data block probe valid blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_blocks"], "2"; got != want {
+		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "integer-one:2"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeBlocks, 2; got != want {
+		t.Fatalf("data block probe blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeValueBlocks, 2; got != want {
+		t.Fatalf("data block probe value blocks = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	sample := decode.CursorOutputSamples[0]
+	if got, want := sample.Key, "sid:7/value"; got != want {
+		t.Fatalf("sample key = %q, want %q", got, want)
+	}
+	if got, want := sample.Time, int64(333); got != want {
+		t.Fatalf("sample time = %d, want %d", got, want)
+	}
+	if got, want := sample.Type, "integer-one"; got != want {
+		t.Fatalf("sample type = %q, want %q", got, want)
+	}
+	if got, want := sample.OptimizedValue, "99"; got != want {
+		t.Fatalf("sample optimized value = %q, want %q", got, want)
+	}
+	if got, want := decode.Samples[0].ValueOutputPoints, 1; got != want {
+		t.Fatalf("decode sample value output points = %d, want %d", got, want)
+	}
+	if !decode.Samples[0].ValueOutputAvailable {
+		t.Fatal("expected decode sample value output to be available")
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "sampled 1 TSSP one-row value output") {
+		t.Fatalf("recommendations = %v, want one-row value output recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPDecodePathDescendingCursor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSP(path); err != nil {
@@ -867,6 +942,68 @@ func writeTestTSSPWithCompression(path string, chunkMetaCompress uint8) error {
 	})
 	writeGeminiInt64(&buf, trailerOffset)
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPWithOneRowData(path string) error {
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+
+	dataOffset := int64(buf.Len())
+	valueOffset := int64(buf.Len())
+	valueSize := writeTestTSSPAttachedIntegerOneBlock(&buf, 99)
+	timeSize := writeTestTSSPAttachedIntegerOneBlock(&buf, 333)
+	dataSize := int64(valueSize + timeSize)
+	chunk := testTSSPChunkSpec{
+		sid:      7,
+		minTime:  333,
+		maxTime:  333,
+		offset:   valueOffset,
+		size:     valueSize,
+		timeSize: timeSize,
+	}
+
+	payload := testTSSPChunkMetaPayload(chunk)
+	payloadOffset := int64(buf.Len())
+	buf.Write(payload)
+
+	metaOffset := int64(buf.Len())
+	writeTestTSSPMetaIndex(&buf, tsspMetaIndex{
+		ID:      7,
+		MinTime: 333,
+		MaxTime: 333,
+		Offset:  payloadOffset,
+		Count:   1,
+		Size:    uint32(len(payload)),
+	})
+
+	trailerOffset := int64(buf.Len())
+	writeTestTSSPTrailer(&buf, tsspTrailer{
+		DataOffset:         dataOffset,
+		DataSize:           dataSize,
+		IndexSize:          metaOffset - dataOffset - dataSize,
+		MetaIndexSize:      int64(buf.Len()) - metaOffset,
+		BloomSize:          0,
+		IDTimeSize:         0,
+		IDCount:            1,
+		MinID:              7,
+		MaxID:              7,
+		MinTime:            333,
+		MaxTime:            333,
+		MetaIndexItemCount: 1,
+		ChunkMetaCompress:  tsspChunkMetaCompressNone,
+		MeasurementName:    "cpu",
+	})
+	writeGeminiInt64(&buf, trailerOffset)
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPAttachedIntegerOneBlock(buf *bytes.Buffer, value int64) uint32 {
+	var payload [9]byte
+	payload[0] = 18 // openGemini encoding.BlockIntegerOne.
+	binary.LittleEndian.PutUint64(payload[1:], uint64(value))
+	buf.Write(payload[:])
+	return uint32(len(payload))
 }
 
 func compressTestTSSPChunkMetaPayload(payload []byte, mode uint8) ([]byte, error) {
