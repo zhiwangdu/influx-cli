@@ -54,7 +54,7 @@ influx-cli config show
 The first implementation phase should stay narrow:
 
 1. CLI query execution.
-2. REPL with session context.
+2. REPL with session context and local query history.
 3. Table output by default.
 4. Sparkline output for time-series results when selected.
 5. Statusline showing db/rp/mode/latency/error.

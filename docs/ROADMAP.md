@@ -21,6 +21,7 @@
 | `internal/result` | table、series、schema result model |
 | `internal/render` | table 和 sparkline renderer |
 | `internal/app`、`internal/repl` | session、statusline、meta command 和 REPL loop |
+| `internal/history` | REPL query history 本地持久化和检索 |
 | `docs/PRODUCT_DESIGN.md` | 产品设计书 |
 | `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
@@ -113,6 +114,8 @@ REPL meta command：
 ### 4.2 新命令
 
 ```text
+:history [limit] [filter]
+:hist [limit] [filter]
 :measurements
 :msts
 :fields <measurement>

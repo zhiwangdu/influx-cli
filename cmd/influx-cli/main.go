@@ -15,6 +15,7 @@ import (
 	"github.com/zhiwangdu/influx-cli/internal/adapter/influxdb"
 	"github.com/zhiwangdu/influx-cli/internal/app"
 	"github.com/zhiwangdu/influx-cli/internal/config"
+	"github.com/zhiwangdu/influx-cli/internal/history"
 	"github.com/zhiwangdu/influx-cli/internal/render"
 	"github.com/zhiwangdu/influx-cli/internal/repl"
 )
@@ -137,7 +138,8 @@ func newReplCommand(flags *globalFlags) *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 			defer stop()
 			return repl.Run(ctx, executor, os.Stdin, cmd.OutOrStdout(), repl.Options{
-				Render: renderOptions(effective, flags),
+				Render:  renderOptions(effective, flags),
+				History: history.NewStore("", history.Options{}),
 			})
 		},
 	}

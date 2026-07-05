@@ -207,9 +207,9 @@ REPL 必备能力：
 | --- | --- | --- |
 | 单行 query | yes | 基础执行 |
 | 多行 query | phase 1 | 支持复杂 InfluxQL/Flux |
-| history | phase 1 | 本地持久化 |
+| history | phase 1 | 本地持久化，可用 `:history`/`:hist` 检索 |
 | autocomplete | phase 1 | db/rp/measurement/field/tag |
-| meta command | MVP | `:use`、`:db`、`:dbs`、`:rps`、`:schema`、`:format` |
+| meta command | MVP/Phase 1 | `:use`、`:db`、`:dbs`、`:rps`、`:schema`、`:format`、`:history` |
 
 ### 8.3 TUI 模式
 
@@ -263,7 +263,7 @@ db: metrics | rp: autogen | mode: influxql | latency: 12ms | ok
 | 能力 | 说明 |
 | --- | --- |
 | InfluxQL 输入 | MVP 必须支持 |
-| meta command | `:use`、`:db`、`:dbs`、`:rps`、`:measurements`、`:msts`、`:schema`、`:format` |
+| meta command | `:use`、`:db`、`:dbs`、`:rps`、`:measurements`、`:msts`、`:schema`、`:format`、`:history` |
 | history search | Phase 1 |
 | autocomplete | Phase 1 |
 | multiline | Phase 1 |

@@ -5,14 +5,18 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/zhiwangdu/influx-cli/internal/app"
+	"github.com/zhiwangdu/influx-cli/internal/history"
 	"github.com/zhiwangdu/influx-cli/internal/render"
+	"github.com/zhiwangdu/influx-cli/internal/result"
 )
 
 type Options struct {
-	Render render.Options
+	Render  render.Options
+	History *history.Store
 }
 
 func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Writer, options Options) error {
@@ -47,6 +51,13 @@ func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Write
 			fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 			continue
 		}
+		if handled, err := handleHistoryCommand(line, &options, out); handled {
+			if err != nil {
+				fmt.Fprintln(out, "error:", err)
+			}
+			fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
+			continue
+		}
 
 		res, err := executor.Execute(ctx, line)
 		if err != nil {
@@ -62,6 +73,11 @@ func Run(ctx context.Context, executor *app.Executor, in io.Reader, out io.Write
 		}
 		if strings.TrimSpace(output) != "" {
 			fmt.Fprintln(out, output)
+		}
+		if shouldPersistHistory(line) {
+			if err := persistHistory(executor, options.History, line); err != nil {
+				fmt.Fprintln(out, "warning:", err)
+			}
 		}
 		fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 	}
@@ -95,4 +111,85 @@ func handleFormatCommand(line string, options *Options, out io.Writer) (bool, er
 	options.Render.Format = format
 	fmt.Fprintf(out, "format: %s\n", format)
 	return true, nil
+}
+
+func handleHistoryCommand(line string, options *Options, out io.Writer) (bool, error) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return false, nil
+	}
+	command := strings.ToLower(fields[0])
+	if command != ":history" && command != ":hist" {
+		return false, nil
+	}
+	if options.History == nil {
+		return true, fmt.Errorf("history is not enabled")
+	}
+
+	limit, filter, err := parseHistoryArgs(fields[1:])
+	if err != nil {
+		return true, err
+	}
+	entries, err := options.History.Search(filter, limit)
+	if err != nil {
+		return true, err
+	}
+	output, _, err := render.Render(historyResult(entries), options.Render)
+	if err != nil {
+		return true, err
+	}
+	if strings.TrimSpace(output) != "" {
+		fmt.Fprintln(out, output)
+	}
+	return true, nil
+}
+
+func parseHistoryArgs(args []string) (int, string, error) {
+	if len(args) == 0 {
+		return history.DefaultLimit, "", nil
+	}
+	limit := history.DefaultLimit
+	filterStart := 0
+	if parsed, err := strconv.Atoi(args[0]); err == nil {
+		if parsed <= 0 {
+			return 0, "", fmt.Errorf("usage: :history [limit] [filter]")
+		}
+		if parsed > history.DefaultMaxEntries {
+			parsed = history.DefaultMaxEntries
+		}
+		limit = parsed
+		filterStart = 1
+	}
+	return limit, strings.Join(args[filterStart:], " "), nil
+}
+
+func historyResult(entries []history.Entry) result.Result {
+	table := result.NewTable([]string{"id", "time", "db", "rp", "dialect", "query"})
+	for _, entry := range entries {
+		table.AddRow(
+			entry.ID,
+			entry.Time.Format("2006-01-02T15:04:05Z07:00"),
+			entry.Database,
+			entry.RetentionPolicy,
+			entry.Dialect,
+			entry.Query,
+		)
+	}
+	return result.FromTable(table)
+}
+
+func shouldPersistHistory(line string) bool {
+	return !strings.HasPrefix(strings.TrimSpace(line), ":")
+}
+
+func persistHistory(executor *app.Executor, store *history.Store, line string) error {
+	if store == nil {
+		return nil
+	}
+	return store.Append(history.Entry{
+		Database:        executor.Session.Database,
+		RetentionPolicy: executor.Session.RP,
+		Dialect:         string(executor.Session.Dialect),
+		Query:           line,
+	})
 }

@@ -282,6 +282,8 @@ read input
   -> continue
 ```
 
+REPL history 属于 application core 的本地状态，默认写入 `~/.local/state/influx-cli/history.jsonl`，也支持 `XDG_STATE_HOME`。MVP/Phase 1 的 REPL 使用 `:history [limit] [filter]` 或 `:hist [limit] [filter]` 检索已持久化的 query。
+
 ### 6.3 TUI
 
 ```text

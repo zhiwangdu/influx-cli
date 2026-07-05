@@ -3,6 +3,7 @@ package repl
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/zhiwangdu/influx-cli/internal/adapter"
 	"github.com/zhiwangdu/influx-cli/internal/app"
 	"github.com/zhiwangdu/influx-cli/internal/config"
+	"github.com/zhiwangdu/influx-cli/internal/history"
 	"github.com/zhiwangdu/influx-cli/internal/query"
 	"github.com/zhiwangdu/influx-cli/internal/render"
 	"github.com/zhiwangdu/influx-cli/internal/result"
@@ -97,6 +99,101 @@ func TestRunRejectsInvalidRenderFormatCommands(t *testing.T) {
 	}
 	if got := strings.Count(output, "format: sparkline"); got != 2 {
 		t.Fatalf("format confirmations = %d, want 2:\n%s", got, output)
+	}
+}
+
+func TestRunPersistsAndShowsQueryHistory(t *testing.T) {
+	store := history.NewStore(filepath.Join(t.TempDir(), "history.jsonl"), history.Options{})
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Database: "metrics", RetentionPolicy: "autogen", Precision: "rfc3339"}),
+		fakeAdapter{},
+	)
+	input := strings.NewReader(strings.Join([]string{
+		":format sparkline",
+		"SELECT mean(value) FROM cpu",
+		":history",
+		":q",
+		"",
+	}, "\n"))
+	var out bytes.Buffer
+
+	if err := Run(context.Background(), executor, input, &out, Options{
+		Render:  render.Options{Format: render.FormatTable, Width: 120},
+		History: store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := store.Search("", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(entries), 1; got != want {
+		t.Fatalf("history entries = %d, want %d", got, want)
+	}
+	if entries[0].Query != "SELECT mean(value) FROM cpu" {
+		t.Fatalf("history query = %q", entries[0].Query)
+	}
+	if entries[0].Database != "metrics" || entries[0].RetentionPolicy != "autogen" {
+		t.Fatalf("history context = %q/%q", entries[0].Database, entries[0].RetentionPolicy)
+	}
+	if entries[0].Dialect != "influxql" {
+		t.Fatalf("history dialect = %q, want influxql", entries[0].Dialect)
+	}
+	output := out.String()
+	if !strings.Contains(output, "SELECT mean(value) FROM cpu") {
+		t.Fatalf("history output missing query:\n%s", output)
+	}
+	if !strings.Contains(output, "influxql") {
+		t.Fatalf("history output missing dialect:\n%s", output)
+	}
+}
+
+func TestRunSearchesHistoryByFilter(t *testing.T) {
+	store := history.NewStore(filepath.Join(t.TempDir(), "history.jsonl"), history.Options{})
+	if err := store.Append(history.Entry{Query: "SELECT mean(value) FROM cpu"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(history.Entry{Query: "SELECT mean(value) FROM mem"}); err != nil {
+		t.Fatal(err)
+	}
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		fakeAdapter{},
+	)
+	input := strings.NewReader(":history cpu\n:q\n")
+	var out bytes.Buffer
+
+	if err := Run(context.Background(), executor, input, &out, Options{
+		Render:  render.Options{Format: render.FormatTable, Width: 120},
+		History: store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	output := out.String()
+	if !strings.Contains(output, "SELECT mean(value) FROM cpu") {
+		t.Fatalf("history output missing cpu query:\n%s", output)
+	}
+	if strings.Contains(output, "SELECT mean(value) FROM mem") {
+		t.Fatalf("history filter returned mem query:\n%s", output)
+	}
+}
+
+func TestRunRejectsInvalidHistoryLimit(t *testing.T) {
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		fakeAdapter{},
+	)
+	input := strings.NewReader(":history 0\n:q\n")
+	var out bytes.Buffer
+
+	if err := Run(context.Background(), executor, input, &out, Options{
+		History: history.NewStore(filepath.Join(t.TempDir(), "history.jsonl"), history.Options{}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "error: usage: :history [limit] [filter]") {
+		t.Fatalf("missing history usage error:\n%s", out.String())
 	}
 }
 

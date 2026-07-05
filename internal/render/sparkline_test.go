@@ -60,3 +60,11 @@ func TestRenderSparklineFallsBackForTableOnlyResult(t *testing.T) {
 		t.Fatalf("expected table fallback, got %q", output)
 	}
 }
+
+func TestRenderSparklineFallsBackForEmptyMetadataTable(t *testing.T) {
+	table := result.NewTable([]string{"id", "query"})
+	output := RenderSparkline(result.FromTable(table), Options{Width: 10})
+	if !strings.Contains(output, "id") || strings.Contains(output, "no numeric time-series points") {
+		t.Fatalf("expected empty table fallback, got %q", output)
+	}
+}

@@ -13,7 +13,7 @@ var sparkBlocks = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
 func RenderSparkline(res result.Result, options Options) string {
 	if len(res.Series) == 0 {
-		if res.Table != nil && res.Table.RowCount() > 0 {
+		if res.Table != nil && len(res.Table.Columns) > 0 {
 			return RenderTable(res, options)
 		}
 		return "no numeric time-series points"
