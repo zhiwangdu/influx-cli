@@ -1,6 +1,9 @@
 package storage
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options) *DecodePathSummary {
 	if !options.QueryRange.Set {
@@ -8,9 +11,9 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                 "tssp-location-cursor-ascending",
+		Mode:                 tsspCursorMode("tssp-location-cursor", options),
 		QueryRange:           options.QueryRange,
-		CursorSeekTime:       options.QueryRange.Min,
+		CursorSeekTime:       tsspCursorSeekTime(options),
 		LocationBlocksByType: map[string]int{},
 		DecodeBlocksByType:   map[string]int{},
 	}
@@ -25,7 +28,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	}
 	populateTSSPDecodeSeriesMatches(summary, metaIndexes)
 
-	for _, meta := range metaIndexes {
+	for _, meta := range tsspMetaIndexesForCursor(metaIndexes, options.CursorDescending) {
 		metaChunks := int(meta.Count)
 		if !tsspQuerySeriesSelected(meta.ID, seriesSet) {
 			summary.SkippedByKeyBlocks += metaChunks
@@ -58,7 +61,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 			continue
 		}
 
-		for _, chunk := range sidChunks {
+		for _, chunk := range tsspChunksForCursor(sidChunks, options.CursorDescending) {
 			minTime, maxTime := chunk.minMaxTime()
 			segmentCount := len(chunk.TimeRanges)
 			outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange)
@@ -104,9 +107,9 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                 "tssp-file-set-location-cursor-ascending",
+		Mode:                 tsspCursorMode("tssp-file-set-location-cursor", options),
 		QueryRange:           options.QueryRange,
-		CursorSeekTime:       options.QueryRange.Min,
+		CursorSeekTime:       tsspCursorSeekTime(options),
 		QuerySeriesIDs:       append([]uint64(nil), options.QuerySeriesIDs...),
 		KeyFilterApplied:     len(options.QuerySeriesIDs) > 0,
 		LocationBlocksByType: map[string]int{},
@@ -114,10 +117,7 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	}
 	matchedSeriesIDs := map[uint64]struct{}{}
 	included := false
-	for _, file := range files {
-		if file.Format != FormatTSSP || file.DecodePath == nil {
-			continue
-		}
+	for _, file := range tsspFilesForCursor(files, options.CursorDescending) {
 		included = true
 		addTSSPFileDecodePathSummary(summary, file.DecodePath, file.Path, options.BlockSampleLimit)
 		for _, id := range file.DecodePath.MatchedSeriesIDs {
@@ -146,6 +146,63 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	}
 	summary.Recommendations = tsspDecodeRecommendations(summary)
 	return summary
+}
+
+func tsspCursorMode(prefix string, options Options) string {
+	if options.CursorDescending {
+		return prefix + "-descending"
+	}
+	return prefix + "-ascending"
+}
+
+func tsspCursorSeekTime(options Options) int64 {
+	if options.CursorDescending {
+		return options.QueryRange.Max
+	}
+	return options.QueryRange.Min
+}
+
+func tsspMetaIndexesForCursor(metaIndexes []tsspMetaIndex, descending bool) []tsspMetaIndex {
+	ordered := append([]tsspMetaIndex(nil), metaIndexes...)
+	if !descending {
+		return ordered
+	}
+	for i, j := 0, len(ordered)-1; i < j; i, j = i+1, j-1 {
+		ordered[i], ordered[j] = ordered[j], ordered[i]
+	}
+	return ordered
+}
+
+func tsspChunksForCursor(chunks []tsspChunkMeta, descending bool) []tsspChunkMeta {
+	ordered := append([]tsspChunkMeta(nil), chunks...)
+	if !descending {
+		return ordered
+	}
+	for i, j := 0, len(ordered)-1; i < j; i, j = i+1, j-1 {
+		ordered[i], ordered[j] = ordered[j], ordered[i]
+	}
+	return ordered
+}
+
+func tsspFilesForCursor(files []FileReport, descending bool) []FileReport {
+	ordered := make([]FileReport, 0, len(files))
+	for _, file := range files {
+		if file.Format != FormatTSSP || file.DecodePath == nil {
+			continue
+		}
+		ordered = append(ordered, file)
+	}
+	if !descending {
+		return ordered
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if a.MaxTime != b.MaxTime {
+			return a.MaxTime > b.MaxTime
+		}
+		return a.Path > b.Path
+	})
+	return ordered
 }
 
 func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, sampleLimit int) {

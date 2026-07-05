@@ -157,6 +157,62 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDecodePathDescendingCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSP(path); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(150, 175)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		CursorDescending: true,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("expected TSSP decode path summary")
+	}
+	if got, want := decode.Mode, "tssp-location-cursor-descending"; got != want {
+		t.Fatalf("decode mode = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorSeekTime, int64(175); got != want {
+		t.Fatalf("cursor seek time = %d, want %d", got, want)
+	}
+	if got, want := decode.LocationBlocks, 3; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadSegments, 1; got != want {
+		t.Fatalf("optimized read segments = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 3; got != want {
+		t.Fatalf("cursor window samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].MinTime, int64(190); got != want {
+		t.Fatalf("first cursor window min time = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "outside_query_range"; got != want {
+		t.Fatalf("first cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[1].Reason, "segment_overlap"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := len(decode.Samples), 3; got != want {
+		t.Fatalf("decode samples = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].MinTime, int64(190); got != want {
+		t.Fatalf("first decode sample min time = %d, want %d", got, want)
+	}
+}
+
 func TestAnalyzeTSSPSnappyChunkMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSPWithCompression(path, tsspChunkMetaCompressSnappy); err != nil {
@@ -454,6 +510,62 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 		if len(window.Files) == 0 {
 			t.Fatalf("cursor window missing file: %+v", window)
 		}
+	}
+}
+
+func TestAnalyzeTSSPFileSetDecodePathDescendingCursor(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "00000001-0001-00000000.tssp")
+	path2 := filepath.Join(dir, "00000002-0001-00000000.tssp")
+	if err := writeTestTSSP(path1); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPWithCompression(path2, tsspChunkMetaCompressSnappy); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(150, 175)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QuerySeriesIDs:   []uint64{7},
+		CursorDescending: true,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level TSSP decode path summary")
+	}
+	if got, want := decode.Mode, "tssp-file-set-location-cursor-descending"; got != want {
+		t.Fatalf("mode = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorSeekTime, int64(175); got != want {
+		t.Fatalf("cursor seek time = %d, want %d", got, want)
+	}
+	if got, want := decode.LocationBlocks, 6; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadSegments, 2; got != want {
+		t.Fatalf("optimized read segments = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 5; got != want {
+		t.Fatalf("cursor window samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Files, []string{path2}; !equalStrings(got, want) {
+		t.Fatalf("first cursor window files = %v, want %v", got, want)
+	}
+	if got, want := decode.CursorWindows[0].MinTime, int64(190); got != want {
+		t.Fatalf("first cursor window min time = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[1].Reason, "segment_overlap"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
 	}
 }
 

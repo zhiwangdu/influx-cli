@@ -298,7 +298,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "openGemini TSSP series ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
-	analyzeCommand.Flags().StringVar(&analyzeFlags.cursorOrder, "cursor-order", "asc", "TSM cursor order for decode-path planning: asc or desc")
+	analyzeCommand.Flags().StringVar(&analyzeFlags.cursorOrder, "cursor-order", "asc", "TSM/openGemini TSSP cursor order for decode-path planning: asc or desc")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.sampleKeys, "sample-keys", analyzeFlags.sampleKeys, "maximum key or series ID samples per file")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.maxBlocks, "max-blocks", analyzeFlags.maxBlocks, "maximum block samples per file")
 
