@@ -29,7 +29,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	options.QueryMetaIndexIDs = normalizeQuerySeriesIDs(options.QueryMetaIndexIDs)
 	options.QueryMeasurements = normalizeQueryKeys(options.QueryMeasurements)
 	options.QueryTags = normalizeTagFilters(options.QueryTags)
-	if len(options.QueryKeys) > 0 && !options.QueryRange.Set {
+	if len(options.QueryKeys) > 0 && !options.QueryRange.Set && options.Format != FormatMergeset {
 		return Report{}, fmt.Errorf("query key filter requires query range")
 	}
 	if len(options.QuerySeriesIDs) > 0 && !options.QueryRange.Set {

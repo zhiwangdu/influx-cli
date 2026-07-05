@@ -151,6 +151,18 @@ func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
 	}
 }
 
+func TestStorageAnalyzeMergesetKeyDoesNotRequireRange(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--storage-format", "mergeset", "--key", "aa", "missing"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected missing path error")
+	}
+	if strings.Contains(err.Error(), "--key requires --from and --to") {
+		t.Fatalf("error = %v, want mergeset key search to allow key-only lookup", err)
+	}
+}
+
 func TestStorageAnalyzeSeriesIDRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--series-id", "9", "missing.tssp"})

@@ -218,7 +218,8 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if hasNonEmptyValues(analyzeFlags.keys) && !queryRange.Set {
+			storageFormat := storage.Format(strings.ToLower(analyzeFlags.format))
+			if hasNonEmptyValues(analyzeFlags.keys) && !queryRange.Set && storageFormat != storage.FormatMergeset {
 				return fmt.Errorf("--key requires --from and --to because decode-path planning needs a query range")
 			}
 			seriesIDs, err := parseStorageSeriesIDs(analyzeFlags.seriesIDs)
@@ -244,7 +245,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				return err
 			}
 			report, err := storage.Analyze(cmd.Context(), args, storage.Options{
-				Format:            storage.Format(strings.ToLower(analyzeFlags.format)),
+				Format:            storageFormat,
 				Recursive:         analyzeFlags.recursive,
 				KeySampleLimit:    analyzeFlags.sampleKeys,
 				BlockSampleLimit:  analyzeFlags.maxBlocks,
@@ -303,7 +304,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().BoolVar(&analyzeFlags.recursive, "recursive", false, "walk directories recursively")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")
-	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.keys, "key", nil, "TSM index key to include in query decode-path planning; repeat for multiple keys")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.keys, "key", nil, "TSM index key or mergeset item key to include in query/search planning; repeat for multiple keys")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "openGemini TSSP series ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
