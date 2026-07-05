@@ -194,6 +194,7 @@ influx-cli repl
 
 ```text
 influx> :use metrics
+influx> :db metrics
 influx[metrics/autogen]> SELECT mean(value) FROM cpu WHERE time > now() - 1h
 ```
 
@@ -205,7 +206,7 @@ REPL 必备能力：
 | 多行 query | phase 1 | 支持复杂 InfluxQL/Flux |
 | history | phase 1 | 本地持久化 |
 | autocomplete | phase 1 | db/rp/measurement/field/tag |
-| meta command | MVP | `:use`、`:dbs`、`:schema` |
+| meta command | MVP | `:use`、`:db`、`:dbs`、`:schema` |
 
 ### 8.3 TUI 模式
 
@@ -259,7 +260,7 @@ db: metrics | rp: autogen | mode: influxql | latency: 12ms | ok
 | 能力 | 说明 |
 | --- | --- |
 | InfluxQL 输入 | MVP 必须支持 |
-| meta command | `:use`、`:dbs`、`:measurements`、`:schema` |
+| meta command | `:use`、`:db`、`:dbs`、`:measurements`、`:schema` |
 | history search | Phase 1 |
 | autocomplete | Phase 1 |
 | multiline | Phase 1 |
@@ -376,7 +377,7 @@ MVP 明确不做：
 | --- | --- |
 | 首次连接到执行 query | 1 分钟内 |
 | 单次 query 输出 | 支持 table/sparkline |
-| REPL 上下文切换 | `:use db` 生效 |
+| REPL 上下文切换 | `:use db` 和别名 `:db db` 生效 |
 | 错误可理解 | 网络、认证、语法错误有明确提示 |
 | 趋势观察 | time + numeric 自动 sparkline |
 

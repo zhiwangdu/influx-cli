@@ -20,6 +20,13 @@ func TestExecutorMetaUseAndRPUpdateSession(t *testing.T) {
 		t.Fatalf("database = %q, want metrics", executor.Session.Database)
 	}
 
+	if _, err := executor.Execute(context.Background(), ":db telegraf"); err != nil {
+		t.Fatal(err)
+	}
+	if executor.Session.Database != "telegraf" {
+		t.Fatalf("database = %q, want telegraf", executor.Session.Database)
+	}
+
 	if _, err := executor.Execute(context.Background(), ":rp autogen"); err != nil {
 		t.Fatal(err)
 	}

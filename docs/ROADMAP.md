@@ -58,6 +58,7 @@ REPL meta command：
 
 ```text
 :use <db>
+:db <db>
 :rp <rp>
 :dbs
 :help

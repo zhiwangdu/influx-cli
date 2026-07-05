@@ -48,9 +48,9 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 	command := strings.ToLower(fields[0])
 
 	switch command {
-	case ":use":
+	case ":use", ":db":
 		if len(fields) != 2 {
-			return result.Result{}, fmt.Errorf("usage: :use <db>")
+			return result.Result{}, fmt.Errorf("usage: :use <db> or :db <db>")
 		}
 		e.Session.Database = fields[1]
 		return statusResult("database", fields[1]), nil
@@ -115,6 +115,7 @@ func statusResult(key, value string) result.Result {
 func helpResult() result.Result {
 	table := result.NewTable([]string{"command", "description"})
 	table.AddRow(":use <db>", "set current database")
+	table.AddRow(":db <db>", "alias for :use <db>")
 	table.AddRow(":rp <rp>", "set current retention policy")
 	table.AddRow(":dbs", "show databases")
 	table.AddRow(":measurements", "show measurements in current database")
