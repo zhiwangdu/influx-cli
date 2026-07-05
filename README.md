@@ -55,11 +55,11 @@ Initial Phase 5 storage analyzer surface:
 influx-cli storage analyze /path/to/shard --recursive
 influx-cli storage analyze /path/to/file.tsm --from 2026-07-05T00:00:00Z --to 2026-07-05T01:00:00Z
 influx-cli --format json storage analyze /path/to/file.tsm --from 10 --to 20 --key "cpu,host=a value"
-influx-cli --format json storage analyze /path/to/file.tssp
+influx-cli --format json storage analyze /path/to/file.tssp --from 10 --to 20 --series-id 7
 influx-cli --format json storage analyze /path/to/L0-00000001.tsi --measurement cpu --tag host=a
 ```
 
-Use `--storage-format tsm|tssp|tsi` to override auto-detection when needed. Repeat `--key` to scope TSM decode-path planning to specific TSM index keys. Repeat `--measurement` and `--tag key=value` to inspect TSI measurement/tag predicates.
+Use `--storage-format tsm|tssp|tsi` to override auto-detection when needed. Repeat `--key` to scope TSM decode-path planning to specific TSM index keys. Repeat `--series-id` to scope openGemini TSSP decode-path planning to specific series IDs. Repeat `--measurement` and `--tag key=value` to inspect TSI measurement/tag predicates.
 
 ## MVP Scope
 

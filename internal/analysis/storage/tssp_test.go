@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/golang/snappy"
@@ -237,6 +238,57 @@ func TestAnalyzeTSSPSelfCompressedChunkMetadata(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDecodePathSeriesIDFilter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSP(path); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(300, 350)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QuerySeriesIDs:   []uint64{42, 9, 9},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.QueryOverlapBlocks, 2; got != want {
+		t.Fatalf("query overlap blocks = %d, want %d", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("expected TSSP decode path summary")
+	}
+	if got, want := decode.QuerySeriesIDs, []uint64{9, 42}; !equalUint64s(got, want) {
+		t.Fatalf("query series ids = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedSeriesIDs, []uint64{9}; !equalUint64s(got, want) {
+		t.Fatalf("matched series ids = %v, want %v", got, want)
+	}
+	if got, want := decode.MissingSeriesIDs, []uint64{42}; !equalUint64s(got, want) {
+		t.Fatalf("missing series ids = %v, want %v", got, want)
+	}
+	if got, want := decode.SkippedByKeyBlocks, 3; got != want {
+		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.LocationBlocks, 2; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadSegments, 2; got != want {
+		t.Fatalf("optimized read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedAfterRangeBlocks, 0; got != want {
+		t.Fatalf("skipped after range blocks = %d, want %d", got, want)
+	}
+}
+
 func TestParseTSSPChunkMetaBlockAllowsTrailingBytes(t *testing.T) {
 	var buf bytes.Buffer
 	writeTestTSSPChunkMeta(&buf, testTSSPChunkSpec{
@@ -352,8 +404,30 @@ func TestDecompressTSSPChunkMetaBlockRejectsMalformedInputs(t *testing.T) {
 	}
 }
 
+func TestAnalyzeQuerySeriesIDsRequireRange(t *testing.T) {
+	_, err := Analyze(context.Background(), []string{"missing.tssp"}, Options{
+		Format:         FormatTSSP,
+		QuerySeriesIDs: []uint64{9},
+	})
+	if err == nil || !strings.Contains(err.Error(), "series id filter requires query range") {
+		t.Fatalf("error = %v, want series id range requirement", err)
+	}
+}
+
 func writeTestTSSP(path string) error {
 	return writeTestTSSPWithCompression(path, tsspChunkMetaCompressNone)
+}
+
+func equalUint64s(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func writeTestTSSPWithCompression(path string, chunkMetaCompress uint8) error {

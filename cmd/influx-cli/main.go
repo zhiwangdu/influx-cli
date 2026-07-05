@@ -189,6 +189,7 @@ type storageAnalyzeFlags struct {
 	from         string
 	to           string
 	keys         []string
+	seriesIDs    []string
 	measurements []string
 	tags         []string
 	sampleKeys   int
@@ -218,6 +219,13 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if hasNonEmptyValues(analyzeFlags.keys) && !queryRange.Set {
 				return fmt.Errorf("--key requires --from and --to because decode-path planning needs a query range")
 			}
+			seriesIDs, err := parseStorageSeriesIDs(analyzeFlags.seriesIDs)
+			if err != nil {
+				return err
+			}
+			if len(seriesIDs) > 0 && !queryRange.Set {
+				return fmt.Errorf("--series-id requires --from and --to because decode-path planning needs a query range")
+			}
 			tagFilters, err := parseStorageTagFilters(analyzeFlags.tags)
 			if err != nil {
 				return err
@@ -229,6 +237,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				BlockSampleLimit:  analyzeFlags.maxBlocks,
 				QueryRange:        queryRange,
 				QueryKeys:         analyzeFlags.keys,
+				QuerySeriesIDs:    seriesIDs,
 				QueryMeasurements: analyzeFlags.measurements,
 				QueryTags:         tagFilters,
 			})
@@ -280,6 +289,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.keys, "key", nil, "TSM index key to include in query decode-path planning; repeat for multiple keys")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "openGemini TSSP series ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.sampleKeys, "sample-keys", analyzeFlags.sampleKeys, "maximum key or series ID samples per file")
@@ -387,6 +397,25 @@ func parseStorageTagFilters(values []string) ([]storage.TagFilter, error) {
 		filters = append(filters, filter)
 	}
 	return filters, nil
+}
+
+func parseStorageSeriesIDs(values []string) ([]uint64, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	ids := make([]uint64, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		id, err := strconv.ParseUint(trimmed, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse --series-id %q: use an unsigned integer", value)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func colorEnabled() bool {

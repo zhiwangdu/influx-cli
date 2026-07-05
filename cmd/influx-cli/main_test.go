@@ -86,11 +86,39 @@ func TestParseStorageTagFiltersRejectsMalformedValues(t *testing.T) {
 	}
 }
 
+func TestParseStorageSeriesIDs(t *testing.T) {
+	got, err := parseStorageSeriesIDs([]string{" 9 ", "", "42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != 9 || got[1] != 42 {
+		t.Fatalf("series ids = %v, want [9 42]", got)
+	}
+}
+
+func TestParseStorageSeriesIDsRejectsMalformedValues(t *testing.T) {
+	if _, err := parseStorageSeriesIDs([]string{"abc"}); err == nil || !strings.Contains(err.Error(), "unsigned integer") {
+		t.Fatalf("error = %v, want unsigned integer guidance", err)
+	}
+	if _, err := parseStorageSeriesIDs([]string{"-1"}); err == nil || !strings.Contains(err.Error(), "unsigned integer") {
+		t.Fatalf("error = %v, want unsigned integer guidance", err)
+	}
+}
+
 func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--key", "cpu value", "missing.tsm"})
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--key requires --from and --to") {
 		t.Fatalf("error = %v, want key range requirement", err)
+	}
+}
+
+func TestStorageAnalyzeSeriesIDRequiresRange(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--series-id", "9", "missing.tssp"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--series-id requires --from and --to") {
+		t.Fatalf("error = %v, want series id range requirement", err)
 	}
 }

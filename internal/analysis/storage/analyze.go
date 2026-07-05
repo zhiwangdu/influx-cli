@@ -25,10 +25,14 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 		return Report{}, fmt.Errorf("block sample limit cannot be negative")
 	}
 	options.QueryKeys = normalizeQueryKeys(options.QueryKeys)
+	options.QuerySeriesIDs = normalizeQuerySeriesIDs(options.QuerySeriesIDs)
 	options.QueryMeasurements = normalizeQueryKeys(options.QueryMeasurements)
 	options.QueryTags = normalizeTagFilters(options.QueryTags)
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query key filter requires query range")
+	}
+	if len(options.QuerySeriesIDs) > 0 && !options.QueryRange.Set {
+		return Report{}, fmt.Errorf("query series id filter requires query range")
 	}
 
 	files, err := expandPaths(ctx, paths, options)
@@ -92,6 +96,36 @@ func queryKeySet(keys []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
 		set[key] = struct{}{}
+	}
+	return set
+}
+
+func normalizeQuerySeriesIDs(values []uint64) []uint64 {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[uint64]struct{}{}
+	ids := make([]uint64, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		ids = append(ids, value)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	return ids
+}
+
+func querySeriesIDSet(ids []uint64) map[uint64]struct{} {
+	if len(ids) == 0 {
+		return nil
+	}
+	set := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
 	}
 	return set
 }

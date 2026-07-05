@@ -24,6 +24,7 @@ type Options struct {
 	BlockSampleLimit  int
 	QueryRange        TimeRange
 	QueryKeys         []string
+	QuerySeriesIDs    []uint64
 	QueryMeasurements []string
 	QueryTags         []TagFilter
 }
@@ -189,8 +190,11 @@ type DecodePathSummary struct {
 	Mode                         string                    `json:"mode,omitempty"`
 	QueryRange                   TimeRange                 `json:"query_range,omitempty"`
 	QueryKeys                    []string                  `json:"query_keys,omitempty"`
+	QuerySeriesIDs               []uint64                  `json:"query_series_ids,omitempty"`
 	MatchedKeys                  []string                  `json:"matched_keys,omitempty"`
 	MissingKeys                  []string                  `json:"missing_keys,omitempty"`
+	MatchedSeriesIDs             []uint64                  `json:"matched_series_ids,omitempty"`
+	MissingSeriesIDs             []uint64                  `json:"missing_series_ids,omitempty"`
 	KeyFilterApplied             bool                      `json:"key_filter_applied,omitempty"`
 	CursorSeekTime               int64                     `json:"cursor_seek_time,omitempty"`
 	BaselineDecodeBlocks         int                       `json:"baseline_decode_blocks,omitempty"`

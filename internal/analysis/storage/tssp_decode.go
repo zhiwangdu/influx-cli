@@ -14,13 +14,23 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		LocationBlocksByType: map[string]int{},
 		DecodeBlocksByType:   map[string]int{},
 	}
+	seriesSet := querySeriesIDSet(options.QuerySeriesIDs)
+	if len(seriesSet) > 0 {
+		summary.QuerySeriesIDs = append([]uint64(nil), options.QuerySeriesIDs...)
+		summary.KeyFilterApplied = true
+	}
 	chunksBySID := map[uint64][]tsspChunkMeta{}
 	for _, chunk := range chunks {
 		chunksBySID[chunk.SID] = append(chunksBySID[chunk.SID], chunk)
 	}
+	populateTSSPDecodeSeriesMatches(summary, metaIndexes)
 
 	for _, meta := range metaIndexes {
 		metaChunks := int(meta.Count)
+		if !tsspQuerySeriesSelected(meta.ID, seriesSet) {
+			summary.SkippedByKeyBlocks += metaChunks
+			continue
+		}
 		if !options.QueryRange.Overlaps(meta.MinTime, meta.MaxTime) {
 			if meta.MaxTime < options.QueryRange.Min {
 				summary.SkippedBeforeSeekBlocks += metaChunks
@@ -80,6 +90,23 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	summary.CursorWindowCount = summary.LocationBlocks
 	summary.Recommendations = tsspDecodeRecommendations(summary)
 	return summary
+}
+
+func populateTSSPDecodeSeriesMatches(summary *DecodePathSummary, metaIndexes []tsspMetaIndex) {
+	if len(summary.QuerySeriesIDs) == 0 {
+		return
+	}
+	known := map[uint64]struct{}{}
+	for _, meta := range metaIndexes {
+		known[meta.ID] = struct{}{}
+	}
+	for _, id := range summary.QuerySeriesIDs {
+		if _, ok := known[id]; ok {
+			summary.MatchedSeriesIDs = append(summary.MatchedSeriesIDs, id)
+		} else {
+			summary.MissingSeriesIDs = append(summary.MissingSeriesIDs, id)
+		}
+	}
 }
 
 func appendTSSPMetaIndexDecodeSample(summary *DecodePathSummary, meta tsspMetaIndex, sampleLimit int) {
@@ -161,6 +188,18 @@ func tsspChunkSegmentBytesAt(chunk tsspChunkMeta, segment int) uint32 {
 
 func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	var recommendations []string
+	if len(summary.MissingSeriesIDs) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"%d query series id(s) were not found in this TSSP file",
+			len(summary.MissingSeriesIDs),
+		))
+	}
+	if summary.SkippedByKeyBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"series-id filter excludes %d TSSP chunk(s) from location planning",
+			summary.SkippedByKeyBlocks,
+		))
+	}
 	if summary.SkippedBeforeSeekBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"skip %d TSSP chunk(s) before the cursor seek time",

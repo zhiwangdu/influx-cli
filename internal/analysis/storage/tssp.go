@@ -694,8 +694,9 @@ func parseTSSPColumnMeta(src []byte, segmentCount uint32) (tsspColumnMeta, []byt
 }
 
 func populateTSSPChunkReports(report *FileReport, chunks []tsspChunkMeta, options Options) {
+	seriesSet := querySeriesIDSet(options.QuerySeriesIDs)
 	for i, chunk := range chunks {
-		overlaps := chunk.queryOverlaps(options.QueryRange)
+		overlaps := tsspQuerySeriesSelected(chunk.SID, seriesSet) && chunk.queryOverlaps(options.QueryRange)
 		if overlaps {
 			report.QueryOverlapBlocks++
 		}
@@ -717,8 +718,9 @@ func populateTSSPChunkReports(report *FileReport, chunks []tsspChunkMeta, option
 }
 
 func populateTSSPMetaIndexReports(report *FileReport, metaIndexes []tsspMetaIndex, options Options) {
+	seriesSet := querySeriesIDSet(options.QuerySeriesIDs)
 	for i, meta := range metaIndexes {
-		overlaps := options.QueryRange.Overlaps(meta.MinTime, meta.MaxTime)
+		overlaps := tsspQuerySeriesSelected(meta.ID, seriesSet) && options.QueryRange.Overlaps(meta.MinTime, meta.MaxTime)
 		if overlaps {
 			report.QueryOverlapBlocks += int(meta.Count)
 		}
@@ -754,6 +756,14 @@ func (m tsspChunkMeta) queryOverlaps(r TimeRange) bool {
 		}
 	}
 	return false
+}
+
+func tsspQuerySeriesSelected(id uint64, seriesSet map[uint64]struct{}) bool {
+	if len(seriesSet) == 0 {
+		return true
+	}
+	_, ok := seriesSet[id]
+	return ok
 }
 
 func sumTSSPChunkMetaCount(items []tsspMetaIndex) int {
