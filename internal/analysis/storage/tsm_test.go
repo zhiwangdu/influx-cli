@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/binary"
 	"hash/crc32"
+	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
@@ -513,6 +515,68 @@ func TestAnalyzeTSMDecodePathComparesIntegerValueOutput(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMDecodePathComparesFloatValueOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "load,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}, floatValues: []float64{1.25, 2.5, 3.75}},
+		{key: "load,host=a value", typ: tsmBlockFloat, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}, floatValues: []float64{20.5, 30.5, 40.5}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if got, want := decode.BaselineValueOutputPoints, 4; got != want {
+		t.Fatalf("baseline value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 4; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ComparedValueOutputPoints, 2; got != want {
+		t.Fatalf("compared value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputMismatches, 0; got != want {
+		t.Fatalf("value output mismatches = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+
+	data, err := readTSMFileStoreData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := map[tsmOutputPointKey]tsmPoint{}
+	for _, entry := range data.entries {
+		points, ok := tsmOutputPoints(entry, nil, queryRange)
+		if !ok {
+			t.Fatalf("points unavailable for entry %+v", entry)
+		}
+		addTSMOutputPoints(baseline, entry.Key, points)
+	}
+	for timestamp, want := range map[int64]string{20: "20.5", 30: "30.5"} {
+		point, ok := baseline[tsmOutputPointKey{key: "load,host=a value", timestamp: timestamp, typ: tsmBlockFloat}]
+		if !ok {
+			t.Fatalf("missing merged point at %d", timestamp)
+		}
+		if point.Value != want {
+			t.Fatalf("merged point at %d = %q, want %q", timestamp, point.Value, want)
+		}
+	}
+}
+
 func TestAnalyzeTSMDecodePathComparesBooleanAndStringValueOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
 	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
@@ -909,6 +973,7 @@ type testTSMBlockSpec struct {
 	minTime      int64
 	maxTime      int64
 	timestamps   []int64
+	floatValues  []float64
 	values       []int64
 	boolValues   []bool
 	stringValues []string
@@ -1020,6 +1085,8 @@ func testTSMBlock(spec testTSMBlockSpec) []byte {
 	block.Write(binary.AppendUvarint(nil, uint64(ts.Len())))
 	block.Write(ts.Bytes())
 	switch {
+	case spec.typ == tsmBlockFloat && len(spec.floatValues) > 0:
+		block.Write(testTSMFloatValueBlock(spec.floatValues))
 	case spec.typ == tsmBlockInteger && len(spec.values) > 0:
 		block.Write(testTSMIntegerValueBlock(spec.values))
 	case spec.typ == tsmBlockBoolean && len(spec.boolValues) > 0:
@@ -1058,6 +1125,86 @@ func testTSMUnsignedValueBlock(values []uint64) []byte {
 		block.Write(b[:])
 	}
 	return block.Bytes()
+}
+
+func testTSMFloatValueBlock(values []float64) []byte {
+	var writer tsmFloatBitWriter
+	writer.writeBits(uint64(tsmFloatCompressedGorilla)<<4, 8)
+	write := func(value float64) {
+		writer.writeGorillaFloat(value)
+	}
+	for _, value := range values {
+		write(value)
+	}
+	write(math.Float64frombits(tsmFloatNaNSentinel))
+	return writer.bytes
+}
+
+type tsmFloatBitWriter struct {
+	bytes    []byte
+	bitCount int
+	previous uint64
+	leading  uint64
+	trailing uint64
+	started  bool
+}
+
+func (w *tsmFloatBitWriter) writeGorillaFloat(value float64) {
+	current := math.Float64bits(value)
+	if !w.started {
+		w.started = true
+		w.leading = ^uint64(0)
+		w.previous = current
+		w.writeBits(current, 64)
+		return
+	}
+	delta := current ^ w.previous
+	if delta == 0 {
+		w.writeBit(false)
+		w.previous = current
+		return
+	}
+	w.writeBit(true)
+	leading := uint64(bits.LeadingZeros64(delta))
+	trailing := uint64(bits.TrailingZeros64(delta))
+	leading &= 0x1f
+	if leading >= 32 {
+		leading = 31
+	}
+	if w.leading != ^uint64(0) && leading >= w.leading && trailing >= w.trailing {
+		w.writeBit(false)
+		w.writeBits(delta>>w.trailing, uint(64-w.leading-w.trailing))
+		w.previous = current
+		return
+	}
+	w.writeBit(true)
+	w.leading = leading
+	w.trailing = trailing
+	w.writeBits(leading, 5)
+	significant := 64 - leading - trailing
+	if significant == 64 {
+		w.writeBits(0, 6)
+	} else {
+		w.writeBits(significant, 6)
+	}
+	w.writeBits(delta>>trailing, uint(significant))
+	w.previous = current
+}
+
+func (w *tsmFloatBitWriter) writeBit(value bool) {
+	if w.bitCount&7 == 0 {
+		w.bytes = append(w.bytes, 0)
+	}
+	if value {
+		w.bytes[w.bitCount/8] |= 128 >> uint(w.bitCount&7)
+	}
+	w.bitCount++
+}
+
+func (w *tsmFloatBitWriter) writeBits(value uint64, n uint) {
+	for i := int(n) - 1; i >= 0; i-- {
+		w.writeBit(value&(uint64(1)<<uint(i)) != 0)
+	}
 }
 
 func testTSMBooleanValueBlock(values []bool) []byte {

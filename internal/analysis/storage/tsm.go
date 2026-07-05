@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -26,6 +27,9 @@ const (
 	tsmBlockBoolean  byte = 2
 	tsmBlockString   byte = 3
 	tsmBlockUnsigned byte = 4
+
+	tsmFloatCompressedGorilla byte   = 1
+	tsmFloatNaNSentinel       uint64 = 0x7FF8000000000001
 )
 
 type tsmIndexEntry struct {
@@ -469,6 +473,19 @@ func decodeTSMSimple8bValues(b []byte) ([]uint64, error) {
 
 func decodeTSMBlockPoints(blockType byte, timestamps []int64, valueBlock []byte) ([]tsmPoint, error) {
 	switch blockType {
+	case tsmBlockFloat:
+		values, err := decodeTSMFloatValues(valueBlock)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != len(timestamps) {
+			return nil, fmt.Errorf("float value count %d does not match timestamp count %d", len(values), len(timestamps))
+		}
+		points := make([]tsmPoint, len(values))
+		for i, value := range values {
+			points[i] = tsmPoint{Timestamp: timestamps[i], Type: blockType, Value: strconv.FormatFloat(value, 'g', -1, 64)}
+		}
+		return points, nil
 	case tsmBlockInteger:
 		values, err := decodeTSMIntegerValues(valueBlock)
 		if err != nil {
@@ -553,6 +570,97 @@ func decodeTSMUnsignedValues(b []byte) ([]uint64, error) {
 		unsigned[i] = uint64(value)
 	}
 	return unsigned, nil
+}
+
+func decodeTSMFloatValues(b []byte) ([]float64, error) {
+	if len(b) == 0 {
+		return []float64{}, nil
+	}
+	if encoding := b[0] >> 4; encoding != tsmFloatCompressedGorilla {
+		return nil, fmt.Errorf("unknown float encoding %d", encoding)
+	}
+	if len(b) < 9 {
+		return []float64{}, nil
+	}
+	reader := tsmBitReader{data: b[1:]}
+	current, err := reader.readBits(64)
+	if err != nil {
+		return nil, err
+	}
+	if current == tsmFloatNaNSentinel {
+		return []float64{}, nil
+	}
+	values := []float64{math.Float64frombits(current)}
+	var leading, trailing uint64
+	for {
+		changed, err := reader.readBit()
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			reuse, err := reader.readBit()
+			if err != nil {
+				return nil, err
+			}
+			if reuse {
+				leading, err = reader.readBits(5)
+				if err != nil {
+					return nil, err
+				}
+				meaningful, err := reader.readBits(6)
+				if err != nil {
+					return nil, err
+				}
+				if meaningful == 0 {
+					meaningful = 64
+				}
+				trailing = 64 - leading - meaningful
+			}
+			meaningful := uint(64 - leading - trailing)
+			delta, err := reader.readBits(meaningful)
+			if err != nil {
+				return nil, err
+			}
+			current ^= delta << trailing
+			if current == tsmFloatNaNSentinel {
+				break
+			}
+		}
+		values = append(values, math.Float64frombits(current))
+	}
+	return values, nil
+}
+
+type tsmBitReader struct {
+	data []byte
+	bit  int
+}
+
+func (r *tsmBitReader) readBit() (bool, error) {
+	if r.bit >= len(r.data)*8 {
+		return false, io.EOF
+	}
+	value := r.data[r.bit/8]&(128>>uint(r.bit&7)) != 0
+	r.bit++
+	return value, nil
+}
+
+func (r *tsmBitReader) readBits(n uint) (uint64, error) {
+	if n == 0 || n > 64 {
+		return 0, fmt.Errorf("invalid bit count %d", n)
+	}
+	var value uint64
+	for i := uint(0); i < n; i++ {
+		bit, err := r.readBit()
+		if err != nil {
+			return 0, err
+		}
+		value <<= 1
+		if bit {
+			value |= 1
+		}
+	}
+	return value, nil
 }
 
 func decodeTSMBooleanValues(b []byte) ([]bool, error) {
