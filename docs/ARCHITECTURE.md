@@ -533,7 +533,7 @@ InfluxDB WAL analyzer 覆盖 TSM1 WAL segment 的本地 entry 解码：entry typ
 
 openGemini TSSP analyzer 先覆盖 attached 文件 trailer/meta-index/chunk metadata，以及 detached `segment.idx` meta-index sidecar。detached sidecar 只做本地结构解析、CRC 校验和 query-range candidate filtering；完整 detached data/chunk reader 执行路径仍属于后续 Phase 5。
 
-openGemini mergeset analyzer 先覆盖 part directory metadata 和 metaindex row summary：解析 `items_blocks_suffix` part 名、`metadata.json`、`metaindex.bin` zstd row、以及 `index.bin`/`items.bin`/`lens.bin` component size。index block 深度解码仍属于后续 Phase 5。
+openGemini mergeset analyzer 先覆盖 part directory metadata、metaindex row summary 和 index block-header summary：解析 `items_blocks_suffix` part 名、`metadata.json`、`metaindex.bin` zstd row、`index.bin` zstd block header、以及 `items.bin`/`lens.bin` component size 和 header range validation。item payload 解码和完整 block reconstruction 仍属于后续 Phase 5。
 
 ## 12. Plugin System
 
