@@ -207,7 +207,7 @@ REPL 必备能力：
 | 多行 query | phase 1 | 支持复杂 InfluxQL/Flux |
 | history | phase 1 | 本地持久化 |
 | autocomplete | phase 1 | db/rp/measurement/field/tag |
-| meta command | MVP | `:use`、`:db`、`:dbs`、`:schema` |
+| meta command | MVP | `:use`、`:db`、`:dbs`、`:rps`、`:schema` |
 
 ### 8.3 TUI 模式
 
@@ -261,7 +261,7 @@ db: metrics | rp: autogen | mode: influxql | latency: 12ms | ok
 | 能力 | 说明 |
 | --- | --- |
 | InfluxQL 输入 | MVP 必须支持 |
-| meta command | `:use`、`:db`、`:dbs`、`:measurements`、`:msts`、`:schema` |
+| meta command | `:use`、`:db`、`:dbs`、`:rps`、`:measurements`、`:msts`、`:schema` |
 | history search | Phase 1 |
 | autocomplete | Phase 1 |
 | multiline | Phase 1 |
@@ -316,7 +316,7 @@ Ctrl+Enter run | Ctrl+R history | Tab complete | 1 table | 2 spark | 3 chart | q
 | --- | --- | --- |
 | query mode | 单次查询和脚本输出 | `influx-cli query` |
 | repl mode | 连续查询和上下文切换 | `influx-cli repl` |
-| explorer mode | 类 k9s 的资源浏览 | `:dbs`、`:schema`、`:measurements`、`:msts` |
+| explorer mode | 类 k9s 的资源浏览 | `:dbs`、`:rps`、`:schema`、`:measurements`、`:msts` |
 | chart mode | 自动或手动可视化结果 | `1/2/3` |
 | watch mode | 实时刷新趋势 | `influx-cli watch` 或 `W` |
 | profiler mode | query explain 和诊断 | `:explain` |

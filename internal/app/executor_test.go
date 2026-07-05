@@ -54,6 +54,43 @@ func TestExecutorDBSMetaCommandUsesAdapter(t *testing.T) {
 	}
 }
 
+func TestExecutorRPSMetaCommandShowsSingleDatabasePolicies(t *testing.T) {
+	fake := newFakeAdapter()
+	executor := NewExecutor(NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}), fake)
+
+	res, err := executor.Execute(context.Background(), ":rps metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.showDatabasesCalls != 0 {
+		t.Fatalf("showDatabasesCalls = %d, want 0", fake.showDatabasesCalls)
+	}
+	if got, want := res.Table.RowCount(), 2; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	assertRow(t, res.Table.Rows[0], "metrics", "autogen", true)
+	assertRow(t, res.Table.Rows[1], "metrics", "short", false)
+}
+
+func TestExecutorRPSMetaCommandShowsAllDatabasePolicies(t *testing.T) {
+	fake := newFakeAdapter()
+	executor := NewExecutor(NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}), fake)
+
+	res, err := executor.Execute(context.Background(), ":rps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.showDatabasesCalls != 1 {
+		t.Fatalf("showDatabasesCalls = %d, want 1", fake.showDatabasesCalls)
+	}
+	if got, want := res.Table.RowCount(), 3; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	assertRow(t, res.Table.Rows[0], "metrics", "autogen", true)
+	assertRow(t, res.Table.Rows[1], "metrics", "short", false)
+	assertRow(t, res.Table.Rows[2], "telegraf", "raw", true)
+}
+
 func TestExecutorQueryInjectsSessionContext(t *testing.T) {
 	fake := &fakeAdapter{}
 	session := NewSession(config.Effective{
@@ -113,8 +150,9 @@ func newFakeAdapter() *fakeAdapter {
 }
 
 type fakeAdapter struct {
-	lastQuery         query.Query
-	retentionPolicies map[string][]adapter.RetentionPolicy
+	lastQuery          query.Query
+	retentionPolicies  map[string][]adapter.RetentionPolicy
+	showDatabasesCalls int
 }
 
 func (f *fakeAdapter) Name() string {
@@ -133,6 +171,7 @@ func (f *fakeAdapter) Query(ctx context.Context, q query.Query) (result.Result, 
 }
 
 func (f *fakeAdapter) ShowDatabases(ctx context.Context) ([]string, error) {
+	f.showDatabasesCalls++
 	return []string{"metrics", "telegraf"}, nil
 }
 
@@ -155,4 +194,14 @@ func (f *fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema
 			},
 		},
 	}, nil
+}
+
+func assertRow(t *testing.T, row []any, database, retentionPolicy string, isDefault bool) {
+	t.Helper()
+	if len(row) != 3 {
+		t.Fatalf("row length = %d, want 3: %#v", len(row), row)
+	}
+	if row[0] != database || row[1] != retentionPolicy || row[2] != isDefault {
+		t.Fatalf("row = %#v, want %#v", row, []any{database, retentionPolicy, isDefault})
+	}
 }

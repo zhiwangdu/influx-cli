@@ -62,6 +62,7 @@ REPL meta command：
 :db <db>
 :rp <rp>
 :dbs
+:rps [db]
 :measurements
 :msts
 :help
