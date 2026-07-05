@@ -224,6 +224,7 @@ type fakeAdapter struct {
 	showDatabasesCalls    int
 	showMeasurementsCalls int
 	getSchemaCalls        int
+	schemaScopes          []schema.Scope
 }
 
 func (f *fakeAdapter) Name() string {
@@ -260,6 +261,30 @@ func (f *fakeAdapter) ShowMeasurements(ctx context.Context, db, rp string) ([]st
 
 func (f *fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
 	f.getSchemaCalls++
+	f.schemaScopes = append(f.schemaScopes, scope)
+	if scope.Measurement == "" {
+		return schema.Snapshot{
+			Database:        scope.Database,
+			RetentionPolicy: scope.RetentionPolicy,
+			Measurements: []schema.Measurement{
+				{
+					Name:   "cpu",
+					Fields: []schema.Field{{Name: "usage_idle", Type: "float"}, {Name: "value", Type: "float"}},
+					Tags:   []schema.Tag{{Name: "host"}, {Name: "region"}},
+				},
+				{
+					Name:   "disk",
+					Fields: []schema.Field{{Name: "used_bytes", Type: "integer"}},
+					Tags:   []schema.Tag{{Name: "path"}},
+				},
+				{
+					Name:   "mem",
+					Fields: []schema.Field{{Name: "used_percent", Type: "float"}},
+					Tags:   []schema.Tag{{Name: "host"}},
+				},
+			},
+		}, nil
+	}
 	return schema.Snapshot{
 		Database:        scope.Database,
 		RetentionPolicy: scope.RetentionPolicy,

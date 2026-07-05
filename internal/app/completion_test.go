@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zhiwangdu/influx-cli/internal/config"
+	"github.com/zhiwangdu/influx-cli/internal/schema"
 )
 
 func TestCompleteMetaDatabaseAndRetentionPolicy(t *testing.T) {
@@ -122,6 +124,330 @@ func TestCompleteMeasurementFieldAndTagCandidates(t *testing.T) {
 	}
 }
 
+func TestCompleteSelectWithoutFromUsesDatabaseSchema(t *testing.T) {
+	fake := newFakeAdapter()
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), fake)
+
+	field, err := executor.Complete(context.Background(), "SELECT us", len("SELECT us"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if field.Prefix != "us" || !reflect.DeepEqual(field.Candidates, []string{"usage_idle", "used_bytes", "used_percent"}) {
+		t.Fatalf("db field completion = %#v", field)
+	}
+
+	tag, err := executor.Complete(context.Background(), "SELECT ho", len("SELECT ho"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.Prefix != "ho" || !reflect.DeepEqual(tag.Candidates, []string{"host"}) {
+		t.Fatalf("db tag completion = %#v", tag)
+	}
+
+	if fake.getSchemaCalls != 1 {
+		t.Fatalf("getSchemaCalls = %d, want db schema cache reused", fake.getSchemaCalls)
+	}
+	if got := fake.schemaScopes[0].Measurement; got != "" {
+		t.Fatalf("schema scope measurement = %q, want db-level schema", got)
+	}
+}
+
+func TestCompleteSelectFunctionArgumentsUseFieldsOnly(t *testing.T) {
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), newFakeAdapter())
+
+	field, err := executor.Complete(context.Background(), "SELECT mean(us", len("SELECT mean(us"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if field.Prefix != "us" || !reflect.DeepEqual(field.Candidates, []string{"usage_idle", "used_bytes", "used_percent"}) {
+		t.Fatalf("function field completion = %#v", field)
+	}
+
+	tag, err := executor.Complete(context.Background(), "SELECT mean(ho", len("SELECT mean(ho"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.Prefix != "ho" || len(tag.Candidates) != 0 {
+		t.Fatalf("function tag completion = %#v, want no tag candidates", tag)
+	}
+
+	topLevel, err := executor.Complete(context.Background(), "SELECT mean(value), ho", len("SELECT mean(value), ho"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if topLevel.Prefix != "ho" || !reflect.DeepEqual(topLevel.Candidates, []string{"host"}) {
+		t.Fatalf("top-level select completion = %#v", topLevel)
+	}
+
+	parenthesized, err := executor.Complete(context.Background(), "SELECT (ho", len("SELECT (ho"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parenthesized.Prefix != "ho" || !reflect.DeepEqual(parenthesized.Candidates, []string{"host"}) {
+		t.Fatalf("parenthesized select completion = %#v", parenthesized)
+	}
+
+	nested, err := executor.Complete(context.Background(), "SELECT max(mean(us", len("SELECT max(mean(us"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nested.Prefix != "us" || !reflect.DeepEqual(nested.Candidates, []string{"usage_idle", "used_bytes", "used_percent"}) {
+		t.Fatalf("nested function completion = %#v", nested)
+	}
+}
+
+func TestCompleteSelectWithFromUsesMeasurementSchema(t *testing.T) {
+	fake := newFakeAdapter()
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), fake)
+
+	field, err := executor.Complete(context.Background(), "SELECT us FROM cpu", len("SELECT us"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if field.Prefix != "us" || !reflect.DeepEqual(field.Candidates, []string{"usage_idle"}) {
+		t.Fatalf("measurement field completion = %#v", field)
+	}
+	if fake.getSchemaCalls != 1 {
+		t.Fatalf("getSchemaCalls = %d, want single measurement lookup", fake.getSchemaCalls)
+	}
+	if got := fake.schemaScopes[0].Measurement; got != "cpu" {
+		t.Fatalf("schema scope measurement = %q, want cpu", got)
+	}
+}
+
+func TestCompleteSelectWithQuotedFromUsesMeasurementSchema(t *testing.T) {
+	fake := newFakeAdapter()
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), fake)
+
+	tag, err := executor.Complete(context.Background(), `SELECT value FROM "cpu" WHERE ho`, len(`SELECT value FROM "cpu" WHERE ho`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.Prefix != "ho" || !reflect.DeepEqual(tag.Candidates, []string{"host"}) {
+		t.Fatalf("quoted measurement tag completion = %#v", tag)
+	}
+	if fake.getSchemaCalls != 1 {
+		t.Fatalf("getSchemaCalls = %d, want single measurement lookup", fake.getSchemaCalls)
+	}
+	if got := fake.schemaScopes[0].Measurement; got != "cpu" {
+		t.Fatalf("schema scope measurement = %q, want cpu", got)
+	}
+}
+
+func TestCompleteSelectWithQualifiedQuotedFromUsesLastMeasurementSegment(t *testing.T) {
+	fake := newFakeAdapter()
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), fake)
+
+	line := `SELECT value FROM "metrics"."autogen"."cpu" WHERE re`
+	tag, err := executor.Complete(context.Background(), line, len(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.Prefix != "re" || !reflect.DeepEqual(tag.Candidates, []string{"region"}) {
+		t.Fatalf("qualified quoted measurement completion = %#v", tag)
+	}
+	if fake.getSchemaCalls != 1 {
+		t.Fatalf("getSchemaCalls = %d, want single measurement lookup", fake.getSchemaCalls)
+	}
+	if got := fake.schemaScopes[0].Measurement; got != "cpu" {
+		t.Fatalf("schema scope measurement = %q, want cpu", got)
+	}
+}
+
+func TestCompleteWhereAndGroupByUseTagCandidates(t *testing.T) {
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), newFakeAdapter())
+
+	for _, tc := range []struct {
+		line string
+		want []string
+	}{
+		{line: "SELECT value FROM cpu WHERE ho", want: []string{"host"}},
+		{line: "SELECT value FROM cpu WHERE host = 'a' AND re", want: []string{"region"}},
+		{line: "SELECT value FROM cpu WHERE host = 'a' OR re", want: []string{"region"}},
+		{line: "SELECT value FROM cpu GROUP BY re", want: []string{"region"}},
+		{line: "SELECT value WHERE pa", want: []string{"path"}},
+	} {
+		completion, err := executor.Complete(context.Background(), tc.line, len(tc.line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(completion.Candidates, tc.want) {
+			t.Fatalf("%s completion = %#v, want %#v", tc.line, completion, tc.want)
+		}
+	}
+}
+
+func TestCompleteSelectCanStillCompleteClauseKeywords(t *testing.T) {
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), newFakeAdapter())
+
+	completion, err := executor.Complete(context.Background(), "SELECT mean(value) FRO", len("SELECT mean(value) FRO"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completion.Prefix != "FRO" || !reflect.DeepEqual(completion.Candidates, []string{"FROM"}) {
+		t.Fatalf("select keyword completion = %#v", completion)
+	}
+}
+
+func TestCompleteSelectWithoutDatabaseFallsBackToKeywords(t *testing.T) {
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:   "fake",
+		Precision: "rfc3339",
+	}), newFakeAdapter())
+
+	completion, err := executor.Complete(context.Background(), "SELECT FRO", len("SELECT FRO"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completion.Prefix != "FRO" || !reflect.DeepEqual(completion.Candidates, []string{"FROM"}) {
+		t.Fatalf("no-db completion = %#v, want FROM keyword", completion)
+	}
+
+	where, err := executor.Complete(context.Background(), "SELECT value WHERE ho", len("SELECT value WHERE ho"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if where.Prefix != "ho" || len(where.Candidates) != 0 {
+		t.Fatalf("no-db where completion = %#v, want no candidates", where)
+	}
+}
+
+func TestCompleteSchemaCacheRefreshClearsSchemaEntries(t *testing.T) {
+	fake := newFakeAdapter()
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), fake)
+
+	if _, err := executor.Complete(context.Background(), "SELECT us", len("SELECT us")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.Complete(context.Background(), "SELECT us", len("SELECT us")); err != nil {
+		t.Fatal(err)
+	}
+	if fake.getSchemaCalls != 1 {
+		t.Fatalf("getSchemaCalls = %d, want cached db schema", fake.getSchemaCalls)
+	}
+
+	if _, err := executor.Execute(context.Background(), ":refresh schema"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.Complete(context.Background(), "SELECT us", len("SELECT us")); err != nil {
+		t.Fatal(err)
+	}
+	if fake.getSchemaCalls != 2 {
+		t.Fatalf("getSchemaCalls = %d, want schema cache refresh to force lookup", fake.getSchemaCalls)
+	}
+}
+
+func TestCompleteSchemaCacheSeparatesDatabaseAndMeasurementScopes(t *testing.T) {
+	fake := newFakeAdapter()
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), fake)
+
+	dbCompletion, err := executor.Complete(context.Background(), "SELECT us", len("SELECT us"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dbCompletion.Prefix != "us" || !reflect.DeepEqual(dbCompletion.Candidates, []string{"usage_idle", "used_bytes", "used_percent"}) {
+		t.Fatalf("db completion = %#v", dbCompletion)
+	}
+
+	measurementCompletion, err := executor.Complete(context.Background(), "SELECT us FROM cpu", len("SELECT us"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if measurementCompletion.Prefix != "us" || !reflect.DeepEqual(measurementCompletion.Candidates, []string{"usage_idle"}) {
+		t.Fatalf("measurement completion = %#v", measurementCompletion)
+	}
+
+	if fake.getSchemaCalls != 2 {
+		t.Fatalf("getSchemaCalls = %d, want db and measurement schema lookups", fake.getSchemaCalls)
+	}
+	if fake.schemaScopes[0].Measurement != "" || fake.schemaScopes[1].Measurement != "cpu" {
+		t.Fatalf("schema scopes = %#v, want db-level then cpu", fake.schemaScopes)
+	}
+}
+
+func TestCompleteSchemaErrorIsReturned(t *testing.T) {
+	adapter := schemaErrorAdapter{fakeAdapter: newFakeAdapter(), err: errors.New("schema unavailable")}
+	executor := NewExecutor(NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	}), adapter)
+
+	completion, err := executor.Complete(context.Background(), "SELECT us", len("SELECT us"))
+	if err == nil {
+		t.Fatal("expected schema error")
+	}
+	if completion.Prefix != "us" || len(completion.Candidates) != 0 {
+		t.Fatalf("completion = %#v, want prefix-only empty completion", completion)
+	}
+}
+
+func TestCompleteSchemaCancellationReturnsEmptyCompletion(t *testing.T) {
+	for _, schemaErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		adapter := schemaErrorAdapter{fakeAdapter: newFakeAdapter(), err: schemaErr}
+		executor := NewExecutor(NewSession(config.Effective{
+			Adapter:         "fake",
+			Database:        "metrics",
+			RetentionPolicy: "autogen",
+			Precision:       "rfc3339",
+		}), adapter)
+
+		completion, err := executor.Complete(context.Background(), "SELECT us", len("SELECT us"))
+		if err != nil {
+			t.Fatalf("err = %v, want nil for %v", err, schemaErr)
+		}
+		if completion.Prefix != "us" || len(completion.Candidates) != 0 {
+			t.Fatalf("completion = %#v, want prefix-only empty completion", completion)
+		}
+	}
+}
+
 func TestRefreshSchemaClearsCompletionCache(t *testing.T) {
 	fake := newFakeAdapter()
 	executor := NewExecutor(NewSession(config.Effective{
@@ -146,6 +472,15 @@ func TestRefreshSchemaClearsCompletionCache(t *testing.T) {
 	if fake.showMeasurementsCalls != 2 {
 		t.Fatalf("showMeasurementsCalls = %d, want cache refresh to force second call", fake.showMeasurementsCalls)
 	}
+}
+
+type schemaErrorAdapter struct {
+	*fakeAdapter
+	err error
+}
+
+func (a schemaErrorAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
+	return schema.Snapshot{}, a.err
 }
 
 func TestCompletionCacheExpiresMeasurementsByTTL(t *testing.T) {

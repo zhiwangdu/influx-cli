@@ -288,7 +288,7 @@ REPL history 属于 application core 的本地状态，默认写入 `~/.local/st
 
 REPL multiline 属于 UI 输入组装层：普通单行 query 保持 Enter 即执行；显式续行 `\`、未闭合引号/括号、Flux pipeline continuation 或进入多行后的终止分号会控制 pending buffer。pending query 中的 meta command 不会执行，可用 `:cancel` 或 `:clear` 清空。
 
-Autocomplete 由 application core 提供候选，REPL line editor 只负责调用。候选来源为 `ShowDatabases`、`ShowRetentionPolicies`、`ShowMeasurements` 和单 measurement 的 `GetSchema`，schema/measurement cache 默认 TTL 60s，并可通过 `:refresh schema` 手动清空。
+Autocomplete 由 application core 提供候选，REPL line editor 只负责调用。候选来源为 `ShowDatabases`、`ShowRetentionPolicies`、`ShowMeasurements` 和 `GetSchema`。当 query 已能识别 `FROM <measurement>` 时补全使用单 measurement schema；当用户从左到右输入 `SELECT ...` 尚未写出 `FROM` 时，补全使用当前 db/rp 的 DB 级 schema。schema/measurement cache 默认 TTL 60s，并可通过 `:refresh schema` 手动清空。
 
 ### 6.3 TUI
 

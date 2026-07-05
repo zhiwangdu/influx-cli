@@ -32,21 +32,9 @@ type seriesResponse struct {
 }
 
 func NormalizeResponse(body []byte, precision, source string) (result.Result, error) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-
-	var response queryResponse
-	if err := decoder.Decode(&response); err != nil {
-		return result.Result{}, fmt.Errorf("decode InfluxDB response: %w", err)
-	}
-	if response.Error != "" {
-		return result.Result{}, fmt.Errorf("influxdb query error: %s", response.Error)
-	}
-
-	for _, statement := range response.Results {
-		if statement.Error != "" {
-			return result.Result{}, fmt.Errorf("influxdb statement %d error: %s", statement.StatementID, statement.Error)
-		}
+	response, err := decodeQueryResponse(body)
+	if err != nil {
+		return result.Result{}, err
 	}
 
 	table := buildTable(response.Results)
@@ -73,6 +61,26 @@ func NormalizeResponse(body []byte, precision, source string) (result.Result, er
 		Series:   series,
 		Metadata: metadata,
 	}, nil
+}
+
+func decodeQueryResponse(body []byte) (queryResponse, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+
+	var response queryResponse
+	if err := decoder.Decode(&response); err != nil {
+		return queryResponse{}, fmt.Errorf("decode InfluxDB response: %w", err)
+	}
+	if response.Error != "" {
+		return queryResponse{}, fmt.Errorf("influxdb query error: %s", response.Error)
+	}
+
+	for _, statement := range response.Results {
+		if statement.Error != "" {
+			return queryResponse{}, fmt.Errorf("influxdb statement %d error: %s", statement.StatementID, statement.Error)
+		}
+	}
+	return response, nil
 }
 
 func buildTable(statements []statementResponse) *result.Table {

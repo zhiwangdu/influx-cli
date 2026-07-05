@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/zhiwangdu/influx-cli/internal/schema"
 )
@@ -14,6 +16,14 @@ type Completion struct {
 	Prefix     string
 	Candidates []string
 }
+
+type schemaCandidateKind int
+
+const (
+	schemaFields schemaCandidateKind = iota
+	schemaTags
+	schemaFieldsAndTags
+)
 
 func (e *Executor) Complete(ctx context.Context, line string, pos int) (Completion, error) {
 	if pos < 0 {
@@ -106,8 +116,7 @@ func (e *Executor) completeMeta(ctx context.Context, before, token string) (Comp
 }
 
 func (e *Executor) completeQuery(ctx context.Context, line, before, token string) (Completion, error) {
-	lowerBefore := strings.ToLower(before)
-	prev, prevPrev := previousWords(before, token)
+	prev := previousWord(before, token)
 	switch {
 	case prev == "from":
 		measurements, err := e.measurements(ctx, e.Session.Database, e.Session.RP)
@@ -115,49 +124,58 @@ func (e *Executor) completeQuery(ctx context.Context, line, before, token string
 			return Completion{Prefix: token}, err
 		}
 		return completionFor(token, measurements), nil
-	case prev == "where" || (prev == "by" && prevPrev == "group"):
-		return e.completeTags(ctx, line, token)
-	case strings.Contains(lowerBefore, "select") && !strings.Contains(lowerBefore, " from "):
-		return e.completeFields(ctx, line, token)
+	}
+
+	clause := queryClause(before, token)
+	switch clause {
+	case "where", "group":
+		return e.completeSchemaCandidates(ctx, line, token, schemaTags, nil)
+	case "select":
+		if insideFunctionArgs(before) {
+			return e.completeSchemaCandidates(ctx, line, token, schemaFields, nil)
+		}
+		return e.completeSchemaCandidates(ctx, line, token, schemaFieldsAndTags, selectClauseKeywords())
 	default:
 		return completionFor(token, queryKeywords()), nil
 	}
 }
 
-func (e *Executor) completeFields(ctx context.Context, line, token string) (Completion, error) {
+func (e *Executor) completeSchemaCandidates(ctx context.Context, line, token string, kind schemaCandidateKind, extra []string) (Completion, error) {
 	measurement := measurementFromQuery(line)
-	if measurement == "" {
-		return completionFor(token, queryKeywords()), nil
+	if measurement == "" && strings.TrimSpace(e.Session.Database) == "" {
+		if kind == schemaTags {
+			return Completion{Prefix: token}, nil
+		}
+		candidates := append(queryKeywords(), extra...)
+		return completionFor(token, candidates), nil
 	}
 	snapshot, err := e.measurementSchema(ctx, e.Session.Database, e.Session.RP, measurement)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Completion{Prefix: token}, nil
+		}
 		return Completion{Prefix: token}, err
 	}
-	var candidates []string
-	for _, measurement := range snapshot.Measurements {
-		for _, field := range measurement.Fields {
-			candidates = append(candidates, field.Name)
-		}
-	}
+	candidates := schemaCandidates(snapshot, kind)
+	candidates = append(candidates, extra...)
 	return completionFor(token, candidates), nil
 }
 
-func (e *Executor) completeTags(ctx context.Context, line, token string) (Completion, error) {
-	measurement := measurementFromQuery(line)
-	if measurement == "" {
-		return Completion{Prefix: token}, nil
-	}
-	snapshot, err := e.measurementSchema(ctx, e.Session.Database, e.Session.RP, measurement)
-	if err != nil {
-		return Completion{Prefix: token}, err
-	}
+func schemaCandidates(snapshot schema.Snapshot, kind schemaCandidateKind) []string {
 	var candidates []string
 	for _, measurement := range snapshot.Measurements {
-		for _, tag := range measurement.Tags {
-			candidates = append(candidates, tag.Name)
+		if kind == schemaFields || kind == schemaFieldsAndTags {
+			for _, field := range measurement.Fields {
+				candidates = append(candidates, field.Name)
+			}
+		}
+		if kind == schemaTags || kind == schemaFieldsAndTags {
+			for _, tag := range measurement.Tags {
+				candidates = append(candidates, tag.Name)
+			}
 		}
 	}
-	return completionFor(token, candidates), nil
+	return candidates
 }
 
 func (e *Executor) measurements(ctx context.Context, db, rp string) ([]string, error) {
@@ -321,6 +339,10 @@ func queryKeywords() []string {
 	}
 }
 
+func selectClauseKeywords() []string {
+	return []string{"FROM", "WHERE", "GROUP BY", "ORDER BY", "LIMIT"}
+}
+
 func currentToken(before string) string {
 	runes := []rune(before)
 	start := len(runes)
@@ -330,28 +352,217 @@ func currentToken(before string) string {
 	return string(runes[start:])
 }
 
-func previousWords(before, token string) (string, string) {
+func previousWord(before, token string) string {
 	trimmed := strings.TrimSpace(strings.TrimSuffix(before, token))
 	words := strings.FieldsFunc(trimmed, isWordDelimiter)
 	if len(words) == 0 {
-		return "", ""
+		return ""
 	}
-	prev := strings.ToLower(words[len(words)-1])
-	prevPrev := ""
-	if len(words) > 1 {
-		prevPrev = strings.ToLower(words[len(words)-2])
-	}
-	return prev, prevPrev
+	return strings.ToLower(words[len(words)-1])
 }
 
 func measurementFromQuery(line string) string {
-	words := strings.FieldsFunc(line, isWordDelimiter)
-	for i := 0; i < len(words)-1; i++ {
-		if strings.EqualFold(words[i], "from") {
-			return cleanIdentifier(words[i+1])
+	tokens := queryTokens(line)
+	for i := 0; i < len(tokens)-1; i++ {
+		if tokens[i].Depth == 0 && tokens[i+1].Depth == 0 && tokens[i].Lower == "from" {
+			return cleanIdentifier(measurementReference(tokens[i+1:]))
 		}
 	}
 	return ""
+}
+
+func measurementReference(tokens []queryToken) string {
+	var builder strings.Builder
+	for _, token := range tokens {
+		if token.Depth != 0 || isClauseToken(token) {
+			break
+		}
+		if token.Text == "." {
+			builder.WriteString(".")
+			continue
+		}
+		if builder.Len() > 0 && !strings.HasSuffix(builder.String(), ".") {
+			break
+		}
+		builder.WriteString(token.Text)
+	}
+	return builder.String()
+}
+
+func isClauseToken(token queryToken) bool {
+	if token.Quote {
+		return false
+	}
+	switch token.Lower {
+	case "where", "group", "order", "limit":
+		return true
+	default:
+		return false
+	}
+}
+
+type queryToken struct {
+	Text  string
+	Lower string
+	Depth int
+	Quote bool
+}
+
+func queryClause(before, token string) string {
+	prefix := strings.TrimSuffix(before, token)
+	tokens := queryTokens(prefix)
+	clause := ""
+	for i := 0; i < len(tokens); i++ {
+		if tokens[i].Depth != 0 || tokens[i].Quote {
+			continue
+		}
+		switch tokens[i].Lower {
+		case "select":
+			clause = "select"
+		case "from":
+			clause = "from"
+		case "where":
+			clause = "where"
+		case "group":
+			if nextTopLevelTokenIs(tokens, i+1, "by") {
+				clause = "group"
+			}
+		case "order":
+			if nextTopLevelTokenIs(tokens, i+1, "by") {
+				clause = "order"
+			}
+		case "limit":
+			clause = "limit"
+		}
+	}
+	return clause
+}
+
+func nextTopLevelTokenIs(tokens []queryToken, start int, value string) bool {
+	for i := start; i < len(tokens); i++ {
+		if tokens[i].Depth != 0 || tokens[i].Quote {
+			continue
+		}
+		return tokens[i].Lower == value
+	}
+	return false
+}
+
+func queryTokens(input string) []queryToken {
+	runes := []rune(input)
+	var tokens []queryToken
+	depth := 0
+	for i := 0; i < len(runes); {
+		r := runes[i]
+		if r == '\'' || r == '"' {
+			token, next := quotedToken(runes, i, depth)
+			if token.Text != "" {
+				tokens = append(tokens, token)
+			}
+			i = next
+			continue
+		}
+		switch r {
+		case '(':
+			depth++
+			i++
+			continue
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			i++
+			continue
+		}
+		if isWordDelimiter(r) {
+			i++
+			continue
+		}
+		start := i
+		tokenDepth := depth
+		for i < len(runes) && !isWordDelimiter(runes[i]) && runes[i] != '\'' && runes[i] != '"' {
+			i++
+		}
+		text := string(runes[start:i])
+		tokens = append(tokens, queryToken{Text: text, Lower: strings.ToLower(text), Depth: tokenDepth})
+	}
+	return tokens
+}
+
+func quotedToken(runes []rune, start, depth int) (queryToken, int) {
+	quote := runes[start]
+	var builder strings.Builder
+	escaped := false
+	i := start + 1
+	for i < len(runes) {
+		r := runes[i]
+		if escaped {
+			builder.WriteRune(r)
+			escaped = false
+			i++
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			i++
+			continue
+		}
+		if r == quote {
+			i++
+			break
+		}
+		builder.WriteRune(r)
+		i++
+	}
+	text := builder.String()
+	return queryToken{Text: text, Lower: strings.ToLower(text), Depth: depth, Quote: true}, i
+}
+
+func insideFunctionArgs(before string) bool {
+	runes := []rune(before)
+	var stack []bool
+	var quote rune
+	escaped := false
+	for i, r := range runes {
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if r == '\\' {
+				escaped = true
+			} else if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		switch r {
+		case '(':
+			stack = append(stack, hasIdentifierBefore(runes, i))
+		case ')':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	return len(stack) > 0 && stack[len(stack)-1]
+}
+
+func hasIdentifierBefore(runes []rune, pos int) bool {
+	i := pos - 1
+	if i < 0 || !isIdentifierRune(runes[i]) {
+		return false
+	}
+	for i >= 0 && isIdentifierRune(runes[i]) {
+		i--
+	}
+	return true
+}
+
+func isIdentifierRune(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 func cleanIdentifier(value string) string {

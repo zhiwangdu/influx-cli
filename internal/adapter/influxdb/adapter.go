@@ -100,6 +100,18 @@ func (a *Adapter) Ping(ctx context.Context) error {
 }
 
 func (a *Adapter) Query(ctx context.Context, q query.Query) (result.Result, error) {
+	body, precision, err := a.queryRaw(ctx, q)
+	if err != nil {
+		return result.Result{}, err
+	}
+	normalized, err := NormalizeResponse(body, precision, a.name)
+	if err != nil {
+		return result.Result{}, err
+	}
+	return normalized, nil
+}
+
+func (a *Adapter) queryRaw(ctx context.Context, q query.Query) ([]byte, string, error) {
 	form := url.Values{}
 	form.Set("q", q.Raw)
 	if q.Database != "" {
@@ -123,29 +135,33 @@ func (a *Adapter) Query(ctx context.Context, q query.Query) (result.Result, erro
 	queryURL := a.endpoint("/query")
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, queryURL.String(), strings.NewReader(form.Encode()))
 	if err != nil {
-		return result.Result{}, fmt.Errorf("build query request: %w", err)
+		return nil, "", fmt.Errorf("build query request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	a.addAuth(request)
 
 	response, err := a.client.Do(request)
 	if err != nil {
-		return result.Result{}, fmt.Errorf("query %s: %w", a.baseURL.Host, err)
+		return nil, "", fmt.Errorf("query %s: %w", a.baseURL.Host, err)
 	}
 	defer response.Body.Close()
 
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 10*1024*1024))
 	if readErr != nil {
-		return result.Result{}, fmt.Errorf("read query response: %w", readErr)
+		return nil, "", fmt.Errorf("read query response: %w", readErr)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return result.Result{}, httpStatusError(response.StatusCode, body)
+		return nil, "", httpStatusError(response.StatusCode, body)
 	}
-	normalized, err := NormalizeResponse(body, precision, a.name)
+	return body, precision, nil
+}
+
+func (a *Adapter) rawQueryResponse(ctx context.Context, q query.Query) (queryResponse, error) {
+	body, _, err := a.queryRaw(ctx, q)
 	if err != nil {
-		return result.Result{}, err
+		return queryResponse{}, err
 	}
-	return normalized, nil
+	return decodeQueryResponse(body)
 }
 
 func (a *Adapter) ShowDatabases(ctx context.Context) ([]string, error) {
@@ -181,9 +197,6 @@ func (a *Adapter) ShowMeasurements(ctx context.Context, db, rp string) ([]string
 }
 
 func (a *Adapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
-	if strings.TrimSpace(scope.Measurement) == "" {
-		return schema.Snapshot{}, fmt.Errorf("measurement is required for schema lookup")
-	}
 	database := scope.Database
 	if database == "" {
 		database = a.defaultDatabase
@@ -193,46 +206,106 @@ func (a *Adapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Sna
 		retentionPolicy = a.defaultRP
 	}
 
-	measurementExpr := quoteIdentifier(scope.Measurement)
-	fields, err := a.Query(ctx, query.New("SHOW FIELD KEYS FROM "+measurementExpr, database, retentionPolicy, a.defaultPrecision))
+	measurement := strings.TrimSpace(scope.Measurement)
+	fieldQuery := "SHOW FIELD KEYS"
+	tagQuery := "SHOW TAG KEYS"
+	if measurement != "" {
+		measurementExpr := quoteIdentifier(measurement)
+		fieldQuery += " FROM " + measurementExpr
+		tagQuery += " FROM " + measurementExpr
+	}
+
+	fields, err := a.rawQueryResponse(ctx, query.New(fieldQuery, database, retentionPolicy, a.defaultPrecision))
 	if err != nil {
 		return schema.Snapshot{}, err
 	}
-	tags, err := a.Query(ctx, query.New("SHOW TAG KEYS FROM "+measurementExpr, database, retentionPolicy, a.defaultPrecision))
+	tags, err := a.rawQueryResponse(ctx, query.New(tagQuery, database, retentionPolicy, a.defaultPrecision))
 	if err != nil {
 		return schema.Snapshot{}, err
 	}
 
-	measurement := schema.Measurement{Name: scope.Measurement}
-	for _, row := range tableRows(fields.Table) {
-		name := stringAt(row, fields.Table.Columns, "fieldKey")
-		if name == "" {
-			name = stringAt(row, fields.Table.Columns, "field_key")
-		}
-		if name == "" {
-			continue
-		}
-		measurement.Fields = append(measurement.Fields, schema.Field{
-			Name: name,
-			Type: stringAt(row, fields.Table.Columns, "fieldType"),
-		})
-	}
-	for _, row := range tableRows(tags.Table) {
-		name := stringAt(row, tags.Table.Columns, "tagKey")
-		if name == "" {
-			name = stringAt(row, tags.Table.Columns, "tag_key")
-		}
-		if name == "" {
-			continue
-		}
-		measurement.Tags = append(measurement.Tags, schema.Tag{Name: name})
-	}
-
-	return schema.Snapshot{
+	snapshot := schema.Snapshot{
 		Database:        database,
 		RetentionPolicy: retentionPolicy,
-		Measurements:    []schema.Measurement{measurement},
-	}, nil
+	}
+	index := map[string]int{}
+	appendSchemaFields(&snapshot, index, fields, measurement)
+	appendSchemaTags(&snapshot, index, tags, measurement)
+	sortSchemaSnapshot(&snapshot)
+	return snapshot, nil
+}
+
+func appendSchemaFields(snapshot *schema.Snapshot, index map[string]int, response queryResponse, fallbackMeasurement string) {
+	for _, statement := range response.Results {
+		for _, series := range statement.Series {
+			measurement := schemaMeasurementName(series.Name, fallbackMeasurement)
+			if measurement == "" {
+				continue
+			}
+			target := schemaMeasurement(snapshot, index, measurement)
+			for _, row := range series.Values {
+				name := firstNonEmptyString(stringAt(row, series.Columns, "fieldKey"), stringAt(row, series.Columns, "field_key"))
+				if name == "" {
+					continue
+				}
+				target.Fields = append(target.Fields, schema.Field{
+					Name: name,
+					Type: firstNonEmptyString(stringAt(row, series.Columns, "fieldType"), stringAt(row, series.Columns, "field_type")),
+				})
+			}
+		}
+	}
+}
+
+func appendSchemaTags(snapshot *schema.Snapshot, index map[string]int, response queryResponse, fallbackMeasurement string) {
+	for _, statement := range response.Results {
+		for _, series := range statement.Series {
+			measurement := schemaMeasurementName(series.Name, fallbackMeasurement)
+			if measurement == "" {
+				continue
+			}
+			target := schemaMeasurement(snapshot, index, measurement)
+			for _, row := range series.Values {
+				name := firstNonEmptyString(stringAt(row, series.Columns, "tagKey"), stringAt(row, series.Columns, "tag_key"))
+				if name == "" {
+					continue
+				}
+				target.Tags = append(target.Tags, schema.Tag{Name: name})
+			}
+		}
+	}
+}
+
+func schemaMeasurement(snapshot *schema.Snapshot, index map[string]int, name string) *schema.Measurement {
+	if i, ok := index[name]; ok {
+		return &snapshot.Measurements[i]
+	}
+	snapshot.Measurements = append(snapshot.Measurements, schema.Measurement{Name: name})
+	index[name] = len(snapshot.Measurements) - 1
+	return &snapshot.Measurements[len(snapshot.Measurements)-1]
+}
+
+func schemaMeasurementName(name, fallback string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = strings.TrimSpace(fallback)
+	}
+	return strings.Trim(name, ` "'`)
+}
+
+func sortSchemaSnapshot(snapshot *schema.Snapshot) {
+	sort.Slice(snapshot.Measurements, func(i, j int) bool {
+		return snapshot.Measurements[i].Name < snapshot.Measurements[j].Name
+	})
+	for i := range snapshot.Measurements {
+		measurement := &snapshot.Measurements[i]
+		sort.Slice(measurement.Fields, func(i, j int) bool {
+			return measurement.Fields[i].Name < measurement.Fields[j].Name
+		})
+		sort.Slice(measurement.Tags, func(i, j int) bool {
+			return measurement.Tags[i].Name < measurement.Tags[j].Name
+		})
+	}
 }
 
 func (a *Adapter) endpoint(path string) *url.URL {
