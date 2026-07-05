@@ -130,20 +130,22 @@ type TombstoneRangeReport struct {
 }
 
 type IndexSummary struct {
-	Type                    string                   `json:"type,omitempty"`
-	MeasurementCount        int                      `json:"measurement_count,omitempty"`
-	DeletedMeasurementCount int                      `json:"deleted_measurement_count,omitempty"`
-	SeriesRefs              int64                    `json:"series_refs,omitempty"`
-	TagKeyCount             int                      `json:"tag_key_count,omitempty"`
-	DeletedTagKeyCount      int                      `json:"deleted_tag_key_count,omitempty"`
-	TagValueCount           int                      `json:"tag_value_count,omitempty"`
-	DeletedTagValueCount    int                      `json:"deleted_tag_value_count,omitempty"`
-	SeriesIDSetBytes        int64                    `json:"series_id_set_bytes,omitempty"`
-	TombstoneSeriesSetBytes int64                    `json:"tombstone_series_set_bytes,omitempty"`
-	SeriesSketchBytes       int64                    `json:"series_sketch_bytes,omitempty"`
-	TombstoneSketchBytes    int64                    `json:"tombstone_sketch_bytes,omitempty"`
-	MeasurementSamples      []IndexMeasurementReport `json:"measurement_samples,omitempty"`
-	Query                   *IndexQuerySummary       `json:"query,omitempty"`
+	Type                            string                   `json:"type,omitempty"`
+	MeasurementCount                int                      `json:"measurement_count,omitempty"`
+	DeletedMeasurementCount         int                      `json:"deleted_measurement_count,omitempty"`
+	SeriesRefs                      int64                    `json:"series_refs,omitempty"`
+	TagKeyCount                     int                      `json:"tag_key_count,omitempty"`
+	DeletedTagKeyCount              int                      `json:"deleted_tag_key_count,omitempty"`
+	TagValueCount                   int                      `json:"tag_value_count,omitempty"`
+	DeletedTagValueCount            int                      `json:"deleted_tag_value_count,omitempty"`
+	SeriesIDSetBytes                int64                    `json:"series_id_set_bytes,omitempty"`
+	SeriesIDSetCardinality          int64                    `json:"series_id_set_cardinality,omitempty"`
+	TombstoneSeriesSetBytes         int64                    `json:"tombstone_series_set_bytes,omitempty"`
+	TombstoneSeriesIDSetCardinality int64                    `json:"tombstone_series_id_set_cardinality,omitempty"`
+	SeriesSketchBytes               int64                    `json:"series_sketch_bytes,omitempty"`
+	TombstoneSketchBytes            int64                    `json:"tombstone_sketch_bytes,omitempty"`
+	MeasurementSamples              []IndexMeasurementReport `json:"measurement_samples,omitempty"`
+	Query                           *IndexQuerySummary       `json:"query,omitempty"`
 }
 
 type IndexMeasurementReport struct {

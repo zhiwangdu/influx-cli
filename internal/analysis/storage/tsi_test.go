@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -60,14 +61,92 @@ func TestAnalyzeTSIMetadata(t *testing.T) {
 	if got, want := file.Index.DeletedTagValueCount, 1; got != want {
 		t.Fatalf("deleted tag value count = %d, want %d", got, want)
 	}
+	if got, want := file.Index.SeriesIDSetCardinality, int64(3); got != want {
+		t.Fatalf("series id set cardinality = %d, want %d", got, want)
+	}
+	if got, want := file.Index.TombstoneSeriesIDSetCardinality, int64(1); got != want {
+		t.Fatalf("tombstone series id set cardinality = %d, want %d", got, want)
+	}
 	if got, want := len(file.Index.MeasurementSamples), 2; got != want {
 		t.Fatalf("measurement samples = %d, want %d", got, want)
 	}
 	if got, want := file.Index.MeasurementSamples[0].Name, "cpu"; got != want {
 		t.Fatalf("first measurement sample = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["series_id_set_cardinality"], "3"; got != want {
+		t.Fatalf("series id set cardinality extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["tombstone_series_id_set_cardinality"], "1"; got != want {
+		t.Fatalf("tombstone series id set cardinality extra = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["measurement_block_size"], "113"; got != want {
 		t.Fatalf("measurement block size = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSINoticesCorruptSeriesIDSetCardinality(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSIWithSeriesIDSets(path, []byte{1, 2, 3}, writeTestTSIRoaringSeriesIDSet(4)); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSI,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.SeriesID.Count, int64(3); got != want {
+		t.Fatalf("series id count fallback = %d, want %d", got, want)
+	}
+	if got, want := file.Index.SeriesIDSetCardinality, int64(0); got != want {
+		t.Fatalf("series id set cardinality = %d, want %d", got, want)
+	}
+	if got, want := file.Index.TombstoneSeriesIDSetCardinality, int64(1); got != want {
+		t.Fatalf("tombstone series id set cardinality = %d, want %d", got, want)
+	}
+	if len(file.Notices) != 1 {
+		t.Fatalf("notices = %v, want one notice", file.Notices)
+	}
+	if got, want := file.Notices[0], "series id set cardinality unavailable"; len(got) < len(want) || got[:len(want)] != want {
+		t.Fatalf("notice = %q, want prefix %q", got, want)
+	}
+	if len(report.Notices) != 1 {
+		t.Fatalf("report notices = %v, want one propagated notice", report.Notices)
+	}
+}
+
+func TestTSIRoaringCardinalityRunContainer(t *testing.T) {
+	var data bytes.Buffer
+	writeTSILittleUint32(&data, uint32(tsiRoaringSerialCookie)|uint32(0)<<16)
+	data.WriteByte(0x01)
+	writeTSILittleUint16(&data, 0)
+	writeTSILittleUint16(&data, 4)
+	writeTSILittleUint16(&data, 1)
+	writeTSILittleUint16(&data, 10)
+	writeTSILittleUint16(&data, 4)
+
+	cardinality, err := tsiRoaringCardinality(data.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cardinality, uint64(5); got != want {
+		t.Fatalf("cardinality = %d, want %d", got, want)
+	}
+}
+
+func TestTSIRoaringCardinalityNoRunMultipleContainers(t *testing.T) {
+	data := writeTestTSIRoaringSeriesIDSet(1, 1<<16+2, 2<<16+3)
+
+	cardinality, err := tsiRoaringCardinality(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cardinality, uint64(3); got != want {
+		t.Fatalf("cardinality = %d, want %d", got, want)
 	}
 }
 
@@ -160,6 +239,14 @@ func TestAnalyzeTSIQueryFiltersIgnoreDeletedTagValues(t *testing.T) {
 }
 
 func writeTestTSI(path string) error {
+	return writeTestTSIWithSeriesIDSets(
+		path,
+		writeTestTSIRoaringSeriesIDSet(1, 2, 3),
+		writeTestTSIRoaringSeriesIDSet(4),
+	)
+}
+
+func writeTestTSIWithSeriesIDSets(path string, seriesIDSet, tombstoneSeriesIDSet []byte) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsiMagic)
 
@@ -190,9 +277,9 @@ func writeTestTSI(path string) error {
 	buf.Write(measurementBlock)
 
 	seriesIDSetOffset := int64(buf.Len())
-	buf.Write([]byte{1, 2, 3})
+	buf.Write(seriesIDSet)
 	tombstoneSeriesIDSetOffset := int64(buf.Len())
-	buf.Write([]byte{4})
+	buf.Write(tombstoneSeriesIDSet)
 
 	writeTestTSIIndexTrailer(&buf, tsiIndexTrailer{
 		Version: tsiIndexFileVersion,
@@ -202,11 +289,11 @@ func writeTestTSI(path string) error {
 		},
 		SeriesIDSet: tsiRange{
 			Offset: seriesIDSetOffset,
-			Size:   3,
+			Size:   int64(len(seriesIDSet)),
 		},
 		TombstoneSeriesIDSet: tsiRange{
 			Offset: tombstoneSeriesIDSetOffset,
-			Size:   1,
+			Size:   int64(len(tombstoneSeriesIDSet)),
 		},
 		SeriesSketch: tsiRange{
 			Offset: int64(buf.Len()),
@@ -219,6 +306,58 @@ func writeTestTSI(path string) error {
 	})
 
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSIRoaringSeriesIDSet(ids ...uint64) []byte {
+	type container struct {
+		key    uint16
+		values []uint16
+	}
+
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	containers := []container{}
+	for _, id := range ids {
+		key := uint16(id >> 16)
+		value := uint16(id)
+		if len(containers) == 0 || containers[len(containers)-1].key != key {
+			containers = append(containers, container{key: key})
+		}
+		last := &containers[len(containers)-1]
+		if len(last.values) == 0 || last.values[len(last.values)-1] != value {
+			last.values = append(last.values, value)
+		}
+	}
+
+	var buf bytes.Buffer
+	writeTSILittleUint32(&buf, tsiRoaringSerialCookieNoRunContainer)
+	writeTSILittleUint32(&buf, uint32(len(containers)))
+	for _, container := range containers {
+		writeTSILittleUint16(&buf, container.key)
+		writeTSILittleUint16(&buf, uint16(len(container.values)-1))
+	}
+	offset := uint32(8 + len(containers)*8)
+	for _, container := range containers {
+		writeTSILittleUint32(&buf, offset)
+		offset += uint32(len(container.values) * 2)
+	}
+	for _, container := range containers {
+		for _, value := range container.values {
+			writeTSILittleUint16(&buf, value)
+		}
+	}
+	return buf.Bytes()
+}
+
+func writeTSILittleUint32(buf *bytes.Buffer, value uint32) {
+	var b [4]byte
+	binary.LittleEndian.PutUint32(b[:], value)
+	buf.Write(b[:])
+}
+
+func writeTSILittleUint16(buf *bytes.Buffer, value uint16) {
+	var b [2]byte
+	binary.LittleEndian.PutUint16(b[:], value)
+	buf.Write(b[:])
 }
 
 type testTSIMeasurement struct {

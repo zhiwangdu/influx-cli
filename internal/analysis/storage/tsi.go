@@ -24,6 +24,12 @@ const (
 	tsiTagKeyTombstoneFlag        = 0x01
 	tsiTagValueTombstoneFlag      = 0x01
 	tsiTagValueSeriesIDSetFlag    = 0x02
+
+	tsiRoaringSerialCookieNoRunContainer = 12346
+	tsiRoaringSerialCookie               = 12347
+	tsiRoaringNoOffsetThreshold          = 4
+	tsiRoaringArrayContainerMaxSize      = 4096
+	tsiRoaringBitmapContainerBytes       = 1 << 13
 )
 
 type tsiRange struct {
@@ -127,6 +133,40 @@ func analyzeTSI(path string, info os.FileInfo, options Options) (FileReport, err
 	index.SeriesSketchBytes = trailer.SeriesSketch.Size
 	index.TombstoneSketchBytes = trailer.TombstoneSeriesSketch.Size
 
+	notices := []string{}
+	seriesIDCount := index.SeriesRefs
+	seriesIDSetCardinalityOK := false
+	if cardinality, err := tsiSeriesIDSetCardinality(data, trailer.SeriesIDSet, "series id set"); err != nil {
+		notices = append(notices, fmt.Sprintf("series id set cardinality unavailable: %v", err))
+	} else {
+		index.SeriesIDSetCardinality = int64(cardinality)
+		seriesIDCount = int64(cardinality)
+		seriesIDSetCardinalityOK = true
+	}
+	tombstoneSeriesIDSetCardinalityOK := false
+	if cardinality, err := tsiSeriesIDSetCardinality(data, trailer.TombstoneSeriesIDSet, "tombstone series id set"); err != nil {
+		notices = append(notices, fmt.Sprintf("tombstone series id set cardinality unavailable: %v", err))
+	} else {
+		index.TombstoneSeriesIDSetCardinality = int64(cardinality)
+		tombstoneSeriesIDSetCardinalityOK = true
+	}
+
+	extra := map[string]string{
+		"version":                      fmt.Sprint(trailer.Version),
+		"measurement_block_offset":     fmt.Sprint(trailer.MeasurementBlock.Offset),
+		"measurement_block_size":       fmt.Sprint(trailer.MeasurementBlock.Size),
+		"series_id_set_size":           fmt.Sprint(trailer.SeriesIDSet.Size),
+		"tombstone_series_id_set_size": fmt.Sprint(trailer.TombstoneSeriesIDSet.Size),
+		"series_sketch_size":           fmt.Sprint(trailer.SeriesSketch.Size),
+		"tombstone_series_sketch_size": fmt.Sprint(trailer.TombstoneSeriesSketch.Size),
+	}
+	if seriesIDSetCardinalityOK {
+		extra["series_id_set_cardinality"] = fmt.Sprint(index.SeriesIDSetCardinality)
+	}
+	if tombstoneSeriesIDSetCardinalityOK {
+		extra["tombstone_series_id_set_cardinality"] = fmt.Sprint(index.TombstoneSeriesIDSetCardinality)
+	}
+
 	report := FileReport{
 		Path:       path,
 		Format:     FormatTSI,
@@ -141,18 +181,11 @@ func analyzeTSI(path string, info os.FileInfo, options Options) (FileReport, err
 			"tag-value":   index.TagValueCount,
 		},
 		SeriesID: SeriesIDSummary{
-			Count: index.SeriesRefs,
+			Count: seriesIDCount,
 		},
-		Index: &index,
-		Extra: map[string]string{
-			"version":                      fmt.Sprint(trailer.Version),
-			"measurement_block_offset":     fmt.Sprint(trailer.MeasurementBlock.Offset),
-			"measurement_block_size":       fmt.Sprint(trailer.MeasurementBlock.Size),
-			"series_id_set_size":           fmt.Sprint(trailer.SeriesIDSet.Size),
-			"tombstone_series_id_set_size": fmt.Sprint(trailer.TombstoneSeriesIDSet.Size),
-			"series_sketch_size":           fmt.Sprint(trailer.SeriesSketch.Size),
-			"tombstone_series_sketch_size": fmt.Sprint(trailer.TombstoneSeriesSketch.Size),
-		},
+		Index:   &index,
+		Extra:   extra,
+		Notices: notices,
 	}
 	return report, nil
 }
@@ -635,6 +668,95 @@ func sliceTSIRange(data []byte, rng tsiRange, name string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid TSI %s range offset=%d size=%d", name, rng.Offset, rng.Size)
 	}
 	return data[rng.Offset : rng.Offset+rng.Size], nil
+}
+
+func tsiSeriesIDSetCardinality(fileData []byte, rng tsiRange, name string) (uint64, error) {
+	data, err := sliceTSIRange(fileData, rng, name)
+	if err != nil {
+		return 0, err
+	}
+	return tsiRoaringCardinality(data)
+}
+
+func tsiRoaringCardinality(data []byte) (uint64, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	if len(data) < 8 {
+		return 0, fmt.Errorf("short roaring bitmap: %d bytes", len(data))
+	}
+
+	pos := 4
+	cookie := binary.LittleEndian.Uint32(data[:4])
+	var size uint32
+	haveRunContainers := false
+	var runBitmap []byte
+	switch {
+	case cookie&0x0000ffff == tsiRoaringSerialCookie:
+		haveRunContainers = true
+		size = uint32(uint16(cookie>>16) + 1)
+		runBitmapSize := (int(size) + 7) / 8
+		if runBitmapSize > len(data)-pos {
+			return 0, fmt.Errorf("roaring run-container bitmap overruns buffer")
+		}
+		runBitmap = data[pos : pos+runBitmapSize]
+		pos += runBitmapSize
+	case cookie == tsiRoaringSerialCookieNoRunContainer:
+		size = binary.LittleEndian.Uint32(data[pos:])
+		pos += 4
+	default:
+		return 0, fmt.Errorf("invalid roaring cookie %d", cookie)
+	}
+	if size > 1<<16 {
+		return 0, fmt.Errorf("roaring bitmap has impossible container count %d", size)
+	}
+
+	headerSize := int(size) * 4
+	if headerSize > len(data)-pos {
+		return 0, fmt.Errorf("roaring container header overruns buffer")
+	}
+	cards := make([]int, int(size))
+	var cardinality uint64
+	for i := 0; i < int(size); i++ {
+		card := int(binary.LittleEndian.Uint16(data[pos+i*4+2:])) + 1
+		cards[i] = card
+		cardinality += uint64(card)
+	}
+	pos += headerSize
+
+	if !haveRunContainers || size >= tsiRoaringNoOffsetThreshold {
+		offsetSize := int(size) * 4
+		if offsetSize > len(data)-pos {
+			return 0, fmt.Errorf("roaring container offsets overrun buffer")
+		}
+		pos += offsetSize
+	}
+
+	for i, card := range cards {
+		if haveRunContainers && runBitmap[i/8]&(1<<uint(i%8)) != 0 {
+			if len(data)-pos < 2 {
+				return 0, fmt.Errorf("short roaring run container")
+			}
+			runCount := int(binary.LittleEndian.Uint16(data[pos:]))
+			pos += 2
+			runBytes := runCount * 4
+			if runBytes > len(data)-pos {
+				return 0, fmt.Errorf("roaring run container overruns buffer")
+			}
+			pos += runBytes
+			continue
+		}
+		containerBytes := card * 2
+		if card > tsiRoaringArrayContainerMaxSize {
+			containerBytes = tsiRoaringBitmapContainerBytes
+		}
+		if containerBytes > len(data)-pos {
+			return 0, fmt.Errorf("roaring container data overruns buffer")
+		}
+		pos += containerBytes
+	}
+
+	return cardinality, nil
 }
 
 func readTSIUvarint(data []byte) (uint64, int, error) {
