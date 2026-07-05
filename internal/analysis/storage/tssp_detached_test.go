@@ -589,6 +589,33 @@ func TestInspectTSSPDataBlockPayloadIntegerFullUncompressed(t *testing.T) {
 	}
 }
 
+func TestInspectTSSPDataBlockPayloadIntegerFullConstDelta(t *testing.T) {
+	var payload bytes.Buffer
+	payload.WriteByte(32) // openGemini encoding.BlockIntegerFull.
+	writeUint32(&payload, 3)
+	payload.WriteByte(16) // openGemini encoding intCompressedConstDelta << 4.
+	writeGeminiInt64(&payload, 10)
+	writeUvarint(&payload, encodeGeminiZigZagInt64(5))
+	writeUvarint(&payload, 2)
+
+	info, ok, reason := inspectTSSPDataBlockPayload(payload.Bytes())
+	if !ok {
+		t.Fatalf("inspect TSSP data block payload failed: %s", reason)
+	}
+	if got, want := info.Type, "integer-full"; got != want {
+		t.Fatalf("type = %q, want %q", got, want)
+	}
+	if got, want := info.Rows, 3; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	if !info.RowsKnown || !info.ValueKnown || info.ValueNull {
+		t.Fatalf("known/null flags rows=%v value=%v null=%v, want true/true/false", info.RowsKnown, info.ValueKnown, info.ValueNull)
+	}
+	if got, want := info.Values, []string{"10", "15", "20"}; !equalStrings(got, want) {
+		t.Fatalf("values = %v, want %v", got, want)
+	}
+}
+
 func TestInspectTSSPDataBlockPayloadBooleanFullBitpack(t *testing.T) {
 	var payload bytes.Buffer
 	payload.WriteByte(33) // openGemini encoding.BlockBooleanFull.

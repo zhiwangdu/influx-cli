@@ -627,7 +627,7 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 			info.ValueKnown = true
 			info.ValueNull = true
 		} else if payload[0] == 32 {
-			if values, ok := decodeTSSPIntegerFullUncompressedValues(payload[5:], info.Rows); ok {
+			if values, ok := decodeTSSPIntegerFullValues(payload[5:], info.Rows); ok {
 				info.Values = values
 				if len(values) > 0 {
 					info.Value = values[0]
@@ -690,6 +690,20 @@ func decodeTSSPDetachedOneBlockValue(payload []byte) (string, bool) {
 	}
 }
 
+func decodeTSSPIntegerFullValues(encoded []byte, rows int) ([]string, bool) {
+	if rows < 0 || len(encoded) < 1 {
+		return nil, false
+	}
+	switch encoded[0] >> 4 {
+	case 1:
+		return decodeTSSPIntegerFullConstDeltaValues(encoded[1:], rows)
+	case 4:
+		return decodeTSSPIntegerFullUncompressedValues(encoded, rows)
+	default:
+		return nil, false
+	}
+}
+
 func decodeTSSPIntegerFullUncompressedValues(encoded []byte, rows int) ([]string, bool) {
 	if rows < 0 || len(encoded) < 5 || encoded[0]>>4 != 4 {
 		return nil, false
@@ -705,6 +719,31 @@ func decodeTSSPIntegerFullUncompressedValues(encoded []byte, rows int) ([]string
 	raw := encoded[5 : 5+rawLen]
 	for offset := 0; offset < len(raw); offset += 8 {
 		values = append(values, strconv.FormatInt(decodeGeminiInt64(raw[offset:offset+8]), 10))
+	}
+	return values, true
+}
+
+func decodeTSSPIntegerFullConstDeltaValues(encoded []byte, rows int) ([]string, bool) {
+	if rows <= 0 || len(encoded) < 8 {
+		return nil, false
+	}
+	first := decodeGeminiZigZagUint64(binary.BigEndian.Uint64(encoded[:8]))
+	encoded = encoded[8:]
+	delta, n := binary.Uvarint(encoded)
+	if n <= 0 {
+		return nil, false
+	}
+	encoded = encoded[n:]
+	deltaCount, n := binary.Uvarint(encoded)
+	if n <= 0 || deltaCount != uint64(rows-1) {
+		return nil, false
+	}
+	step := decodeGeminiZigZagUint64(delta)
+	values := make([]string, rows)
+	value := first
+	for i := 0; i < rows; i++ {
+		values[i] = strconv.FormatInt(value, 10)
+		value += step
 	}
 	return values, true
 }

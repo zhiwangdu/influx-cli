@@ -810,5 +810,9 @@ func sumTSSPChunkMetaCount(items []tsspMetaIndex) int {
 // openGemini numberenc stores signed int64 values as big-endian zig-zag bits.
 func decodeGeminiInt64(src []byte) int64 {
 	u := binary.BigEndian.Uint64(src)
+	return decodeGeminiZigZagUint64(u)
+}
+
+func decodeGeminiZigZagUint64(u uint64) int64 {
 	return int64(u>>1) ^ (int64(u<<63) >> 63)
 }
