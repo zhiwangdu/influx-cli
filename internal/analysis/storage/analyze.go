@@ -250,6 +250,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeTSSPDetachedMetaIndex(path, info, options)
 	case FormatTSI:
 		return analyzeTSI(path, info, options)
+	case FormatTSILog:
+		return analyzeTSILog(path, info, options)
 	default:
 		return FileReport{}, fmt.Errorf("unsupported storage format %q", format)
 	}
@@ -258,6 +260,9 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 func detectFormat(path string) (Format, error) {
 	if isWALPath(path) {
 		return FormatWAL, nil
+	}
+	if isTSILogPath(path) {
+		return FormatTSILog, nil
 	}
 
 	f, err := os.Open(path)
@@ -302,9 +307,15 @@ func isStorageCandidate(path string, format Format) bool {
 		return isTSSPDetachedMetaIndexPath(path)
 	case FormatTSI:
 		return strings.HasSuffix(lower, ".tsi")
+	case FormatTSILog:
+		return isTSILogPath(path)
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi")
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path)
 	}
+}
+
+func isTSILogPath(path string) bool {
+	return strings.HasSuffix(strings.ToLower(filepath.Base(path)), ".tsl")
 }
 
 func accumulateSummary(summary *Summary, file FileReport, queryRange TimeRange) {

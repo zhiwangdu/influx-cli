@@ -17,6 +17,7 @@ const (
 	FormatTSSP              Format = "tssp"
 	FormatTSSPDetachedIndex Format = "tssp-metaindex"
 	FormatTSI               Format = "tsi"
+	FormatTSILog            Format = "tsi-log"
 )
 
 type Options struct {

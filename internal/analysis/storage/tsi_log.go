@@ -1,0 +1,509 @@
+package storage
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"hash/crc32"
+	"io"
+	"os"
+	"sort"
+)
+
+const (
+	tsiLogEntrySeriesTombstoneFlag      = 0x01
+	tsiLogEntryMeasurementTombstoneFlag = 0x02
+	tsiLogEntryTagKeyTombstoneFlag      = 0x04
+	tsiLogEntryTagValueTombstoneFlag    = 0x08
+)
+
+var errTSILogEntryChecksumMismatch = errors.New("TSI log entry checksum mismatch")
+
+type tsiLogEntry struct {
+	Flag     byte
+	SeriesID uint64
+	Name     string
+	Key      string
+	Value    string
+	Size     int
+}
+
+type tsiLogState struct {
+	LiveSeries      map[uint64]struct{}
+	TombstoneSeries map[uint64]struct{}
+	SeriesRefs      map[uint64]tsiLogSeriesRef
+	Measurements    map[string]*tsiLogMeasurement
+}
+
+type tsiLogSeriesRef struct {
+	Measurement string
+	Key         string
+	Value       string
+}
+
+type tsiLogMeasurement struct {
+	Name      string
+	Deleted   bool
+	SeriesIDs map[uint64]struct{}
+	TagKeys   map[string]*tsiLogTagKey
+}
+
+type tsiLogTagKey struct {
+	Key       string
+	Deleted   bool
+	TagValues map[string]*tsiLogTagValue
+}
+
+type tsiLogTagValue struct {
+	Value     string
+	Deleted   bool
+	SeriesIDs map[uint64]struct{}
+}
+
+func analyzeTSILog(path string, info os.FileInfo, options Options) (FileReport, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return FileReport{}, err
+	}
+
+	state := newTSILogState()
+	entryCount := 0
+	validBytes := 0
+	resolvedSeriesEntries := 0
+	unresolvedSeriesEntries := 0
+	blocksByType := map[string]int{}
+	notices := []string{}
+	for offset := 0; offset < len(data); {
+		entry, err := parseTSILogEntry(data[offset:])
+		if err != nil {
+			if errors.Is(err, io.ErrShortBuffer) || errors.Is(err, errTSILogEntryChecksumMismatch) {
+				notices = append(notices, fmt.Sprintf("trailing TSI log entry at offset %d ignored: %v", offset, err))
+				break
+			}
+			return FileReport{}, fmt.Errorf("TSI log entry at offset %d: %w", offset, err)
+		}
+		entryCount++
+		validBytes += entry.Size
+		entryType := tsiLogEntryType(entry)
+		blocksByType[entryType]++
+		if entryType == "series" {
+			if entry.Name == "" {
+				unresolvedSeriesEntries++
+			} else {
+				resolvedSeriesEntries++
+			}
+		}
+		state.Apply(entry)
+		offset += entry.Size
+	}
+
+	index, keySamples := state.IndexSummary(options)
+	index.Type = "tsi1-log"
+	if query := state.QuerySummary(options); query != nil {
+		index.Query = query
+	}
+
+	minSeriesID, maxSeriesID := seriesIDMinMax(state.LiveSeries)
+	report := FileReport{
+		Path:         path,
+		Format:       FormatTSILog,
+		SizeBytes:    info.Size(),
+		ModTime:      info.ModTime(),
+		KeyCount:     index.MeasurementCount,
+		KeySamples:   keySamples,
+		BlockCount:   entryCount,
+		BlocksByType: blocksByType,
+		SeriesID: SeriesIDSummary{
+			Min:   minSeriesID,
+			Max:   maxSeriesID,
+			Count: int64(len(state.LiveSeries)),
+		},
+		Index: &index,
+		Extra: map[string]string{
+			"entry_count":                   fmt.Sprint(entryCount),
+			"valid_bytes":                   fmt.Sprint(validBytes),
+			"series_entry_count":            fmt.Sprint(blocksByType["series"]),
+			"resolved_series_entry_count":   fmt.Sprint(resolvedSeriesEntries),
+			"unresolved_series_entry_count": fmt.Sprint(unresolvedSeriesEntries),
+			"series_tombstone_count":        fmt.Sprint(blocksByType["series-tombstone"]),
+			"measurement_tombstone_count":   fmt.Sprint(blocksByType["measurement-tombstone"]),
+			"tag_key_tombstone_count":       fmt.Sprint(blocksByType["tag-key-tombstone"]),
+			"tag_value_tombstone_count":     fmt.Sprint(blocksByType["tag-value-tombstone"]),
+		},
+		Notices: notices,
+	}
+	return report, nil
+}
+
+func parseTSILogEntry(data []byte) (tsiLogEntry, error) {
+	var entry tsiLogEntry
+	orig := data
+	start := len(data)
+	if len(data) < 1 {
+		return entry, io.ErrShortBuffer
+	}
+	entry.Flag, data = data[0], data[1:]
+
+	seriesID, n, err := readTSILogUvarint(data)
+	if err != nil {
+		return entry, fmt.Errorf("series id: %w", err)
+	}
+	entry.SeriesID, data = seriesID, data[n:]
+
+	name, n, err := readTSILogBytes(data)
+	if err != nil {
+		return entry, fmt.Errorf("measurement name: %w", err)
+	}
+	entry.Name, data = string(name), data[n:]
+
+	key, n, err := readTSILogBytes(data)
+	if err != nil {
+		return entry, fmt.Errorf("tag key: %w", err)
+	}
+	entry.Key, data = string(key), data[n:]
+
+	value, n, err := readTSILogBytes(data)
+	if err != nil {
+		return entry, fmt.Errorf("tag value: %w", err)
+	}
+	entry.Value, data = string(value), data[n:]
+
+	bodySize := start - len(data)
+	if len(data) < 4 {
+		return entry, io.ErrShortBuffer
+	}
+	wantCRC := binary.BigEndian.Uint32(data[:4])
+	if gotCRC := crc32.ChecksumIEEE(orig[:bodySize]); gotCRC != wantCRC {
+		return entry, errTSILogEntryChecksumMismatch
+	}
+	entry.Size = bodySize + 4
+	return entry, nil
+}
+
+func readTSILogBytes(data []byte) ([]byte, int, error) {
+	size, n, err := readTSILogUvarint(data)
+	if err != nil {
+		return nil, 0, err
+	}
+	if size > uint64(len(data)-n) {
+		return nil, 0, io.ErrShortBuffer
+	}
+	end := n + int(size)
+	return data[n:end], end, nil
+}
+
+func readTSILogUvarint(data []byte) (uint64, int, error) {
+	if len(data) < 1 {
+		return 0, 0, io.ErrShortBuffer
+	}
+	value, n := binary.Uvarint(data)
+	if n == 0 || n > len(data) {
+		return 0, 0, io.ErrShortBuffer
+	}
+	if n < 0 {
+		return 0, 0, fmt.Errorf("invalid uvarint")
+	}
+	return value, n, nil
+}
+
+func newTSILogState() *tsiLogState {
+	return &tsiLogState{
+		LiveSeries:      map[uint64]struct{}{},
+		TombstoneSeries: map[uint64]struct{}{},
+		SeriesRefs:      map[uint64]tsiLogSeriesRef{},
+		Measurements:    map[string]*tsiLogMeasurement{},
+	}
+}
+
+func (s *tsiLogState) Apply(entry tsiLogEntry) {
+	switch entry.Flag {
+	case tsiLogEntryMeasurementTombstoneFlag:
+		measurement := s.measurement(entry.Name)
+		measurement.Deleted = true
+		measurement.SeriesIDs = map[uint64]struct{}{}
+		measurement.TagKeys = map[string]*tsiLogTagKey{}
+	case tsiLogEntryTagKeyTombstoneFlag:
+		measurement := s.measurement(entry.Name)
+		key := measurement.tagKey(entry.Key)
+		key.Deleted = true
+	case tsiLogEntryTagValueTombstoneFlag:
+		measurement := s.measurement(entry.Name)
+		key := measurement.tagKey(entry.Key)
+		value := key.tagValue(entry.Value)
+		value.Deleted = true
+	default:
+		s.applySeriesEntry(entry)
+	}
+}
+
+func (s *tsiLogState) applySeriesEntry(entry tsiLogEntry) {
+	if entry.Flag == tsiLogEntrySeriesTombstoneFlag {
+		delete(s.LiveSeries, entry.SeriesID)
+		s.TombstoneSeries[entry.SeriesID] = struct{}{}
+		if ref, ok := s.SeriesRefs[entry.SeriesID]; ok {
+			s.removeSeriesFromIndex(entry.SeriesID, ref)
+			delete(s.SeriesRefs, entry.SeriesID)
+		}
+		return
+	}
+
+	s.LiveSeries[entry.SeriesID] = struct{}{}
+	delete(s.TombstoneSeries, entry.SeriesID)
+	if entry.Name == "" {
+		return
+	}
+	ref := tsiLogSeriesRef{
+		Measurement: entry.Name,
+		Key:         entry.Key,
+		Value:       entry.Value,
+	}
+	s.SeriesRefs[entry.SeriesID] = ref
+	measurement := s.measurement(entry.Name)
+	measurement.Deleted = false
+	measurement.SeriesIDs[entry.SeriesID] = struct{}{}
+	if entry.Key == "" {
+		return
+	}
+	key := measurement.tagKey(entry.Key)
+	value := key.tagValue(entry.Value)
+	value.SeriesIDs[entry.SeriesID] = struct{}{}
+}
+
+func (s *tsiLogState) removeSeriesFromIndex(seriesID uint64, ref tsiLogSeriesRef) {
+	measurement := s.Measurements[ref.Measurement]
+	if measurement == nil {
+		return
+	}
+	delete(measurement.SeriesIDs, seriesID)
+	if ref.Key == "" {
+		return
+	}
+	key := measurement.TagKeys[ref.Key]
+	if key == nil {
+		return
+	}
+	value := key.TagValues[ref.Value]
+	if value == nil {
+		return
+	}
+	delete(value.SeriesIDs, seriesID)
+}
+
+func (s *tsiLogState) measurement(name string) *tsiLogMeasurement {
+	measurement := s.Measurements[name]
+	if measurement == nil {
+		measurement = &tsiLogMeasurement{
+			Name:      name,
+			SeriesIDs: map[uint64]struct{}{},
+			TagKeys:   map[string]*tsiLogTagKey{},
+		}
+		s.Measurements[name] = measurement
+	}
+	return measurement
+}
+
+func (m *tsiLogMeasurement) tagKey(key string) *tsiLogTagKey {
+	tagKey := m.TagKeys[key]
+	if tagKey == nil {
+		tagKey = &tsiLogTagKey{
+			Key:       key,
+			TagValues: map[string]*tsiLogTagValue{},
+		}
+		m.TagKeys[key] = tagKey
+	}
+	return tagKey
+}
+
+func (k *tsiLogTagKey) tagValue(value string) *tsiLogTagValue {
+	tagValue := k.TagValues[value]
+	if tagValue == nil {
+		tagValue = &tsiLogTagValue{
+			Value:     value,
+			SeriesIDs: map[uint64]struct{}{},
+		}
+		k.TagValues[value] = tagValue
+	}
+	return tagValue
+}
+
+func (s *tsiLogState) IndexSummary(options Options) (IndexSummary, []string) {
+	var summary IndexSummary
+	names := s.sortedMeasurementNames()
+	keySamples := make([]string, 0, options.KeySampleLimit)
+	for _, name := range names {
+		measurement := s.Measurements[name]
+		summary.MeasurementCount++
+		summary.SeriesRefs += int64(len(measurement.SeriesIDs))
+		if measurement.Deleted {
+			summary.DeletedMeasurementCount++
+		}
+		if len(keySamples) < options.KeySampleLimit {
+			keySamples = append(keySamples, name)
+		}
+		tagKeyCount, deletedTagKeyCount, tagValueCount, deletedTagValueCount := measurement.TagCounts()
+		summary.TagKeyCount += tagKeyCount
+		summary.DeletedTagKeyCount += deletedTagKeyCount
+		summary.TagValueCount += tagValueCount
+		summary.DeletedTagValueCount += deletedTagValueCount
+		if len(summary.MeasurementSamples) < options.KeySampleLimit {
+			summary.MeasurementSamples = append(summary.MeasurementSamples, IndexMeasurementReport{
+				Name:                 name,
+				Deleted:              measurement.Deleted,
+				SeriesCount:          uint64(len(measurement.SeriesIDs)),
+				TagKeyCount:          tagKeyCount,
+				DeletedTagKeyCount:   deletedTagKeyCount,
+				TagValueCount:        tagValueCount,
+				DeletedTagValueCount: deletedTagValueCount,
+			})
+		}
+	}
+	summary.SeriesRefs = int64(len(s.LiveSeries))
+	summary.SeriesIDSetCardinality = int64(len(s.LiveSeries))
+	summary.TombstoneSeriesIDSetCardinality = int64(len(s.TombstoneSeries))
+	return summary, keySamples
+}
+
+func (s *tsiLogState) QuerySummary(options Options) *IndexQuerySummary {
+	if len(options.QueryMeasurements) == 0 && len(options.QueryTags) == 0 {
+		return nil
+	}
+	query := &IndexQuerySummary{
+		MeasurementFilterApplied: len(options.QueryMeasurements) > 0,
+		TagFilterApplied:         len(options.QueryTags) > 0,
+		QueryMeasurements:        append([]string(nil), options.QueryMeasurements...),
+		QueryTags:                append([]TagFilter(nil), options.QueryTags...),
+	}
+	measurementSet := queryKeySet(options.QueryMeasurements)
+	matchedMeasurements := map[string]struct{}{}
+	matchedTags := map[string]TagFilter{}
+	for _, name := range s.sortedMeasurementNames() {
+		measurement := s.Measurements[name]
+		if len(measurementSet) > 0 {
+			if _, ok := measurementSet[name]; !ok {
+				continue
+			}
+			matchedMeasurements[name] = struct{}{}
+		}
+		tagReports, measurementMatchedTags, allTagsMatched := measurement.QueryTags(options.QueryTags, options.BlockSampleLimit)
+		for id, filter := range measurementMatchedTags {
+			matchedTags[id] = filter
+		}
+		if measurement.Deleted || !allTagsMatched {
+			continue
+		}
+		query.CandidateMeasurements++
+		query.SeriesRefs += int64(len(measurement.SeriesIDs))
+		query.TagKeyCount += len(measurement.TagKeys)
+		for _, key := range measurement.TagKeys {
+			query.TagValueCount += len(key.TagValues)
+		}
+		if len(query.MeasurementSamples) < options.KeySampleLimit {
+			query.MeasurementSamples = append(query.MeasurementSamples, IndexQueryMeasurementReport{
+				Name:        name,
+				SeriesCount: uint64(len(measurement.SeriesIDs)),
+				Tags:        tagReports,
+			})
+		}
+	}
+	for _, measurement := range options.QueryMeasurements {
+		if _, ok := matchedMeasurements[measurement]; ok {
+			query.MatchedMeasurements = append(query.MatchedMeasurements, measurement)
+		} else {
+			query.MissingMeasurements = append(query.MissingMeasurements, measurement)
+		}
+	}
+	for _, filter := range options.QueryTags {
+		id := tagFilterID(filter.Key, filter.Value)
+		if matched, ok := matchedTags[id]; ok {
+			query.MatchedTags = append(query.MatchedTags, matched)
+		} else {
+			query.MissingTags = append(query.MissingTags, filter)
+		}
+	}
+	return query
+}
+
+func (m *tsiLogMeasurement) QueryTags(filters []TagFilter, sampleLimit int) ([]IndexQueryTagReport, map[string]TagFilter, bool) {
+	if len(filters) == 0 {
+		return nil, nil, true
+	}
+	matched := map[string]TagFilter{}
+	reports := []IndexQueryTagReport{}
+	for _, filter := range filters {
+		tagKey := m.TagKeys[filter.Key]
+		if tagKey == nil || tagKey.Deleted {
+			continue
+		}
+		tagValue := tagKey.TagValues[filter.Value]
+		if tagValue == nil || tagValue.Deleted {
+			continue
+		}
+		matched[tagFilterID(filter.Key, filter.Value)] = filter
+		if sampleLimit <= 0 || len(reports) >= sampleLimit {
+			continue
+		}
+		reports = append(reports, IndexQueryTagReport{
+			Key: tagKey.Key,
+			Values: []IndexQueryTagValueReport{{
+				Value:       tagValue.Value,
+				SeriesCount: uint64(len(tagValue.SeriesIDs)),
+			}},
+		})
+	}
+	return reports, matched, len(matched) == len(filters)
+}
+
+func (m *tsiLogMeasurement) TagCounts() (tagKeyCount, deletedTagKeyCount, tagValueCount, deletedTagValueCount int) {
+	tagKeyCount = len(m.TagKeys)
+	for _, key := range m.TagKeys {
+		if key.Deleted {
+			deletedTagKeyCount++
+		}
+		tagValueCount += len(key.TagValues)
+		for _, value := range key.TagValues {
+			if value.Deleted {
+				deletedTagValueCount++
+			}
+		}
+	}
+	return tagKeyCount, deletedTagKeyCount, tagValueCount, deletedTagValueCount
+}
+
+func (s *tsiLogState) sortedMeasurementNames() []string {
+	names := make([]string, 0, len(s.Measurements))
+	for name := range s.Measurements {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func tsiLogEntryType(entry tsiLogEntry) string {
+	switch entry.Flag {
+	case tsiLogEntrySeriesTombstoneFlag:
+		return "series-tombstone"
+	case tsiLogEntryMeasurementTombstoneFlag:
+		return "measurement-tombstone"
+	case tsiLogEntryTagKeyTombstoneFlag:
+		return "tag-key-tombstone"
+	case tsiLogEntryTagValueTombstoneFlag:
+		return "tag-value-tombstone"
+	default:
+		return "series"
+	}
+}
+
+func seriesIDMinMax(seriesIDs map[uint64]struct{}) (uint64, uint64) {
+	var minID, maxID uint64
+	first := true
+	for id := range seriesIDs {
+		if first || id < minID {
+			minID = id
+		}
+		if first || id > maxID {
+			maxID = id
+		}
+		first = false
+	}
+	return minID, maxID
+}

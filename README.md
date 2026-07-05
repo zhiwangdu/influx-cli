@@ -59,9 +59,10 @@ influx-cli --format json storage analyze /path/to/_00001.wal --from 10 --to 20 -
 influx-cli --format json storage analyze /path/to/file.tssp --from 10 --to 20 --series-id 7
 influx-cli --format json storage analyze /path/to/segment.idx --storage-format tssp-metaindex --from 10 --to 20 --meta-index-id 7
 influx-cli --format json storage analyze /path/to/L0-00000001.tsi --measurement cpu --tag host=a
+influx-cli --format json storage analyze /path/to/L0-00000001.tsl --storage-format tsi-log
 ```
 
-Use `--storage-format tsm|wal|tssp|tssp-metaindex|tsi` to override auto-detection when needed. Repeat `--key` to scope TSM and WAL decode-path planning to specific TSM index keys. Use `--cursor-order asc|desc` to model ascending or descending TSM/openGemini TSSP cursor planning. Repeat `--series-id` to scope attached openGemini TSSP decode-path planning to specific series IDs, and repeat `--meta-index-id` to scope detached `segment.idx` planning to specific meta-index IDs. JSON output includes WAL write/delete/delete-range entry summaries, TSI live/tombstone series-id set cardinality, TSSP ReadAt call estimates and sampled optimized column-segment read ranges when chunk metadata is expanded, plus detached meta-index candidate filtering for `tssp-metaindex`. Repeat `--measurement` and `--tag key=value` to inspect TSI measurement/tag predicates.
+Use `--storage-format tsm|wal|tssp|tssp-metaindex|tsi|tsi-log` to override auto-detection when needed. Repeat `--key` to scope TSM and WAL decode-path planning to specific TSM index keys. Use `--cursor-order asc|desc` to model ascending or descending TSM/openGemini TSSP cursor planning. Repeat `--series-id` to scope attached openGemini TSSP decode-path planning to specific series IDs, and repeat `--meta-index-id` to scope detached `segment.idx` planning to specific meta-index IDs. JSON output includes WAL write/delete/delete-range entry summaries, TSI index and log live/tombstone series-id set cardinality, TSSP ReadAt call estimates and sampled optimized column-segment read ranges when chunk metadata is expanded, plus detached meta-index candidate filtering for `tssp-metaindex`. Repeat `--measurement` and `--tag key=value` to inspect TSI measurement/tag predicates.
 
 ## MVP Scope
 
