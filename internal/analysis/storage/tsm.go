@@ -8,6 +8,8 @@ import (
 	"os"
 	"sort"
 	"strconv"
+
+	"github.com/golang/snappy"
 )
 
 const (
@@ -493,6 +495,32 @@ func decodeTSMBlockPoints(blockType byte, timestamps []int64, valueBlock []byte)
 			points[i] = tsmPoint{Timestamp: timestamps[i], Type: blockType, Value: strconv.FormatUint(value, 10)}
 		}
 		return points, nil
+	case tsmBlockBoolean:
+		values, err := decodeTSMBooleanValues(valueBlock)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != len(timestamps) {
+			return nil, fmt.Errorf("boolean value count %d does not match timestamp count %d", len(values), len(timestamps))
+		}
+		points := make([]tsmPoint, len(values))
+		for i, value := range values {
+			points[i] = tsmPoint{Timestamp: timestamps[i], Type: blockType, Value: strconv.FormatBool(value)}
+		}
+		return points, nil
+	case tsmBlockString:
+		values, err := decodeTSMStringValues(valueBlock)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != len(timestamps) {
+			return nil, fmt.Errorf("string value count %d does not match timestamp count %d", len(values), len(timestamps))
+		}
+		points := make([]tsmPoint, len(values))
+		for i, value := range values {
+			points[i] = tsmPoint{Timestamp: timestamps[i], Type: blockType, Value: value}
+		}
+		return points, nil
 	default:
 		return nil, fmt.Errorf("value decode unsupported for TSM block type %d", blockType)
 	}
@@ -525,6 +553,60 @@ func decodeTSMUnsignedValues(b []byte) ([]uint64, error) {
 		unsigned[i] = uint64(value)
 	}
 	return unsigned, nil
+}
+
+func decodeTSMBooleanValues(b []byte) ([]bool, error) {
+	if len(b) == 0 {
+		return []bool{}, nil
+	}
+	if encoding := b[0] >> 4; encoding != 1 {
+		return nil, fmt.Errorf("unknown boolean encoding %d", encoding)
+	}
+	count, n := binary.Uvarint(b[1:])
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid boolean count")
+	}
+	data := b[1+n:]
+	if maxCount := uint64(len(data) * 8); count > maxCount {
+		count = maxCount
+	}
+	values := make([]bool, int(count))
+	j := 0
+	for _, value := range data {
+		for mask := byte(128); mask > 0 && j < len(values); mask >>= 1 {
+			values[j] = value&mask != 0
+			j++
+		}
+	}
+	return values, nil
+}
+
+func decodeTSMStringValues(b []byte) ([]string, error) {
+	if len(b) == 0 {
+		return []string{}, nil
+	}
+	if encoding := b[0] >> 4; encoding != 1 {
+		return nil, fmt.Errorf("unknown string encoding %d", encoding)
+	}
+	decoded, err := snappy.Decode(nil, b[1:])
+	if err != nil {
+		return nil, fmt.Errorf("decode string block: %w", err)
+	}
+	values := make([]string, 0)
+	for offset := 0; offset < len(decoded); {
+		length, n := binary.Uvarint(decoded[offset:])
+		if n <= 0 {
+			return nil, fmt.Errorf("invalid string length")
+		}
+		start := offset + n
+		if length > uint64(len(decoded)-start) {
+			return nil, fmt.Errorf("short string value")
+		}
+		end := start + int(length)
+		values = append(values, string(decoded[start:end]))
+		offset = end
+	}
+	return values, nil
 }
 
 func decodeTSMIntegerRawValues(b []byte) ([]int64, error) {

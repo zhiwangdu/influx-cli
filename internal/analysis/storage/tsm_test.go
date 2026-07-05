@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/golang/snappy"
 )
 
 func TestAnalyzeTSMMetadata(t *testing.T) {
@@ -511,6 +513,80 @@ func TestAnalyzeTSMDecodePathComparesIntegerValueOutput(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMDecodePathComparesBooleanAndStringValueOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "flag,host=a value", typ: tsmBlockBoolean, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}, boolValues: []bool{false, false, false}},
+		{key: "flag,host=a value", typ: tsmBlockBoolean, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}, boolValues: []bool{true, true, false}},
+		{key: "state,host=a value", typ: tsmBlockString, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}, stringValues: []string{"old10", "old20", "old30"}},
+		{key: "state,host=a value", typ: tsmBlockString, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}, stringValues: []string{"new20", "new30", "new40"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   4,
+		BlockSampleLimit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if got, want := decode.BaselineValueOutputPoints, 8; got != want {
+		t.Fatalf("baseline value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 8; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ComparedValueOutputPoints, 4; got != want {
+		t.Fatalf("compared value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputMismatches, 0; got != want {
+		t.Fatalf("value output mismatches = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+
+	data, err := readTSMFileStoreData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := map[tsmOutputPointKey]tsmPoint{}
+	for _, entry := range data.entries {
+		points, ok := tsmOutputPoints(entry, nil, queryRange)
+		if !ok {
+			t.Fatalf("points unavailable for entry %+v", entry)
+		}
+		addTSMOutputPoints(baseline, entry.Key, points)
+	}
+	for _, check := range []struct {
+		key       string
+		timestamp int64
+		typ       byte
+		value     string
+	}{
+		{key: "flag,host=a value", timestamp: 20, typ: tsmBlockBoolean, value: "true"},
+		{key: "flag,host=a value", timestamp: 30, typ: tsmBlockBoolean, value: "true"},
+		{key: "state,host=a value", timestamp: 20, typ: tsmBlockString, value: "new20"},
+		{key: "state,host=a value", timestamp: 30, typ: tsmBlockString, value: "new30"},
+	} {
+		point, ok := baseline[tsmOutputPointKey{key: check.key, timestamp: check.timestamp, typ: check.typ}]
+		if !ok {
+			t.Fatalf("missing merged point %+v", check)
+		}
+		if point.Value != check.value {
+			t.Fatalf("merged point %+v = %q, want %q", check, point.Value, check.value)
+		}
+	}
+}
+
 func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "000000001-000000001.tsm")
@@ -828,12 +904,14 @@ func equalStrings(a, b []string) bool {
 }
 
 type testTSMBlockSpec struct {
-	key        string
-	typ        byte
-	minTime    int64
-	maxTime    int64
-	timestamps []int64
-	values     []int64
+	key          string
+	typ          byte
+	minTime      int64
+	maxTime      int64
+	timestamps   []int64
+	values       []int64
+	boolValues   []bool
+	stringValues []string
 }
 
 func writeTestTSMWithBlocks(path string, specs []testTSMBlockSpec) error {
@@ -851,7 +929,7 @@ func writeTestTSMWithBlocks(path string, specs []testTSMBlockSpec) error {
 	groupsByKey := map[string]*indexGroup{}
 	var groupKeys []string
 	for _, spec := range specs {
-		block := testTSMBlock(spec.typ, spec.timestamps, spec.values)
+		block := testTSMBlock(spec)
 		offset := int64(buf.Len())
 		buf.Write(testTSMBlockWithCRC(block))
 		groupKey := string([]byte{spec.typ}) + spec.key
@@ -929,21 +1007,26 @@ func writeTestTSMTombstoneEntry(buf *gzip.Writer, entry tsmTombstoneEntry) error
 	return err
 }
 
-func testTSMBlock(blockType byte, timestamps, values []int64) []byte {
+func testTSMBlock(spec testTSMBlockSpec) []byte {
 	var ts bytes.Buffer
 	ts.WriteByte(0)
-	for _, timestamp := range timestamps {
+	for _, timestamp := range spec.timestamps {
 		var b [8]byte
 		binary.BigEndian.PutUint64(b[:], uint64(timestamp))
 		ts.Write(b[:])
 	}
 	var block bytes.Buffer
-	block.WriteByte(blockType)
+	block.WriteByte(spec.typ)
 	block.Write(binary.AppendUvarint(nil, uint64(ts.Len())))
 	block.Write(ts.Bytes())
-	if blockType == tsmBlockInteger && len(values) > 0 {
-		block.Write(testTSMIntegerValueBlock(values))
-	} else {
+	switch {
+	case spec.typ == tsmBlockInteger && len(spec.values) > 0:
+		block.Write(testTSMIntegerValueBlock(spec.values))
+	case spec.typ == tsmBlockBoolean && len(spec.boolValues) > 0:
+		block.Write(testTSMBooleanValueBlock(spec.boolValues))
+	case spec.typ == tsmBlockString && len(spec.stringValues) > 0:
+		block.Write(testTSMStringValueBlock(spec.stringValues))
+	default:
 		block.WriteByte(0)
 	}
 	return block.Bytes()
@@ -974,6 +1057,38 @@ func testTSMUnsignedValueBlock(values []uint64) []byte {
 		binary.BigEndian.PutUint64(b[:], tsmZigZagEncode(int64(delta)))
 		block.Write(b[:])
 	}
+	return block.Bytes()
+}
+
+func testTSMBooleanValueBlock(values []bool) []byte {
+	var block bytes.Buffer
+	block.WriteByte(1 << 4)
+	block.Write(binary.AppendUvarint(nil, uint64(len(values))))
+	var packed byte
+	for i, value := range values {
+		if value {
+			packed |= 128 >> uint(i&7)
+		}
+		if i&7 == 7 {
+			block.WriteByte(packed)
+			packed = 0
+		}
+	}
+	if len(values)%8 != 0 {
+		block.WriteByte(packed)
+	}
+	return block.Bytes()
+}
+
+func testTSMStringValueBlock(values []string) []byte {
+	var raw bytes.Buffer
+	for _, value := range values {
+		raw.Write(binary.AppendUvarint(nil, uint64(len(value))))
+		raw.WriteString(value)
+	}
+	var block bytes.Buffer
+	block.WriteByte(1 << 4)
+	block.Write(snappy.Encode(nil, raw.Bytes()))
 	return block.Bytes()
 }
 
