@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhiwangdu/influx-cli/internal/adapter"
 	"github.com/zhiwangdu/influx-cli/internal/query"
 	"github.com/zhiwangdu/influx-cli/internal/result"
 	"github.com/zhiwangdu/influx-cli/internal/schema"
@@ -157,14 +158,16 @@ func (a *Adapter) ShowDatabases(ctx context.Context) ([]string, error) {
 	return values, nil
 }
 
-func (a *Adapter) ShowRetentionPolicies(ctx context.Context, db string) ([]string, error) {
+func (a *Adapter) ShowRetentionPolicies(ctx context.Context, db string) ([]adapter.RetentionPolicy, error) {
 	res, err := a.Query(ctx, query.New("SHOW RETENTION POLICIES ON "+quoteIdentifier(db), db, "", a.defaultPrecision))
 	if err != nil {
 		return nil, err
 	}
-	values := valuesFromColumn(res.Table, "name")
-	sort.Strings(values)
-	return values, nil
+	policies := retentionPoliciesFromTable(res.Table)
+	sort.Slice(policies, func(i, j int) bool {
+		return policies[i].Name < policies[j].Name
+	})
+	return policies, nil
 }
 
 func (a *Adapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
@@ -317,4 +320,36 @@ func stringAt(row []any, columns []string, column string) string {
 		return fmt.Sprint(row[i])
 	}
 	return ""
+}
+
+func boolAt(row []any, columns []string, column string) bool {
+	for i, name := range columns {
+		if !strings.EqualFold(name, column) || i >= len(row) || row[i] == nil {
+			continue
+		}
+		switch value := row[i].(type) {
+		case bool:
+			return value
+		case string:
+			return strings.EqualFold(value, "true")
+		default:
+			return strings.EqualFold(fmt.Sprint(value), "true")
+		}
+	}
+	return false
+}
+
+func retentionPoliciesFromTable(table *result.Table) []adapter.RetentionPolicy {
+	var policies []adapter.RetentionPolicy
+	for _, row := range tableRows(table) {
+		name := stringAt(row, table.Columns, "name")
+		if name == "" {
+			continue
+		}
+		policies = append(policies, adapter.RetentionPolicy{
+			Name:    name,
+			Default: boolAt(row, table.Columns, "default"),
+		})
+	}
+	return policies
 }

@@ -136,7 +136,7 @@ type Query struct {
 | --- | --- |
 | Select | `SELECT mean(value) FROM cpu` |
 | Show | `SHOW MEASUREMENTS` |
-| Meta | `:use metrics` |
+| Meta | `:use metrics`、`:use metrics.autogen` |
 | Explain | `:explain SELECT ...` |
 | Schema | `:schema cpu` |
 | Watch | watch loop 内部 query |
@@ -199,8 +199,13 @@ type Adapter interface {
     Ping(ctx context.Context) error
     Query(ctx context.Context, q query.Query) (result.Result, error)
     ShowDatabases(ctx context.Context) ([]string, error)
-    ShowRetentionPolicies(ctx context.Context, db string) ([]string, error)
+    ShowRetentionPolicies(ctx context.Context, db string) ([]RetentionPolicy, error)
     GetSchema(ctx context.Context, scope SchemaScope) (schema.SchemaSnapshot, error)
+}
+
+type RetentionPolicy struct {
+    Name    string
+    Default bool
 }
 ```
 
@@ -627,7 +632,7 @@ defaults:
 ### 16.3 手动验证
 
 1. `influx-cli query "SHOW DATABASES"`。
-2. `influx-cli repl` 后 `:use metrics`。
+2. `influx-cli repl` 后 `:use metrics` 或 `:use metrics.autogen`。
 3. time series query 自动输出 sparkline。
 4. 错误 query 返回明确错误。
 5. TUI 尺寸变化不崩溃。
@@ -640,4 +645,3 @@ defaults:
 4. 不把 profiler 逻辑混入 renderer。
 5. 不让 watch mode 复制 query 执行逻辑，应复用 orchestrator。
 6. 不让 openGemini adapter fork 大量 InfluxDB adapter 代码，先抽公共 HTTP query client。
-

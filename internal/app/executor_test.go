@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/zhiwangdu/influx-cli/internal/adapter"
 	"github.com/zhiwangdu/influx-cli/internal/config"
 	"github.com/zhiwangdu/influx-cli/internal/query"
 	"github.com/zhiwangdu/influx-cli/internal/result"
@@ -16,15 +17,22 @@ func TestExecutorMetaUseAndRPUpdateSession(t *testing.T) {
 	if _, err := executor.Execute(context.Background(), ":use metrics"); err != nil {
 		t.Fatal(err)
 	}
-	if executor.Session.Database != "metrics" {
-		t.Fatalf("database = %q, want metrics", executor.Session.Database)
+	if executor.Session.Database != "metrics" || executor.Session.RP != "autogen" {
+		t.Fatalf("context = %q/%q, want metrics/autogen", executor.Session.Database, executor.Session.RP)
 	}
 
 	if _, err := executor.Execute(context.Background(), ":db telegraf"); err != nil {
 		t.Fatal(err)
 	}
-	if executor.Session.Database != "telegraf" {
-		t.Fatalf("database = %q, want telegraf", executor.Session.Database)
+	if executor.Session.Database != "telegraf" || executor.Session.RP != "raw" {
+		t.Fatalf("context = %q/%q, want telegraf/raw", executor.Session.Database, executor.Session.RP)
+	}
+
+	if _, err := executor.Execute(context.Background(), ":use metrics.short"); err != nil {
+		t.Fatal(err)
+	}
+	if executor.Session.Database != "metrics" || executor.Session.RP != "short" {
+		t.Fatalf("context = %q/%q, want metrics/short", executor.Session.Database, executor.Session.RP)
 	}
 
 	if _, err := executor.Execute(context.Background(), ":rp autogen"); err != nil {
@@ -66,11 +74,26 @@ func TestExecutorQueryInjectsSessionContext(t *testing.T) {
 
 func newTestExecutor() *Executor {
 	session := NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"})
-	return NewExecutor(session, &fakeAdapter{})
+	return NewExecutor(session, newFakeAdapter())
+}
+
+func newFakeAdapter() *fakeAdapter {
+	return &fakeAdapter{
+		retentionPolicies: map[string][]adapter.RetentionPolicy{
+			"metrics": {
+				{Name: "autogen", Default: true},
+				{Name: "short"},
+			},
+			"telegraf": {
+				{Name: "raw", Default: true},
+			},
+		},
+	}
 }
 
 type fakeAdapter struct {
-	lastQuery query.Query
+	lastQuery         query.Query
+	retentionPolicies map[string][]adapter.RetentionPolicy
 }
 
 func (f *fakeAdapter) Name() string {
@@ -92,8 +115,11 @@ func (f *fakeAdapter) ShowDatabases(ctx context.Context) ([]string, error) {
 	return []string{"metrics", "telegraf"}, nil
 }
 
-func (f *fakeAdapter) ShowRetentionPolicies(ctx context.Context, db string) ([]string, error) {
-	return []string{"autogen"}, nil
+func (f *fakeAdapter) ShowRetentionPolicies(ctx context.Context, db string) ([]adapter.RetentionPolicy, error) {
+	if policies, ok := f.retentionPolicies[db]; ok {
+		return policies, nil
+	}
+	return []adapter.RetentionPolicy{{Name: "autogen", Default: true}}, nil
 }
 
 func (f *fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {

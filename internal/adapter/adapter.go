@@ -16,6 +16,11 @@ type Adapter interface {
 	Ping(ctx context.Context) error
 	Query(ctx context.Context, q query.Query) (result.Result, error)
 	ShowDatabases(ctx context.Context) ([]string, error)
-	ShowRetentionPolicies(ctx context.Context, db string) ([]string, error)
+	ShowRetentionPolicies(ctx context.Context, db string) ([]RetentionPolicy, error)
 	GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error)
+}
+
+type RetentionPolicy struct {
+	Name    string
+	Default bool
 }

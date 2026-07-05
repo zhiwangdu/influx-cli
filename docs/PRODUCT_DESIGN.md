@@ -194,6 +194,7 @@ influx-cli repl
 
 ```text
 influx> :use metrics
+influx> :use metrics.autogen
 influx> :db metrics
 influx[metrics/autogen]> SELECT mean(value) FROM cpu WHERE time > now() - 1h
 ```
@@ -377,7 +378,7 @@ MVP 明确不做：
 | --- | --- |
 | 首次连接到执行 query | 1 分钟内 |
 | 单次 query 输出 | 支持 table/sparkline |
-| REPL 上下文切换 | `:use db` 和别名 `:db db` 生效 |
+| REPL 上下文切换 | `:use db` 自动选择默认 RP，`:use db.rp` 可直接指定 RP，`:db db` 自动选择默认 RP |
 | 错误可理解 | 网络、认证、语法错误有明确提示 |
 | 趋势观察 | time + numeric 自动 sparkline |
 

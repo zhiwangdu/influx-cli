@@ -48,12 +48,35 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 	command := strings.ToLower(fields[0])
 
 	switch command {
-	case ":use", ":db":
+	case ":use":
 		if len(fields) != 2 {
-			return result.Result{}, fmt.Errorf("usage: :use <db> or :db <db>")
+			return result.Result{}, fmt.Errorf("usage: :use <db>[.<rp>]")
 		}
-		e.Session.Database = fields[1]
-		return statusResult("database", fields[1]), nil
+		database, retentionPolicy, explicitRP, err := parseUseTarget(fields[1])
+		if err != nil {
+			return result.Result{}, err
+		}
+		if !explicitRP {
+			retentionPolicy, err = e.defaultRetentionPolicy(ctx, database)
+			if err != nil {
+				return result.Result{}, err
+			}
+		}
+		e.Session.Database = database
+		e.Session.RP = retentionPolicy
+		return contextResult(database, retentionPolicy), nil
+	case ":db":
+		if len(fields) != 2 {
+			return result.Result{}, fmt.Errorf("usage: :db <db>")
+		}
+		database := fields[1]
+		retentionPolicy, err := e.defaultRetentionPolicy(ctx, database)
+		if err != nil {
+			return result.Result{}, err
+		}
+		e.Session.Database = database
+		e.Session.RP = retentionPolicy
+		return contextResult(database, retentionPolicy), nil
 	case ":rp":
 		if len(fields) != 2 {
 			return result.Result{}, fmt.Errorf("usage: :rp <retention_policy>")
@@ -112,10 +135,53 @@ func statusResult(key, value string) result.Result {
 	return result.FromTable(table)
 }
 
+func contextResult(database, retentionPolicy string) result.Result {
+	table := result.NewTable([]string{"key", "value"})
+	table.AddRow("database", database)
+	table.AddRow("retention_policy", retentionPolicy)
+	return result.FromTable(table)
+}
+
+func parseUseTarget(target string) (database string, retentionPolicy string, explicitRP bool, err error) {
+	database = strings.TrimSpace(target)
+	if database == "" {
+		return "", "", false, fmt.Errorf("usage: :use <db>[.<rp>]")
+	}
+	dot := strings.LastIndex(database, ".")
+	if dot < 0 {
+		return database, "", false, nil
+	}
+	retentionPolicy = strings.TrimSpace(database[dot+1:])
+	database = strings.TrimSpace(database[:dot])
+	if database == "" || retentionPolicy == "" {
+		return "", "", false, fmt.Errorf("usage: :use <db>[.<rp>]")
+	}
+	return database, retentionPolicy, true, nil
+}
+
+func (e *Executor) defaultRetentionPolicy(ctx context.Context, database string) (string, error) {
+	policies, err := e.Adapter.ShowRetentionPolicies(ctx, database)
+	if err != nil {
+		return "", fmt.Errorf("show retention policies for %q: %w", database, err)
+	}
+	if len(policies) == 0 {
+		return "", fmt.Errorf("database %q has no retention policies", database)
+	}
+	for _, policy := range policies {
+		if policy.Default && policy.Name != "" {
+			return policy.Name, nil
+		}
+	}
+	if len(policies) == 1 && policies[0].Name != "" {
+		return policies[0].Name, nil
+	}
+	return "", fmt.Errorf("default retention policy not found for database %q", database)
+}
+
 func helpResult() result.Result {
 	table := result.NewTable([]string{"command", "description"})
-	table.AddRow(":use <db>", "set current database")
-	table.AddRow(":db <db>", "alias for :use <db>")
+	table.AddRow(":use <db>[.<rp>]", "set database and optional retention policy")
+	table.AddRow(":db <db>", "set database and resolve its default retention policy")
 	table.AddRow(":rp <rp>", "set current retention policy")
 	table.AddRow(":dbs", "show databases")
 	table.AddRow(":measurements", "show measurements in current database")
