@@ -163,7 +163,7 @@ func analyzeMergesetPart(path string, info os.FileInfo, options Options) (FileRe
 		indexSummary, indexNotices := readMergesetIndexBlocks(path, metaindex.Rows, componentSizes)
 		report.Notices = append(report.Notices, indexNotices...)
 		addMergesetIndexSummary(&report, indexSummary, componentSizes, metaindex, metadata.ItemsCount, options)
-		payloadSummary, payloadNotices := readMergesetItemPayloads(path, indexSummary.Headers, componentSizes, options)
+		payloadSummary, payloadNotices := readMergesetItemPayloads(path, indexSummary.Headers, componentSizes, options, firstItem, lastItem)
 		report.Notices = append(report.Notices, payloadNotices...)
 		addMergesetItemPayloadSummary(&report, payloadSummary, firstItem, lastItem, metadata.ItemsCount)
 	}
@@ -596,11 +596,11 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	}
 }
 
-func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, componentSizes map[string]int64, options Options) (mergesetItemPayloadSummary, []string) {
+func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, componentSizes map[string]int64, options Options, firstItem, lastItem []byte) (mergesetItemPayloadSummary, []string) {
 	summary := mergesetItemPayloadSummary{
 		Blocks: len(headers),
 	}
-	search := newMergesetSearchPlan(headers, options)
+	search := newMergesetSearchPlan(headers, options, firstItem, lastItem)
 	summary.DecodePath = search.DecodePath
 	if len(headers) == 0 {
 		return summary, nil
@@ -867,7 +867,7 @@ type mergesetSearchPlan struct {
 	DecodePath      *DecodePathSummary
 }
 
-func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options) *mergesetSearchPlan {
+func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options, firstItem, lastItem []byte) *mergesetSearchPlan {
 	plan := &mergesetSearchPlan{}
 	if len(options.QueryKeys) == 0 {
 		return plan
@@ -879,6 +879,9 @@ func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options) *merg
 	plan.SampleLimit = options.BlockSampleLimit
 	for _, key := range options.QueryKeys {
 		queryItem := []byte(key)
+		if bytes.Compare(queryItem, firstItem) < 0 || bytes.Compare(queryItem, lastItem) > 0 {
+			continue
+		}
 		idx := sort.Search(len(headers), func(i int) bool {
 			return bytes.Compare(headers[i].FirstItem, queryItem) > 0
 		}) - 1

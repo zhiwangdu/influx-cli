@@ -71,6 +71,11 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 			report.DecodePath = buildTSSPFileSetDecodePathSummary(report.Files, options)
 		}
 	}
+	if options.Format == FormatMergeset && len(options.QueryKeys) > 0 {
+		if decodePath := buildMergesetFileSetSearchSummary(report.Files, options); decodePath != nil {
+			report.DecodePath = decodePath
+		}
+	}
 	report.Summary.FileCount = len(report.Files)
 	return report, nil
 }

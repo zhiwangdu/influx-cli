@@ -444,6 +444,99 @@ func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
+	dir := t.TempDir()
+	partPath1 := filepath.Join(dir, "41_2_1847A3A45055EEF0")
+	if err := writeTestMergesetPart(partPath1, mergesetPartMetadata{
+		ItemsCount:  41,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "6164",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	partPath2 := filepath.Join(dir, "2_1_1847A3A45055EEF1")
+	if err := writeTestMergesetPart(partPath2, mergesetPartMetadata{
+		ItemsCount:  2,
+		BlocksCount: 1,
+		FirstItem:   "7a61",
+		LastItem:    "7a62",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		QueryKeys:        []string{"za", "aa", "0"},
+		KeySampleLimit:   2,
+		BlockSampleLimit: 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(report.Files), 2; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := decode.Mode, "mergeset-file-set-item-search-ascending"; got != want {
+		t.Fatalf("decode mode = %q, want %q", got, want)
+	}
+	if got, want := decode.QueryKeys, []string{"0", "aa", "za"}; !equalStrings(got, want) {
+		t.Fatalf("query keys = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedKeys, []string{"aa", "za"}; !equalStrings(got, want) {
+		t.Fatalf("matched keys = %v, want %v", got, want)
+	}
+	if got, want := decode.MissingKeys, []string{"0"}; !equalStrings(got, want) {
+		t.Fatalf("missing keys = %v, want %v", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 3; got != want {
+		t.Fatalf("baseline blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
+		t.Fatalf("optimized blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBlocks, 1; got != want {
+		t.Fatalf("saved blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeValues, 43; got != want {
+		t.Fatalf("baseline values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeValues, 23; got != want {
+		t.Fatalf("optimized values = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeValues, 20; got != want {
+		t.Fatalf("saved values = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineOutputValues, 3; got != want {
+		t.Fatalf("baseline output values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedOutputValues, 2; got != want {
+		t.Fatalf("optimized output values = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedByKeyBlocks, 1; got != want {
+		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 2; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].Path, partPath2; got != want {
+		t.Fatalf("first sample path = %q, want %q", got, want)
+	}
+	if got, want := decode.Samples[1].Path, partPath1; got != want {
+		t.Fatalf("second sample path = %q, want %q", got, want)
+	}
+	if len(decode.Recommendations) == 0 {
+		t.Fatal("expected recommendations")
+	}
+}
+
 func TestAnalyzeMergesetBadItemPayloadNotice(t *testing.T) {
 	partPath := filepath.Join(t.TempDir(), "5_1_0000000000000001")
 	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
