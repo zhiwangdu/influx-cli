@@ -4,18 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/zhiwangdu/influx-cli/internal/adapter"
 	"github.com/zhiwangdu/influx-cli/internal/adapter/influxdb"
 	"github.com/zhiwangdu/influx-cli/internal/app"
 	"github.com/zhiwangdu/influx-cli/internal/config"
 	"github.com/zhiwangdu/influx-cli/internal/history"
+	"github.com/zhiwangdu/influx-cli/internal/ingest"
 	"github.com/zhiwangdu/influx-cli/internal/render"
 	"github.com/zhiwangdu/influx-cli/internal/repl"
 )
@@ -77,6 +81,7 @@ func newRootCommand() *cobra.Command {
 
 	root.AddCommand(newQueryCommand(flags))
 	root.AddCommand(newReplCommand(flags))
+	root.AddCommand(newIngestCommand(flags))
 	root.AddCommand(newConfigCommand(flags))
 	return root
 }
@@ -145,6 +150,95 @@ func newReplCommand(flags *globalFlags) *cobra.Command {
 	}
 }
 
+type ingestCommandFlags struct {
+	rate        string
+	duration    string
+	batchSize   int
+	hosts       int
+	pids        int
+	ratio       float64
+	measurement string
+	dryRun      bool
+}
+
+func newIngestCommand(flags *globalFlags) *cobra.Command {
+	ingestFlags := &ingestCommandFlags{
+		rate:      "100/s",
+		duration:  "1m",
+		batchSize: 5000,
+		hosts:     10,
+		pids:      1000,
+		ratio:     0.1,
+	}
+	command := &cobra.Command{
+		Use:   "ingest <dataset>",
+		Short: "Generate and write reproducible TSDB datasets",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			effective, err := config.Resolve(flags.configPath, flags.overrides, os.Getenv)
+			if err != nil {
+				return err
+			}
+			dataset, err := ingest.ParseDataset(args[0])
+			if err != nil {
+				return err
+			}
+			ratePerSecond, err := ingest.ParseRate(ingestFlags.rate)
+			if err != nil {
+				return err
+			}
+			duration, err := time.ParseDuration(ingestFlags.duration)
+			if err != nil {
+				return fmt.Errorf("parse duration %q: %w", ingestFlags.duration, err)
+			}
+			if strings.TrimSpace(effective.Database) == "" && !ingestFlags.dryRun {
+				return errors.New("database is required for ingest; set --db or configure a profile database")
+			}
+
+			writer, err := newIngestWriter(effective, cmd.OutOrStdout(), ingestFlags.dryRun)
+			if err != nil {
+				return err
+			}
+
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			defer stop()
+
+			summary, err := ingest.Run(ctx, writer, ingest.Options{
+				Dataset:         dataset,
+				Database:        effective.Database,
+				RetentionPolicy: effective.RetentionPolicy,
+				Precision:       effective.Precision,
+				RatePerSecond:   ratePerSecond,
+				Duration:        duration,
+				BatchSize:       ingestFlags.batchSize,
+				Hosts:           ingestFlags.hosts,
+				PIDs:            ingestFlags.pids,
+				Ratio:           ingestFlags.ratio,
+				Measurement:     ingestFlags.measurement,
+			})
+			if err != nil {
+				return err
+			}
+
+			summaryWriter := cmd.OutOrStdout()
+			if ingestFlags.dryRun {
+				summaryWriter = cmd.ErrOrStderr()
+			}
+			printIngestSummary(summaryWriter, summary, ingestFlags.dryRun)
+			return nil
+		},
+	}
+	command.Flags().StringVar(&ingestFlags.rate, "rate", ingestFlags.rate, "points per simulated second, for example 100/s or 10k/s")
+	command.Flags().StringVar(&ingestFlags.duration, "duration", ingestFlags.duration, "simulated time range to generate")
+	command.Flags().IntVar(&ingestFlags.batchSize, "batch-size", ingestFlags.batchSize, "line protocol rows per write request")
+	command.Flags().IntVar(&ingestFlags.hosts, "hosts", ingestFlags.hosts, "number of host tag values")
+	command.Flags().IntVar(&ingestFlags.pids, "pids", ingestFlags.pids, "number of pid tag values for high-cardinality data")
+	command.Flags().Float64Var(&ingestFlags.ratio, "ratio", ingestFlags.ratio, "out-of-order row ratio from 0 to 1")
+	command.Flags().StringVar(&ingestFlags.measurement, "measurement", "", "override the default measurement name")
+	command.Flags().BoolVar(&ingestFlags.dryRun, "dry-run", false, "print generated line protocol instead of writing it")
+	return command
+}
+
 func newConfigCommand(flags *globalFlags) *cobra.Command {
 	configCommand := &cobra.Command{
 		Use:   "config",
@@ -179,6 +273,21 @@ func newConfigCommand(flags *globalFlags) *cobra.Command {
 	return configCommand
 }
 
+func newIngestWriter(effective config.Effective, out io.Writer, dryRun bool) (adapter.LineProtocolWriter, error) {
+	if dryRun {
+		return ingest.NewDryRunWriter(out), nil
+	}
+	executor, err := newExecutor(effective)
+	if err != nil {
+		return nil, err
+	}
+	writer, ok := executor.Adapter.(adapter.LineProtocolWriter)
+	if !ok {
+		return nil, fmt.Errorf("adapter %q does not support line protocol writes", effective.Adapter)
+	}
+	return writer, nil
+}
+
 func newExecutor(effective config.Effective) (*app.Executor, error) {
 	client := &http.Client{Timeout: effective.Timeout}
 	adapterName := strings.ToLower(effective.Adapter)
@@ -204,6 +313,25 @@ func newExecutor(effective config.Effective) (*app.Executor, error) {
 	default:
 		return nil, fmt.Errorf("unsupported adapter %q", effective.Adapter)
 	}
+}
+
+func printIngestSummary(w io.Writer, summary ingest.Summary, dryRun bool) {
+	mode := "written"
+	if dryRun {
+		mode = "generated"
+	}
+	fmt.Fprintf(w, "ingest: %s\n", mode)
+	fmt.Fprintf(w, "dataset: %s\n", summary.Dataset)
+	fmt.Fprintf(w, "database: %s\n", printableSummaryValue(summary.Database))
+	fmt.Fprintf(w, "retention_policy: %s\n", printableSummaryValue(summary.RetentionPolicy))
+	fmt.Fprintf(w, "measurement: %s\n", summary.Measurement)
+	fmt.Fprintf(w, "precision: %s\n", summary.Precision)
+	fmt.Fprintf(w, "rate: %d/s\n", summary.RatePerSecond)
+	fmt.Fprintf(w, "duration: %s\n", summary.Duration)
+	fmt.Fprintf(w, "points: %d\n", summary.WrittenPoints)
+	fmt.Fprintf(w, "batches: %d\n", summary.Batches)
+	fmt.Fprintf(w, "simulated_range: %s to %s\n", summary.StartedAt.Format(time.RFC3339Nano), summary.EndedAt.Format(time.RFC3339Nano))
+	fmt.Fprintf(w, "elapsed: %s\n", summary.Elapsed.Truncate(time.Millisecond))
 }
 
 func renderOptions(effective config.Effective, flags *globalFlags) render.Options {
@@ -246,6 +374,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func printableSummaryValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
 }
 
 func init() {

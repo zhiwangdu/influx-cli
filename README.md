@@ -40,13 +40,23 @@ docs/
     TUIDesign.legacy.md
 ```
 
-Implemented MVP surface:
+Implemented query surface:
 
 ```bash
 influx-cli query "SHOW DATABASES"
 influx-cli query --db metrics "SELECT mean(value) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)"
 influx-cli repl
 influx-cli config show
+```
+
+Implemented Dataset Generator surface:
+
+```bash
+influx-cli ingest demo-cpu --db metrics --rate 10k/s --duration 5m
+influx-cli ingest high-cardinality --db metrics --hosts 1000 --pids 10000
+influx-cli ingest out-of-order --db metrics --ratio 0.1
+influx-cli ingest covering-block --db metrics
+influx-cli ingest demo-cpu --rate 2/s --duration 1s --dry-run
 ```
 
 ## MVP Scope

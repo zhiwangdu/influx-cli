@@ -10,7 +10,7 @@
 
 ## 2. 当前仓库状态
 
-截至 2026-07-04，当前仓库已经包含 Phase 0 CLI MVP 基础实现：
+截至 2026-07-05，当前仓库已经包含 Phase 0 CLI MVP 基础实现，并已补充 Phase 4 Dataset Generator 的基础能力：
 
 | 文件 | 状态 |
 | --- | --- |
@@ -22,6 +22,9 @@
 | `internal/render` | table 和 sparkline renderer |
 | `internal/app`、`internal/repl` | session、statusline、meta command 和 REPL loop |
 | `internal/history` | REPL query history 本地持久化和检索 |
+| `cmd/influx-cli ingest` | Dataset Generator 命令入口，支持 demo、高基数、乱序和 covering-block 数据 |
+| `internal/ingest` | Dataset Generator 的 deterministic line protocol 生成、批量写入和 dry-run |
+| `internal/adapter/influxdb` write path | InfluxDB 1.x/openGemini 兼容 `/write` line protocol 写入 |
 | `docs/PRODUCT_DESIGN.md` | 产品设计书 |
 | `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
