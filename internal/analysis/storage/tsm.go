@@ -418,7 +418,7 @@ func decodeTSMSimple8bTimestamps(b []byte) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	deltas, err := decodeTSMSimple8bValues(b[9:])
+	deltas, err := decodeSimple8bValues(b[9:])
 	if err != nil {
 		return nil, err
 	}
@@ -440,7 +440,7 @@ func tsmTimestampDivisor(exp byte) (int64, error) {
 	return divisors[exp], nil
 }
 
-func decodeTSMSimple8bValues(b []byte) ([]uint64, error) {
+func decodeSimple8bValues(b []byte) ([]uint64, error) {
 	if len(b)%8 != 0 {
 		return nil, fmt.Errorf("invalid simple8b byte length %d", len(b))
 	}
@@ -734,7 +734,7 @@ func decodeTSMIntegerSimple8bValues(b []byte) ([]int64, error) {
 	if len(b) < 8 {
 		return nil, fmt.Errorf("short packed integer block")
 	}
-	deltas, err := decodeTSMSimple8bValues(b[8:])
+	deltas, err := decodeSimple8bValues(b[8:])
 	if err != nil {
 		return nil, err
 	}

@@ -697,6 +697,8 @@ func decodeTSSPIntegerFullValues(encoded []byte, rows int) ([]string, bool) {
 	switch encoded[0] >> 4 {
 	case 1:
 		return decodeTSSPIntegerFullConstDeltaValues(encoded[1:], rows)
+	case 2:
+		return decodeTSSPIntegerFullSimple8bValues(encoded[1:], rows)
 	case 4:
 		return decodeTSSPIntegerFullUncompressedValues(encoded, rows)
 	default:
@@ -744,6 +746,38 @@ func decodeTSSPIntegerFullConstDeltaValues(encoded []byte, rows int) ([]string, 
 	for i := 0; i < rows; i++ {
 		values[i] = strconv.FormatInt(value, 10)
 		value += step
+	}
+	return values, true
+}
+
+func decodeTSSPIntegerFullSimple8bValues(encoded []byte, rows int) ([]string, bool) {
+	if rows <= 0 || len(encoded) < 16 {
+		return nil, false
+	}
+	encodedCount := int(binary.BigEndian.Uint32(encoded[:4]))
+	sourceCount := int(binary.BigEndian.Uint32(encoded[4:8]))
+	encoded = encoded[8:]
+	if sourceCount != rows || encodedCount < 1 || len(encoded) < encodedCount*8 {
+		return nil, false
+	}
+	encoded = encoded[:encodedCount*8]
+	first := decodeGeminiZigZagUint64(binary.BigEndian.Uint64(encoded[:8]))
+	if rows == 1 {
+		if encodedCount != 1 {
+			return nil, false
+		}
+		return []string{strconv.FormatInt(first, 10)}, true
+	}
+	deltas, err := decodeSimple8bValues(encoded[8:])
+	if err != nil || len(deltas) != rows-1 {
+		return nil, false
+	}
+	values := make([]string, rows)
+	value := first
+	values[0] = strconv.FormatInt(value, 10)
+	for i, delta := range deltas {
+		value += decodeGeminiZigZagUint64(delta)
+		values[i+1] = strconv.FormatInt(value, 10)
 	}
 	return values, true
 }

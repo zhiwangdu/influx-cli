@@ -379,6 +379,63 @@ func TestAnalyzeTSSPSamplesAttachedIntegerFullConstDeltaBlocks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPSamplesAttachedIntegerFullSimple8bBlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithIntegerSimple8bData(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 666)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_blocks"], "2"; got != want {
+		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "integer-full:2"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 3; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 3; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "sid:7/value", Time: 333, Type: "integer-full", OptimizedValue: "99", Matches: true},
+		{Key: "sid:7/value", Time: 444, Type: "integer-full", OptimizedValue: "100", Matches: true},
+		{Key: "sid:7/value", Time: 666, Type: "integer-full", OptimizedValue: "102", Matches: true},
+	} {
+		got := decode.CursorOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+		}
+	}
+	if got, want := decode.Samples[0].ValueOutputPoints, 3; got != want {
+		t.Fatalf("decode sample value output points = %d, want %d", got, want)
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "sampled 3 TSSP value output") {
+		t.Fatalf("recommendations = %v, want value output recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPSamplesAttachedBooleanFullBitpackBlocks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSPWithBooleanFullData(path); err != nil {
@@ -1331,6 +1388,60 @@ func writeTestTSSPWithIntegerConstDeltaData(path string) error {
 	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+func writeTestTSSPWithIntegerSimple8bData(path string) error {
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+
+	dataOffset := int64(buf.Len())
+	valueOffset := int64(buf.Len())
+	valueSize := writeTestTSSPAttachedIntegerSimple8bBlock(&buf, []int64{99, 100, 102})
+	timeSize := writeTestTSSPAttachedIntegerSimple8bBlock(&buf, []int64{333, 444, 666})
+	dataSize := int64(valueSize + timeSize)
+	chunk := testTSSPChunkSpec{
+		sid:      7,
+		minTime:  333,
+		maxTime:  666,
+		offset:   valueOffset,
+		size:     valueSize,
+		timeSize: timeSize,
+	}
+
+	payload := testTSSPChunkMetaPayload(chunk)
+	payloadOffset := int64(buf.Len())
+	buf.Write(payload)
+
+	metaOffset := int64(buf.Len())
+	writeTestTSSPMetaIndex(&buf, tsspMetaIndex{
+		ID:      7,
+		MinTime: 333,
+		MaxTime: 666,
+		Offset:  payloadOffset,
+		Count:   1,
+		Size:    uint32(len(payload)),
+	})
+
+	trailerOffset := int64(buf.Len())
+	writeTestTSSPTrailer(&buf, tsspTrailer{
+		DataOffset:         dataOffset,
+		DataSize:           dataSize,
+		IndexSize:          metaOffset - dataOffset - dataSize,
+		MetaIndexSize:      int64(buf.Len()) - metaOffset,
+		BloomSize:          0,
+		IDTimeSize:         0,
+		IDCount:            1,
+		MinID:              7,
+		MaxID:              7,
+		MinTime:            333,
+		MaxTime:            666,
+		MetaIndexItemCount: 1,
+		ChunkMetaCompress:  tsspChunkMetaCompressNone,
+		MeasurementName:    "cpu",
+	})
+	writeGeminiInt64(&buf, trailerOffset)
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
 func writeTestTSSPWithBooleanFullData(path string) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsspMagic)
@@ -1468,6 +1579,25 @@ func writeTestTSSPAttachedIntegerConstDeltaBlock(buf *bytes.Buffer, values []int
 	writeUvarint(buf, encodeGeminiZigZagInt64(values[1]-values[0]))
 	writeUvarint(buf, uint64(len(values)-1))
 	return uint32(buf.Len() - start)
+}
+
+func writeTestTSSPAttachedIntegerSimple8bBlock(buf *bytes.Buffer, values []int64) uint32 {
+	start := buf.Len()
+	buf.WriteByte(32) // openGemini encoding.BlockIntegerFull.
+	writeUint32(buf, uint32(len(values)))
+	buf.WriteByte(32) // openGemini encoding intCompressedSimple8b << 4.
+	writeUint32(buf, 2)
+	writeUint32(buf, uint32(len(values)))
+	writeUint64(buf, encodeGeminiZigZagInt64(values[0]))
+	writeUint64(buf, testTSSPSimple8bPack2(
+		encodeGeminiZigZagInt64(values[1]-values[0]),
+		encodeGeminiZigZagInt64(values[2]-values[1]),
+	))
+	return uint32(buf.Len() - start)
+}
+
+func testTSSPSimple8bPack2(first, second uint64) uint64 {
+	return 14<<60 | first | second<<30
 }
 
 func writeTestTSSPAttachedStringFullBlock(buf *bytes.Buffer, values []string) uint32 {

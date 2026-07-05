@@ -1016,7 +1016,7 @@ func TestTSMFileStoreIteratorCostUsesHalfOpenRangeAndTombstones(t *testing.T) {
 }
 
 func TestDecodeTSMSimple8bSelectorRunsAreOnes(t *testing.T) {
-	values, err := decodeTSMSimple8bValues(make([]byte, 8))
+	values, err := decodeSimple8bValues(make([]byte, 8))
 	if err != nil {
 		t.Fatal(err)
 	}
