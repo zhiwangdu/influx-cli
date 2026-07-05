@@ -61,6 +61,15 @@ type mergesetIndexSummary struct {
 	UncompressedSize int
 }
 
+type mergesetItemPayloadSummary struct {
+	Blocks        int
+	DecodedBlocks int
+	ItemsDecoded  uint64
+	FirstItem     []byte
+	LastItem      []byte
+	Samples       [][]byte
+}
+
 type mergesetBlockHeader struct {
 	CommonPrefix     []byte
 	FirstItem        []byte
@@ -152,6 +161,9 @@ func analyzeMergesetPart(path string, info os.FileInfo, options Options) (FileRe
 		indexSummary, indexNotices := readMergesetIndexBlocks(path, metaindex.Rows, componentSizes)
 		report.Notices = append(report.Notices, indexNotices...)
 		addMergesetIndexSummary(&report, indexSummary, componentSizes, metaindex, metadata.ItemsCount, options)
+		payloadSummary, payloadNotices := readMergesetItemPayloads(path, indexSummary.Headers, componentSizes, options.KeySampleLimit)
+		report.Notices = append(report.Notices, payloadNotices...)
+		addMergesetItemPayloadSummary(&report, payloadSummary, firstItem, lastItem, metadata.ItemsCount)
 	}
 	return report, nil
 }
@@ -579,6 +591,274 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 			SizeBytes:  header.ItemsBlockSize,
 			ValueCount: uint64ToInt(uint64(header.ItemsCount)),
 		})
+	}
+}
+
+func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, componentSizes map[string]int64, sampleLimit int) (mergesetItemPayloadSummary, []string) {
+	summary := mergesetItemPayloadSummary{
+		Blocks: len(headers),
+	}
+	if len(headers) == 0 {
+		return summary, nil
+	}
+	itemsFile, err := os.Open(filepath.Join(path, mergesetItemsFile))
+	if err != nil {
+		return summary, []string{fmt.Sprintf("mergeset item payload decode unavailable: %v", err)}
+	}
+	defer itemsFile.Close()
+	lensFile, err := os.Open(filepath.Join(path, mergesetLensFile))
+	if err != nil {
+		return summary, []string{fmt.Sprintf("mergeset item payload decode unavailable: %v", err)}
+	}
+	defer lensFile.Close()
+	decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return summary, []string{fmt.Sprintf("mergeset item payload decode unavailable: create zstd decoder: %v", err)}
+	}
+	defer decoder.Close()
+
+	itemsSize := uint64(0)
+	if componentSizes[mergesetItemsFile] > 0 {
+		itemsSize = uint64(componentSizes[mergesetItemsFile])
+	}
+	lensSize := uint64(0)
+	if componentSizes[mergesetLensFile] > 0 {
+		lensSize = uint64(componentSizes[mergesetLensFile])
+	}
+	notices := []string{}
+	for i, header := range headers {
+		if header.ItemsBlockOffset > itemsSize || uint64(header.ItemsBlockSize) > itemsSize-header.ItemsBlockOffset {
+			continue
+		}
+		if header.LensBlockOffset > lensSize || uint64(header.LensBlockSize) > lensSize-header.LensBlockOffset {
+			continue
+		}
+		itemsData := make([]byte, header.ItemsBlockSize)
+		if _, err := itemsFile.ReadAt(itemsData, int64(header.ItemsBlockOffset)); err != nil {
+			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d items_offset=%d items_size=%d: %v", i+1, header.ItemsBlockOffset, header.ItemsBlockSize, err))
+			continue
+		}
+		lensData := make([]byte, header.LensBlockSize)
+		if _, err := lensFile.ReadAt(lensData, int64(header.LensBlockOffset)); err != nil {
+			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d lens_offset=%d lens_size=%d: %v", i+1, header.LensBlockOffset, header.LensBlockSize, err))
+			continue
+		}
+		decoded, err := decodeMergesetBlockItems(header, itemsData, lensData, decoder, sampleLimit-len(summary.Samples))
+		if err != nil {
+			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d first_item=%s: %v", i+1, hex.EncodeToString(header.FirstItem), err))
+			continue
+		}
+		summary.DecodedBlocks++
+		summary.ItemsDecoded += decoded.Count
+		if len(summary.FirstItem) == 0 {
+			summary.FirstItem = append(summary.FirstItem[:0], decoded.FirstItem...)
+		}
+		summary.LastItem = append(summary.LastItem[:0], decoded.LastItem...)
+		summary.Samples = append(summary.Samples, decoded.Samples...)
+	}
+	return summary, notices
+}
+
+type mergesetDecodedBlockItems struct {
+	Count     uint64
+	FirstItem []byte
+	LastItem  []byte
+	Samples   [][]byte
+}
+
+func decodeMergesetBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, decoder *zstd.Decoder, sampleLimit int) (mergesetDecodedBlockItems, error) {
+	if !bytes.HasPrefix(header.FirstItem, header.CommonPrefix) {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("firstItem does not start with commonPrefix")
+	}
+	switch header.MarshalType {
+	case mergesetMarshalTypePlain:
+		return decodeMergesetPlainBlockItems(header, itemsData, lensData, sampleLimit)
+	case mergesetMarshalTypeZSTD:
+		return decodeMergesetZSTDBlockItems(header, itemsData, lensData, decoder, sampleLimit)
+	default:
+		return mergesetDecodedBlockItems{}, fmt.Errorf("unknown marshalType=%d", header.MarshalType)
+	}
+}
+
+func decodeMergesetPlainBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, sampleLimit int) (mergesetDecodedBlockItems, error) {
+	itemsCount := int(header.ItemsCount)
+	expectedLensBytes := uint64(itemsCount-1) * 8
+	if uint64(len(lensData)) != expectedLensBytes {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("plain lensData size=%d; want %d", len(lensData), expectedLensBytes)
+	}
+	lengths := make([]uint64, itemsCount)
+	lengths[0] = uint64(len(header.FirstItem) - len(header.CommonPrefix))
+	lensTail := lensData
+	for i := 1; i < itemsCount; i++ {
+		lengths[i] = binary.BigEndian.Uint64(lensTail[:8])
+		lensTail = lensTail[8:]
+	}
+
+	decoded := newMergesetDecodedBlockItems(header.FirstItem, sampleLimit)
+	itemsTail := itemsData
+	totalBytes := len(header.FirstItem)
+	for i := 1; i < itemsCount; i++ {
+		itemLen := lengths[i]
+		if itemLen > uint64(len(itemsTail)) {
+			return mergesetDecodedBlockItems{}, fmt.Errorf("not enough data for item #%d from itemsData; want %d bytes; remained %d bytes", i+1, itemLen, len(itemsTail))
+		}
+		if uint64(totalBytes)+uint64(len(header.CommonPrefix))+itemLen > mergesetMaxInmemoryBlockSize {
+			return mergesetDecodedBlockItems{}, fmt.Errorf("decoded data exceeds max inmemory block size %d", mergesetMaxInmemoryBlockSize)
+		}
+		itemLenInt := int(itemLen)
+		item := make([]byte, 0, len(header.CommonPrefix)+itemLenInt)
+		item = append(item, header.CommonPrefix...)
+		item = append(item, itemsTail[:itemLenInt]...)
+		if err := decoded.appendItem(item, sampleLimit); err != nil {
+			return mergesetDecodedBlockItems{}, err
+		}
+		totalBytes += len(item)
+		itemsTail = itemsTail[itemLenInt:]
+	}
+	if len(itemsTail) > 0 {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("unexpected tail left after itemsData with len %d", len(itemsTail))
+	}
+	return decoded, nil
+}
+
+func decodeMergesetZSTDBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, decoder *zstd.Decoder, sampleLimit int) (mergesetDecodedBlockItems, error) {
+	lensPayload, err := decoder.DecodeAll(lensData, nil)
+	if err != nil {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("cannot decompress lensData: %w", err)
+	}
+	valueCount := int(header.ItemsCount) - 1
+	if valueCount > len(lensPayload)/2 {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("zstd lensData has %d bytes, too small for %d prefix/length values", len(lensPayload), valueCount*2)
+	}
+	prefixXORs, tail, err := parseMergesetVarUint64s(lensPayload, valueCount)
+	if err != nil {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("cannot unmarshal prefixLens from lensData: %w", err)
+	}
+	lengthXORs, tail, err := parseMergesetVarUint64s(tail, valueCount)
+	if err != nil {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("cannot unmarshal lens from lensData: %w", err)
+	}
+	if len(tail) > 0 {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("unexpected tail left unmarshaling %d lens; tail size=%d", header.ItemsCount, len(tail))
+	}
+	itemsPayload, err := decoder.DecodeAll(itemsData, nil)
+	if err != nil {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("cannot decompress itemsData: %w", err)
+	}
+
+	prefixLens := make([]uint64, int(header.ItemsCount))
+	lengths := make([]uint64, int(header.ItemsCount))
+	lengths[0] = uint64(len(header.FirstItem) - len(header.CommonPrefix))
+	dataLen := len(header.FirstItem)
+	for i, xLen := range prefixXORs {
+		prefixLens[i+1] = xLen ^ prefixLens[i]
+	}
+	for i, xLen := range lengthXORs {
+		lengths[i+1] = xLen ^ lengths[i]
+		if uint64(dataLen)+uint64(len(header.CommonPrefix))+lengths[i+1] > mergesetMaxInmemoryBlockSize {
+			return mergesetDecodedBlockItems{}, fmt.Errorf("decoded data exceeds max inmemory block size %d", mergesetMaxInmemoryBlockSize)
+		}
+		dataLen += len(header.CommonPrefix) + int(lengths[i+1])
+	}
+
+	decoded := newMergesetDecodedBlockItems(header.FirstItem, sampleLimit)
+	itemsTail := itemsPayload
+	prevItemSuffix := header.FirstItem[len(header.CommonPrefix):]
+	for i := 1; i < int(header.ItemsCount); i++ {
+		itemLen := lengths[i]
+		prefixLen := prefixLens[i]
+		if prefixLen > itemLen {
+			return mergesetDecodedBlockItems{}, fmt.Errorf("prefixLen=%d exceeds itemLen=%d", prefixLen, itemLen)
+		}
+		if prefixLen > uint64(len(prevItemSuffix)) {
+			return mergesetDecodedBlockItems{}, fmt.Errorf("prefixLen=%d exceeds previous item suffix length=%d", prefixLen, len(prevItemSuffix))
+		}
+		suffixLen := itemLen - prefixLen
+		if suffixLen > uint64(len(itemsTail)) {
+			return mergesetDecodedBlockItems{}, fmt.Errorf("not enough data for item #%d from itemsData; want %d bytes; remained %d bytes", i+1, suffixLen, len(itemsTail))
+		}
+		prefixLenInt := int(prefixLen)
+		suffixLenInt := int(suffixLen)
+		item := make([]byte, 0, len(header.CommonPrefix)+int(itemLen))
+		item = append(item, header.CommonPrefix...)
+		item = append(item, prevItemSuffix[:prefixLenInt]...)
+		item = append(item, itemsTail[:suffixLenInt]...)
+		if err := decoded.appendItem(item, sampleLimit); err != nil {
+			return mergesetDecodedBlockItems{}, err
+		}
+		prevItemSuffix = item[len(header.CommonPrefix):]
+		itemsTail = itemsTail[suffixLenInt:]
+	}
+	if len(itemsTail) > 0 {
+		return mergesetDecodedBlockItems{}, fmt.Errorf("unexpected tail left after itemsData with len %d", len(itemsTail))
+	}
+	return decoded, nil
+}
+
+func newMergesetDecodedBlockItems(firstItem []byte, sampleLimit int) mergesetDecodedBlockItems {
+	decoded := mergesetDecodedBlockItems{
+		Count:     1,
+		FirstItem: append([]byte(nil), firstItem...),
+		LastItem:  append([]byte(nil), firstItem...),
+	}
+	if sampleLimit > 0 {
+		decoded.Samples = append(decoded.Samples, append([]byte(nil), firstItem...))
+	}
+	return decoded
+}
+
+func (decoded *mergesetDecodedBlockItems) appendItem(item []byte, sampleLimit int) error {
+	if bytes.Compare(decoded.LastItem, item) > 0 {
+		return fmt.Errorf("decoded data block contains unsorted items")
+	}
+	decoded.Count++
+	decoded.LastItem = append(decoded.LastItem[:0], item...)
+	if len(decoded.Samples) < sampleLimit {
+		decoded.Samples = append(decoded.Samples, append([]byte(nil), item...))
+	}
+	return nil
+}
+
+func parseMergesetVarUint64s(src []byte, count int) ([]uint64, []byte, error) {
+	values := make([]uint64, count)
+	for i := 0; i < count; i++ {
+		value, n := binary.Uvarint(src)
+		if n == 0 {
+			return nil, src, fmt.Errorf("cannot unmarshal varuint #%d from empty data", i+1)
+		}
+		if n < 0 {
+			return nil, src, fmt.Errorf("varuint #%d overflows uint64", i+1)
+		}
+		values[i] = value
+		src = src[n:]
+	}
+	return values, src, nil
+}
+
+func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPayloadSummary, metadataFirstItem, metadataLastItem []byte, metadataItemsCount uint64) {
+	report.Extra["item_payload_block_count"] = fmt.Sprint(summary.Blocks)
+	report.Extra["item_payload_blocks_decoded"] = fmt.Sprint(summary.DecodedBlocks)
+	report.Extra["item_payload_items_decoded"] = fmt.Sprint(summary.ItemsDecoded)
+	if summary.ItemsDecoded == 0 {
+		return
+	}
+	report.Extra["item_payload_first_item_hex"] = hex.EncodeToString(summary.FirstItem)
+	report.Extra["item_payload_last_item_hex"] = hex.EncodeToString(summary.LastItem)
+	if len(summary.Samples) > 0 {
+		samples := make([]string, 0, len(summary.Samples))
+		for _, sample := range summary.Samples {
+			samples = append(samples, hex.EncodeToString(sample))
+		}
+		report.Extra["item_payload_samples_hex"] = strings.Join(samples, ",")
+	}
+	if summary.ItemsDecoded != metadataItemsCount {
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded item payload count=%d differs from metadata items_count=%d", summary.ItemsDecoded, metadataItemsCount))
+	}
+	if !bytes.Equal(summary.FirstItem, metadataFirstItem) {
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded first item=%s differs from metadata first_item=%s", hex.EncodeToString(summary.FirstItem), hex.EncodeToString(metadataFirstItem)))
+	}
+	if !bytes.Equal(summary.LastItem, metadataLastItem) {
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded last item=%s differs from metadata last_item=%s", hex.EncodeToString(summary.LastItem), hex.EncodeToString(metadataLastItem)))
 	}
 }
 

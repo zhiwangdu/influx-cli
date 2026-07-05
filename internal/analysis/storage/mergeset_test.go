@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -84,11 +85,11 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got, want := file.Extra["item_count_from_blocks"], "41"; got != want {
 		t.Fatalf("item count from blocks extra = %q, want %q", got, want)
 	}
-	if got, want := file.Extra["items_block_bytes"], "2"; got != want {
-		t.Fatalf("items block bytes extra = %q, want %q", got, want)
+	if got := file.Extra["items_block_bytes"]; got == "" || got == "0" {
+		t.Fatalf("items block bytes extra = %q, want non-zero", got)
 	}
-	if got, want := file.Extra["lens_block_bytes"], "2"; got != want {
-		t.Fatalf("lens block bytes extra = %q, want %q", got, want)
+	if got := file.Extra["lens_block_bytes"]; got == "" || got == "0" {
+		t.Fatalf("lens block bytes extra = %q, want non-zero", got)
 	}
 	if got, want := file.Extra["plain_block_headers"], "2"; got != want {
 		t.Fatalf("plain block headers extra = %q, want %q", got, want)
@@ -108,8 +109,26 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got, want := file.Blocks[0].ValueCount, 21; got != want {
 		t.Fatalf("block sample value count = %d, want %d", got, want)
 	}
-	if got, want := file.Blocks[1].Key, "7a7a"; got != want {
-		t.Fatalf("second block sample key = %q, want %q", got, want)
+	if got, want := file.Blocks[1].ValueCount, 20; got != want {
+		t.Fatalf("second block sample value count = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["item_payload_block_count"], "2"; got != want {
+		t.Fatalf("payload block count extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_blocks_decoded"], "2"; got != want {
+		t.Fatalf("payload blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_items_decoded"], "41"; got != want {
+		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_first_item_hex"], "6161"; got != want {
+		t.Fatalf("payload first item extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_last_item_hex"], "7a7a"; got != want {
+		t.Fatalf("payload last item extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_samples_hex"], "6161,61610000000000000001"; got != want {
+		t.Fatalf("payload samples extra = %q, want %q", got, want)
 	}
 	if file.SizeBytes == 0 {
 		t.Fatal("expected non-zero component size")
@@ -296,7 +315,90 @@ func TestAnalyzeMergesetBadIndexBlockNotice(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetZSTDItemPayload(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_1_0000000000000001")
+	if err := writeTestMergesetPartWithMarshalTypes(partPath, mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}, []byte{mergesetMarshalTypeZSTD}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:         FormatMergeset,
+		KeySampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if len(file.Notices) != 0 {
+		t.Fatalf("notices = %v, want none", file.Notices)
+	}
+	if got, want := file.Extra["plain_block_headers"], "0"; got != want {
+		t.Fatalf("plain block headers extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["zstd_block_headers"], "1"; got != want {
+		t.Fatalf("zstd block headers extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_items_decoded"], "4"; got != want {
+		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_first_item_hex"], "6161"; got != want {
+		t.Fatalf("payload first item extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_last_item_hex"], "617a"; got != want {
+		t.Fatalf("payload last item extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_samples_hex"], "6161,61610000000000000001,61610000000000000002"; got != want {
+		t.Fatalf("payload samples extra = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetBadItemPayloadNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "5_1_0000000000000001")
+	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
+		ItemsCount:  5,
+		BlocksCount: 1,
+		FirstItem:   "01",
+		LastItem:    "05",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lensInfo, err := os.Stat(filepath.Join(partPath, mergesetLensFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badLens := bytesOf(0xff, int(lensInfo.Size()))
+	if err := os.WriteFile(filepath.Join(partPath, mergesetLensFile), badLens, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if !containsString(file.Notices, "mergeset item payload decode unavailable") {
+		t.Fatalf("notices = %v, want item payload decode notice", file.Notices)
+	}
+	if got, want := file.Extra["item_payload_blocks_decoded"], "0"; got != want {
+		t.Fatalf("payload blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_items_decoded"], "0"; got != want {
+		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
+	}
+}
+
 func writeTestMergesetPart(path string, metadata mergesetPartMetadata) error {
+	return writeTestMergesetPartWithMarshalTypes(path, metadata, nil)
+}
+
+func writeTestMergesetPartWithMarshalTypes(path string, metadata mergesetPartMetadata, marshalTypes []byte) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
@@ -310,7 +412,7 @@ func writeTestMergesetPart(path string, metadata mergesetPartMetadata) error {
 	if metadata.BlocksCount > uint64(^uint32(0)) {
 		return fmt.Errorf("test mergeset metadata BlocksCount too large: %d", metadata.BlocksCount)
 	}
-	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata)
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, marshalTypes)
 	if err != nil {
 		return err
 	}
@@ -344,52 +446,195 @@ func writeTestMergesetPart(path string, metadata mergesetPartMetadata) error {
 	return nil
 }
 
-func testMergesetBlockHeaders(metadata mergesetPartMetadata) ([]mergesetBlockHeader, []byte, []byte, error) {
-	firstItem, err := decodeMergesetHexItem(metadata.FirstItem, "FirstItem")
+func testMergesetBlockHeaders(metadata mergesetPartMetadata, marshalTypes []byte) ([]mergesetBlockHeader, []byte, []byte, error) {
+	items, err := testMergesetItems(metadata)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	lastItem, err := decodeMergesetHexItem(metadata.LastItem, "LastItem")
+	blockItemCounts, err := testMergesetBlockItemCounts(metadata)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if metadata.BlocksCount == 0 {
-		return nil, nil, nil, fmt.Errorf("test mergeset metadata BlocksCount cannot be zero")
+	if len(marshalTypes) > 0 && len(marshalTypes) != len(blockItemCounts) {
+		return nil, nil, nil, fmt.Errorf("test mergeset marshal type count=%d, want %d", len(marshalTypes), len(blockItemCounts))
 	}
 	headers := make([]mergesetBlockHeader, 0, metadata.BlocksCount)
 	var itemsData []byte
 	var lensData []byte
+	itemOffset := 0
+	for i, itemCount := range blockItemCounts {
+		blockItems := items[itemOffset : itemOffset+itemCount]
+		itemOffset += itemCount
+		marshalType := mergesetMarshalTypePlain
+		if len(marshalTypes) > 0 {
+			marshalType = marshalTypes[i]
+		}
+		commonPrefix := []byte(nil)
+		if marshalType == mergesetMarshalTypeZSTD {
+			commonPrefix = testCommonPrefix(blockItems)
+		}
+		blockItemsData, blockLensData, err := encodeTestMergesetBlockPayload(blockItems, commonPrefix, marshalType)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		headers = append(headers, mergesetBlockHeader{
+			CommonPrefix:     commonPrefix,
+			FirstItem:        append([]byte(nil), blockItems[0]...),
+			MarshalType:      marshalType,
+			ItemsCount:       uint32(len(blockItems)),
+			ItemsBlockOffset: uint64(len(itemsData)),
+			LensBlockOffset:  uint64(len(lensData)),
+			ItemsBlockSize:   uint32(len(blockItemsData)),
+			LensBlockSize:    uint32(len(blockLensData)),
+		})
+		itemsData = append(itemsData, blockItemsData...)
+		lensData = append(lensData, blockLensData...)
+	}
+	return headers, itemsData, lensData, nil
+}
+
+func testMergesetItems(metadata mergesetPartMetadata) ([][]byte, error) {
+	firstItem, err := decodeMergesetHexItem(metadata.FirstItem, "FirstItem")
+	if err != nil {
+		return nil, err
+	}
+	lastItem, err := decodeMergesetHexItem(metadata.LastItem, "LastItem")
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Compare(firstItem, lastItem) > 0 {
+		return nil, fmt.Errorf("test mergeset first item must be <= last item")
+	}
+	if metadata.ItemsCount == 0 {
+		return nil, fmt.Errorf("test mergeset metadata ItemsCount cannot be zero")
+	}
+	items := make([][]byte, 0, metadata.ItemsCount)
+	items = append(items, firstItem)
+	for i := uint64(1); i+1 < metadata.ItemsCount; i++ {
+		item := append([]byte(nil), firstItem...)
+		item = binary.BigEndian.AppendUint64(item, i)
+		items = append(items, item)
+	}
+	if metadata.ItemsCount > 1 {
+		items = append(items, lastItem)
+	}
+	for i := 1; i < len(items); i++ {
+		if bytes.Compare(items[i-1], items[i]) >= 0 {
+			return nil, fmt.Errorf("test mergeset generated unsorted item at %d: %x >= %x", i, items[i-1], items[i])
+		}
+	}
+	return items, nil
+}
+
+func testMergesetBlockItemCounts(metadata mergesetPartMetadata) ([]int, error) {
+	if metadata.BlocksCount == 0 {
+		return nil, fmt.Errorf("test mergeset metadata BlocksCount cannot be zero")
+	}
 	baseItems := metadata.ItemsCount / metadata.BlocksCount
 	remainder := metadata.ItemsCount % metadata.BlocksCount
+	counts := make([]int, 0, metadata.BlocksCount)
 	for i := uint64(0); i < metadata.BlocksCount; i++ {
 		itemCount := baseItems
 		if i < remainder {
 			itemCount++
 		}
 		if itemCount == 0 || itemCount > uint64(^uint32(0)) {
-			return nil, nil, nil, fmt.Errorf("test mergeset block item count out of range: %d", itemCount)
+			return nil, fmt.Errorf("test mergeset block item count out of range: %d", itemCount)
 		}
-		blockFirstItem := append([]byte(nil), firstItem...)
-		switch {
-		case metadata.BlocksCount == 1:
-		case i == metadata.BlocksCount-1:
-			blockFirstItem = append(blockFirstItem[:0], lastItem...)
-		case i > 0:
-			blockFirstItem = append(blockFirstItem, byte(i))
-		}
-		headers = append(headers, mergesetBlockHeader{
-			FirstItem:        blockFirstItem,
-			MarshalType:      mergesetMarshalTypePlain,
-			ItemsCount:       uint32(itemCount),
-			ItemsBlockOffset: uint64(len(itemsData)),
-			LensBlockOffset:  uint64(len(lensData)),
-			ItemsBlockSize:   1,
-			LensBlockSize:    1,
-		})
-		itemsData = append(itemsData, byte(i+1))
-		lensData = append(lensData, byte(itemCount))
+		counts = append(counts, int(itemCount))
 	}
-	return headers, itemsData, lensData, nil
+	return counts, nil
+}
+
+func encodeTestMergesetBlockPayload(items [][]byte, commonPrefix []byte, marshalType byte) ([]byte, []byte, error) {
+	for _, item := range items {
+		if !bytes.HasPrefix(item, commonPrefix) {
+			return nil, nil, fmt.Errorf("test item %x does not start with common prefix %x", item, commonPrefix)
+		}
+	}
+	switch marshalType {
+	case mergesetMarshalTypePlain:
+		return encodeTestMergesetPlainBlockPayload(items, commonPrefix)
+	case mergesetMarshalTypeZSTD:
+		return encodeTestMergesetZSTDBlockPayload(items, commonPrefix)
+	default:
+		return nil, nil, fmt.Errorf("unsupported test marshal type %d", marshalType)
+	}
+}
+
+func encodeTestMergesetPlainBlockPayload(items [][]byte, commonPrefix []byte) ([]byte, []byte, error) {
+	cpLen := len(commonPrefix)
+	var itemsData []byte
+	var lensData []byte
+	for _, item := range items[1:] {
+		itemsData = append(itemsData, item[cpLen:]...)
+		lensData = appendTestBigEndianUint64(lensData, uint64(len(item)-cpLen))
+	}
+	return itemsData, lensData, nil
+}
+
+func encodeTestMergesetZSTDBlockPayload(items [][]byte, commonPrefix []byte) ([]byte, []byte, error) {
+	cpLen := len(commonPrefix)
+	firstItem := items[0]
+	var itemsPayload []byte
+	var lensPayload []byte
+	prefixXORs := make([]uint64, 0, len(items)-1)
+	lengthXORs := make([]uint64, 0, len(items)-1)
+	prevItem := firstItem[cpLen:]
+	var prevPrefixLen uint64
+	for _, item := range items[1:] {
+		itemSuffix := item[cpLen:]
+		prefixLen := uint64(commonPrefixLenBytes(prevItem, itemSuffix))
+		itemsPayload = append(itemsPayload, itemSuffix[prefixLen:]...)
+		prefixXORs = append(prefixXORs, prefixLen^prevPrefixLen)
+		prevPrefixLen = prefixLen
+		prevItem = itemSuffix
+	}
+	prevItemLen := uint64(len(firstItem) - cpLen)
+	for _, item := range items[1:] {
+		itemLen := uint64(len(item) - cpLen)
+		lengthXORs = append(lengthXORs, itemLen^prevItemLen)
+		prevItemLen = itemLen
+	}
+	for _, value := range prefixXORs {
+		lensPayload = binary.AppendUvarint(lensPayload, value)
+	}
+	for _, value := range lengthXORs {
+		lensPayload = binary.AppendUvarint(lensPayload, value)
+	}
+	itemsData, err := encodeTestZSTD(itemsPayload)
+	if err != nil {
+		return nil, nil, err
+	}
+	lensData, err := encodeTestZSTD(lensPayload)
+	if err != nil {
+		return nil, nil, err
+	}
+	return itemsData, lensData, nil
+}
+
+func testCommonPrefix(items [][]byte) []byte {
+	if len(items) == 0 {
+		return nil
+	}
+	prefix := append([]byte(nil), items[0]...)
+	for _, item := range items[1:] {
+		prefix = prefix[:commonPrefixLenBytes(prefix, item)]
+	}
+	return prefix
+}
+
+func commonPrefixLenBytes(a, b []byte) int {
+	limit := len(a)
+	if len(b) < limit {
+		limit = len(b)
+	}
+	for i := 0; i < limit; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return limit
 }
 
 func encodeTestMergesetMetaindexRows(rows []mergesetMetaindexRow) ([]byte, error) {
@@ -431,6 +676,15 @@ func encodeTestMergesetIndexBlock(headers []mergesetBlockHeader) ([]byte, error)
 	return encoder.EncodeAll(data, nil), nil
 }
 
+func encodeTestZSTD(data []byte) ([]byte, error) {
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	if err != nil {
+		return nil, err
+	}
+	defer encoder.Close()
+	return encoder.EncodeAll(data, nil), nil
+}
+
 func containsString(values []string, needle string) bool {
 	for _, value := range values {
 		if strings.Contains(value, needle) {
@@ -438,6 +692,14 @@ func containsString(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func bytesOf(value byte, count int) []byte {
+	data := make([]byte, count)
+	for i := range data {
+		data[i] = value
+	}
+	return data
 }
 
 func appendTestBigEndianUint32(dst []byte, value uint32) []byte {
