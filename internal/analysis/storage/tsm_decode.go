@@ -31,6 +31,7 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 
 	matchedKeys := map[string]struct{}{}
 	locationsByKey := map[string][]tsmCursorCandidate{}
+	outputByKey := map[string]map[int64]struct{}{}
 	for i, entry := range entries {
 		typeName := tsmBlockTypeName(entry.Type)
 		selectedKey := tsmQueryKeySelected(entry.Key, keySet)
@@ -41,6 +42,7 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 		locationCandidate := true
 		decoded := false
 		reason := "query_overlap"
+		outputTimestamps := []int64(nil)
 
 		switch {
 		case !selectedKey:
@@ -61,6 +63,8 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			if entry.ValueCountAvailable {
 				summary.BaselineDecodeValues += entry.ValueCount
 			}
+			outputTimestamps = tsmOutputTimestamps(entry, tombstones, options.QueryRange)
+			summary.BaselineOutputValues += len(outputTimestamps)
 			summary.LocationBlocksByType[typeName]++
 			summary.SkippedAfterRangeBlocks++
 			reason = "outside_query_range"
@@ -77,6 +81,10 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 				summary.BaselineDecodeValues += entry.ValueCount
 				summary.OptimizedDecodeValues += entry.ValueCount
 			}
+			outputTimestamps = tsmOutputTimestamps(entry, tombstones, options.QueryRange)
+			summary.BaselineOutputValues += len(outputTimestamps)
+			summary.OptimizedOutputValues += len(outputTimestamps)
+			addTSMOutputTimestamps(outputByKey, entry.Key, outputTimestamps)
 			summary.LocationBlocksByType[typeName]++
 			summary.DecodeBlocksByType[typeName]++
 			decoded = true
@@ -95,6 +103,7 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 				Type:              typeName,
 				SizeBytes:         entry.Size,
 				ValueCount:        entry.ValueCount,
+				OutputValues:      len(outputTimestamps),
 				LocationCandidate: locationCandidate,
 				Decoded:           decoded,
 				Reason:            reason,
@@ -116,12 +125,62 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	summary.SavedDecodeBlocks = summary.LocationBlocks - summary.FilteredDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
+	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
+	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
 	populateTSMCursorWindows(summary, locationsByKey, options.BlockSampleLimit)
 	summary.Recommendations = tsmDecodeRecommendations(summary)
 	return summary
+}
+
+func tsmOutputTimestamps(entry tsmIndexEntry, tombstones []tsmTombstoneEntry, queryRange TimeRange) []int64 {
+	if !queryRange.Set || len(entry.Timestamps) == 0 {
+		return nil
+	}
+	timestamps := make([]int64, 0)
+	for _, timestamp := range entry.Timestamps {
+		if timestamp < queryRange.Min || timestamp > queryRange.Max {
+			continue
+		}
+		if tsmTimestampTombstoned(entry.Key, timestamp, tombstones) {
+			continue
+		}
+		timestamps = append(timestamps, timestamp)
+	}
+	return timestamps
+}
+
+func tsmTimestampTombstoned(key string, timestamp int64, tombstones []tsmTombstoneEntry) bool {
+	for _, tombstone := range tombstones {
+		if tombstone.Key == key && tombstone.Min <= timestamp && tombstone.Max >= timestamp {
+			return true
+		}
+	}
+	return false
+}
+
+func addTSMOutputTimestamps(outputByKey map[string]map[int64]struct{}, key string, timestamps []int64) {
+	if len(timestamps) == 0 {
+		return
+	}
+	values := outputByKey[key]
+	if values == nil {
+		values = map[int64]struct{}{}
+		outputByKey[key] = values
+	}
+	for _, timestamp := range timestamps {
+		values[timestamp] = struct{}{}
+	}
+}
+
+func countTSMOutputTimestamps(outputByKey map[string]map[int64]struct{}) int {
+	total := 0
+	for _, values := range outputByKey {
+		total += len(values)
+	}
+	return total
 }
 
 func populateTSMCursorWindows(summary *DecodePathSummary, locationsByKey map[string][]tsmCursorCandidate, sampleLimit int) {

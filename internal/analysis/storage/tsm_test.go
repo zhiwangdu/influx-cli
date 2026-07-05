@@ -403,24 +403,64 @@ func TestAnalyzeTSMDecodePathDoesNotMergeNonOverlappingBlocks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMDecodePathDeduplicatesOutputTimestamps(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}},
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if got, want := decode.BaselineOutputValues, 4; got != want {
+		t.Fatalf("baseline output values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedOutputValues, 4; got != want {
+		t.Fatalf("optimized output values = %d, want %d", got, want)
+	}
+	if got, want := decode.DeduplicatedOutputValues, 2; got != want {
+		t.Fatalf("deduplicated output values = %d, want %d", got, want)
+	}
+	if got, want := decode.DuplicateOutputValues, 2; got != want {
+		t.Fatalf("duplicate output values = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].OutputValues, 2; got != want {
+		t.Fatalf("first sample output values = %d, want %d", got, want)
+	}
+}
+
 func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "000000001-000000001.tsm")
 	if err := writeTestTSMWithBlocks(path1, []testTSMBlockSpec{
-		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 20, 30}},
-		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 100, maxTime: 120, timestamps: []int64{100, 110, 120}},
-		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 40, timestamps: []int64{20, 30, 40}},
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}},
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 100, maxTime: 120, timestamps: []int64{100, 10, 10}},
+		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	path2 := filepath.Join(dir, "000000002-000000001.tsm")
 	if err := writeTestTSMWithBlocks(path2, []testTSMBlockSpec{
-		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 20, maxTime: 40, timestamps: []int64{20, 30, 40}},
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	queryRange, err := NewTimeRange(25, 25)
+	queryRange, err := NewTimeRange(20, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,6 +508,18 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	if got, want := decode.SavedDecodeValues, 3; got != want {
 		t.Fatalf("saved decode values = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineOutputValues, 4; got != want {
+		t.Fatalf("baseline output values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedOutputValues, 4; got != want {
+		t.Fatalf("optimized output values = %d, want %d", got, want)
+	}
+	if got, want := decode.DeduplicatedOutputValues, 2; got != want {
+		t.Fatalf("deduplicated output values = %d, want %d", got, want)
+	}
+	if got, want := decode.DuplicateOutputValues, 2; got != want {
+		t.Fatalf("duplicate output values = %d, want %d", got, want)
+	}
 	if got, want := decode.SkippedByKeyBlocks, 1; got != want {
 		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
 	}
@@ -497,6 +549,9 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.Samples[0].ValueCount, 3; got != want {
 		t.Fatalf("first sample values = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].OutputValues, 2; got != want {
+		t.Fatalf("first sample output values = %d, want %d", got, want)
 	}
 }
 

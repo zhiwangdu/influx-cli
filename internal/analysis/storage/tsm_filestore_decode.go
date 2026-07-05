@@ -16,10 +16,11 @@ type tsmFileStoreData struct {
 }
 
 type tsmFileStoreLocation struct {
-	path    string
-	entry   tsmIndexEntry
-	decoded bool
-	index   int
+	path       string
+	entry      tsmIndexEntry
+	tombstones []tsmTombstoneEntry
+	decoded    bool
+	index      int
 }
 
 func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*DecodePathSummary, error) {
@@ -85,6 +86,7 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 
 	matchedKeys := map[string]struct{}{}
 	locationsByKey := map[string][]tsmFileStoreLocation{}
+	outputByKey := map[string]map[int64]struct{}{}
 	for _, key := range keys {
 		if _, ok := allKeys[key]; ok {
 			matchedKeys[key] = struct{}{}
@@ -96,11 +98,13 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 		locationsByKey[key] = locations
 		for _, location := range locations {
 			typeName := tsmBlockTypeName(location.entry.Type)
+			outputTimestamps := tsmOutputTimestamps(location.entry, location.tombstones, options.QueryRange)
 			summary.LocationBlocks++
 			summary.BaselineDecodeBytes += int64(location.entry.Size)
 			if location.entry.ValueCountAvailable {
 				summary.BaselineDecodeValues += location.entry.ValueCount
 			}
+			summary.BaselineOutputValues += len(outputTimestamps)
 			summary.LocationBlocksByType[typeName]++
 			if location.decoded {
 				summary.FilteredDecodeBlocks++
@@ -108,6 +112,8 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 				if location.entry.ValueCountAvailable {
 					summary.OptimizedDecodeValues += location.entry.ValueCount
 				}
+				summary.OptimizedOutputValues += len(outputTimestamps)
+				addTSMOutputTimestamps(outputByKey, location.entry.Key, outputTimestamps)
 				summary.DecodeBlocksByType[typeName]++
 			} else {
 				summary.SkippedAfterRangeBlocks++
@@ -125,6 +131,7 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 					Type:              typeName,
 					SizeBytes:         location.entry.Size,
 					ValueCount:        location.entry.ValueCount,
+					OutputValues:      len(outputTimestamps),
 					LocationCandidate: true,
 					Decoded:           location.decoded,
 					Reason:            reason,
@@ -147,6 +154,8 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	summary.SavedDecodeBlocks = summary.LocationBlocks - summary.FilteredDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
+	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
+	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
@@ -229,9 +238,10 @@ func tsmFileStoreLocationsForKey(files []tsmFileStoreData, key string, options O
 				continue
 			}
 			locations = append(locations, tsmFileStoreLocation{
-				path:    file.path,
-				entry:   entry,
-				decoded: options.QueryRange.Overlaps(entry.MinTime, entry.MaxTime),
+				path:       file.path,
+				entry:      entry,
+				tombstones: file.tombstones,
+				decoded:    options.QueryRange.Overlaps(entry.MinTime, entry.MaxTime),
 			})
 		}
 	}
