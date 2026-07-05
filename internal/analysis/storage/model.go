@@ -200,6 +200,9 @@ type DecodePathSummary struct {
 	BaselineDecodeValues         int                       `json:"baseline_decode_values,omitempty"`
 	OptimizedDecodeValues        int                       `json:"optimized_decode_values,omitempty"`
 	SavedDecodeValues            int                       `json:"saved_decode_values,omitempty"`
+	BaselineReadSegments         int                       `json:"baseline_read_segments,omitempty"`
+	OptimizedReadSegments        int                       `json:"optimized_read_segments,omitempty"`
+	SavedReadSegments            int                       `json:"saved_read_segments,omitempty"`
 	BaselineOutputValues         int                       `json:"baseline_output_values,omitempty"`
 	OptimizedOutputValues        int                       `json:"optimized_output_values,omitempty"`
 	DeduplicatedOutputValues     int                       `json:"deduplicated_output_values,omitempty"`
@@ -236,12 +239,15 @@ type DecodePathSummary struct {
 type DecodePathBlockDecision struct {
 	Path                 string `json:"path,omitempty"`
 	Key                  string `json:"key,omitempty"`
+	SeriesID             uint64 `json:"series_id,omitempty"`
 	MinTime              int64  `json:"min_time"`
 	MaxTime              int64  `json:"max_time"`
 	Type                 string `json:"type"`
 	SizeBytes            uint32 `json:"size_bytes,omitempty"`
 	ValueCount           int    `json:"value_count,omitempty"`
+	SegmentCount         int    `json:"segment_count,omitempty"`
 	OutputValues         int    `json:"output_values,omitempty"`
+	OutputSegments       int    `json:"output_segments,omitempty"`
 	ValueOutputPoints    int    `json:"value_output_points,omitempty"`
 	ValueOutputAvailable bool   `json:"value_output_available,omitempty"`
 	LocationCandidate    bool   `json:"location_candidate,omitempty"`

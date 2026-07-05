@@ -200,6 +200,7 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 	} else {
 		populateTSSPMetaIndexReports(&report, metaIndexes, options)
 	}
+	report.DecodePath = buildTSSPDecodePathSummary(metaIndexes, chunkMetas, options)
 	if !expanded && options.QueryRange.Set {
 		report.Extra["query_overlap_precision"] = "meta-index"
 		report.Notices = append(report.Notices, "TSSP query overlap is estimated at meta-index granularity; individual chunk overlap requires chunk metadata expansion")

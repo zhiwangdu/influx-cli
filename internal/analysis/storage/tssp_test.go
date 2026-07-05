@@ -69,6 +69,58 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	if got, want := file.Blocks[1].QueryOverlaps, true; got != want {
 		t.Fatalf("second block query overlap = %t, want %t", got, want)
 	}
+	if file.DecodePath == nil {
+		t.Fatal("expected TSSP decode path summary")
+	}
+	decode := file.DecodePath
+	if got, want := decode.Mode, "tssp-location-cursor-ascending"; got != want {
+		t.Fatalf("decode mode = %q, want %q", got, want)
+	}
+	if got, want := decode.LocationBlocks, 3; got != want {
+		t.Fatalf("decode location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 3; got != want {
+		t.Fatalf("baseline decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
+		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBlocks, 2; got != want {
+		t.Fatalf("saved decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineReadSegments, 3; got != want {
+		t.Fatalf("baseline read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadSegments, 1; got != want {
+		t.Fatalf("optimized read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadSegments, 2; got != want {
+		t.Fatalf("saved read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeBytes, int64(288); got != want {
+		t.Fatalf("baseline decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBytes, int64(96); got != want {
+		t.Fatalf("optimized decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBytes, int64(192); got != want {
+		t.Fatalf("saved decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedBeforeSeekBlocks, 1; got != want {
+		t.Fatalf("skipped before seek blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedAfterRangeBlocks, 3; got != want {
+		t.Fatalf("skipped after range blocks = %d, want %d", got, want)
+	}
+	if got, want := len(decode.Samples), 3; got != want {
+		t.Fatalf("decode samples = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[1].OutputSegments, 1; got != want {
+		t.Fatalf("second decode sample output segments = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[1].Reason, "segment_overlap"; got != want {
+		t.Fatalf("second decode sample reason = %q, want %q", got, want)
+	}
 	if len(file.Notices) != 0 {
 		t.Fatalf("notices = %v, want none", file.Notices)
 	}
