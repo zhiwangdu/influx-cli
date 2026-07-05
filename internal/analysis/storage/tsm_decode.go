@@ -32,8 +32,6 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	matchedKeys := map[string]struct{}{}
 	locationsByKey := map[string][]tsmCursorCandidate{}
 	outputByKey := map[string]map[int64]struct{}{}
-	baselinePoints := map[tsmOutputPointKey]tsmPoint{}
-	optimizedPoints := map[tsmOutputPointKey]tsmPoint{}
 	for i, entry := range entries {
 		typeName := tsmBlockTypeName(entry.Type)
 		selectedKey := tsmQueryKeySelected(entry.Key, keySet)
@@ -72,7 +70,6 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			outputPoints, valueOutputAvailable = tsmOutputPoints(entry, tombstones, options.QueryRange)
 			if valueOutputAvailable {
 				summary.BaselineValueOutputPoints += len(outputPoints)
-				addTSMOutputPoints(baselinePoints, entry.Key, outputPoints)
 			}
 			summary.LocationBlocksByType[typeName]++
 			summary.SkippedAfterRangeBlocks++
@@ -98,8 +95,6 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			if valueOutputAvailable {
 				summary.BaselineValueOutputPoints += len(outputPoints)
 				summary.OptimizedValueOutputPoints += len(outputPoints)
-				addTSMOutputPoints(baselinePoints, entry.Key, outputPoints)
-				addTSMOutputPoints(optimizedPoints, entry.Key, outputPoints)
 			} else {
 				summary.ValueOutputUnavailableBlocks++
 			}
@@ -147,7 +142,9 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
-	summarizeTSMCursorOutput(summary, baselinePoints, optimizedPoints, options.BlockSampleLimit)
+	baselineExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, false)
+	optimizedExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, true)
+	summarizeTSMCursorOutput(summary, baselineExecution, optimizedExecution, options.BlockSampleLimit)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
@@ -215,10 +212,12 @@ func addTSMOutputPoints(output map[tsmOutputPointKey]tsmPoint, key string, point
 	}
 }
 
-func summarizeTSMCursorOutput(summary *DecodePathSummary, baseline, optimized map[tsmOutputPointKey]tsmPoint, sampleLimit int) {
-	summary.BaselineCursorOutputPoints = len(baseline)
-	summary.OptimizedCursorOutputPoints = len(optimized)
-	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches, summary.CursorOutputSamples = compareTSMOutputPoints(baseline, optimized, sampleLimit)
+func summarizeTSMCursorOutput(summary *DecodePathSummary, baseline, optimized tsmCursorExecution, sampleLimit int) {
+	summary.BaselineCursorOutputPoints = len(baseline.Points)
+	summary.OptimizedCursorOutputPoints = len(optimized.Points)
+	summary.BaselineCursorReadCalls = baseline.ReadCalls
+	summary.OptimizedCursorReadCalls = optimized.ReadCalls
+	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches, summary.CursorOutputSamples = compareTSMOutputPoints(baseline.Points, optimized.Points, sampleLimit)
 }
 
 func compareTSMOutputPoints(baseline, optimized map[tsmOutputPointKey]tsmPoint, sampleLimit int) (int, int, []DecodePathCursorOutput) {

@@ -559,6 +559,12 @@ func TestAnalyzeTSMDecodePathComparesFloatValueOutput(t *testing.T) {
 	if got, want := decode.OptimizedCursorOutputPoints, 2; got != want {
 		t.Fatalf("optimized cursor output points = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineCursorReadCalls, 1; got != want {
+		t.Fatalf("baseline cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorReadCalls, 1; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
+	}
 	if got, want := len(decode.CursorOutputSamples), 2; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
 	}
@@ -764,6 +770,12 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.OptimizedCursorOutputPoints, 2; got != want {
 		t.Fatalf("optimized cursor output points = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineCursorReadCalls, 2; got != want {
+		t.Fatalf("baseline cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorReadCalls, 1; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
 	}
 	if got, want := len(decode.CursorOutputSamples), 2; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)

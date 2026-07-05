@@ -87,8 +87,6 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	matchedKeys := map[string]struct{}{}
 	locationsByKey := map[string][]tsmFileStoreLocation{}
 	outputByKey := map[string]map[int64]struct{}{}
-	baselinePoints := map[tsmOutputPointKey]tsmPoint{}
-	optimizedPoints := map[tsmOutputPointKey]tsmPoint{}
 	for _, key := range keys {
 		if _, ok := allKeys[key]; ok {
 			matchedKeys[key] = struct{}{}
@@ -110,7 +108,6 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 			summary.BaselineOutputValues += len(outputTimestamps)
 			if valueOutputAvailable {
 				summary.BaselineValueOutputPoints += len(outputPoints)
-				addTSMOutputPoints(baselinePoints, location.entry.Key, outputPoints)
 			}
 			summary.LocationBlocksByType[typeName]++
 			if location.decoded {
@@ -123,7 +120,6 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 				addTSMOutputTimestamps(outputByKey, location.entry.Key, outputTimestamps)
 				if valueOutputAvailable {
 					summary.OptimizedValueOutputPoints += len(outputPoints)
-					addTSMOutputPoints(optimizedPoints, location.entry.Key, outputPoints)
 				} else {
 					summary.ValueOutputUnavailableBlocks++
 				}
@@ -171,7 +167,9 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
-	summarizeTSMCursorOutput(summary, baselinePoints, optimizedPoints, options.BlockSampleLimit)
+	baselineExecution := executeTSMFileStoreCursorOutputs(locationsByKey, options.QueryRange, false)
+	optimizedExecution := executeTSMFileStoreCursorOutputs(locationsByKey, options.QueryRange, true)
+	summarizeTSMCursorOutput(summary, baselineExecution, optimizedExecution, options.BlockSampleLimit)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}

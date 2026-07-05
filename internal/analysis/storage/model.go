@@ -211,6 +211,8 @@ type DecodePathSummary struct {
 	ValueOutputUnavailableBlocks int                       `json:"value_output_unavailable_blocks,omitempty"`
 	BaselineCursorOutputPoints   int                       `json:"baseline_cursor_output_points,omitempty"`
 	OptimizedCursorOutputPoints  int                       `json:"optimized_cursor_output_points,omitempty"`
+	BaselineCursorReadCalls      int                       `json:"baseline_cursor_read_calls,omitempty"`
+	OptimizedCursorReadCalls     int                       `json:"optimized_cursor_read_calls,omitempty"`
 	LocationBlocks               int                       `json:"location_blocks,omitempty"`
 	FilteredDecodeBlocks         int                       `json:"filtered_decode_blocks,omitempty"`
 	SavedDecodeBlocks            int                       `json:"saved_decode_blocks,omitempty"`
