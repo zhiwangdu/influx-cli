@@ -634,6 +634,14 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 				}
 				info.ValueKnown = true
 			}
+		} else if payload[0] == 33 {
+			if values, ok := decodeTSSPBooleanFullBitpackValues(payload[5:], info.Rows); ok {
+				info.Values = values
+				if len(values) > 0 {
+					info.Value = values[0]
+				}
+				info.ValueKnown = true
+			}
 		}
 	default:
 		if !validTSSPRegularDataBlockHeader(payload) {
@@ -689,6 +697,30 @@ func decodeTSSPIntegerFullUncompressedValues(encoded []byte, rows int) ([]string
 	raw := encoded[5 : 5+rawLen]
 	for offset := 0; offset < len(raw); offset += 8 {
 		values = append(values, strconv.FormatInt(decodeGeminiInt64(raw[offset:offset+8]), 10))
+	}
+	return values, true
+}
+
+func decodeTSSPBooleanFullBitpackValues(encoded []byte, rows int) ([]string, bool) {
+	if rows < 0 || len(encoded) < 5 || encoded[0]>>4 != 1 {
+		return nil, false
+	}
+	count := int(binary.BigEndian.Uint32(encoded[1:5]))
+	if count != rows {
+		return nil, false
+	}
+	bitBytes := (count + 7) / 8
+	if len(encoded)-5 < bitBytes {
+		return nil, false
+	}
+	values := make([]string, count)
+	bits := encoded[5 : 5+bitBytes]
+	for i := 0; i < count; i++ {
+		if bits[i/8]&(0x80>>uint(i%8)) != 0 {
+			values[i] = strconv.FormatBool(true)
+		} else {
+			values[i] = strconv.FormatBool(false)
+		}
 	}
 	return values, true
 }
