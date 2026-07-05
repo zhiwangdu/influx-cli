@@ -7,11 +7,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 const (
 	tsspDetachedMetaIndexFileName   = "segment.idx"
+	tsspDetachedChunkMetaFileName   = "segment.meta"
 	tsspDetachedMetaIndexHeaderSize = tsspHeaderSize
 	// openGemini MetaIndex.marshalDetached stores id, minTime, maxTime,
 	// offset, and size; Count is only present in attached meta-index records.
@@ -64,14 +66,15 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 		},
 		QueryOverlapsFile: len(metaIndexes) > 0 && options.QueryRange.Overlaps(minTime, maxTime),
 		Extra: map[string]string{
-			"version":       fmt.Sprint(version),
-			"layout":        "detached",
-			"sidecar":       tsspDetachedMetaIndexFileName,
-			"header_size":   fmt.Sprint(tsspDetachedMetaIndexHeaderSize),
-			"record_size":   fmt.Sprint(tsspDetachedMetaIndexRecordSize),
-			"item_size":     fmt.Sprint(tsspDetachedMetaIndexItemSize),
-			"count_stored":  "false",
-			"crc_algorithm": "ieee",
+			"version":             fmt.Sprint(version),
+			"layout":              "detached",
+			"sidecar":             tsspDetachedMetaIndexFileName,
+			"header_size":         fmt.Sprint(tsspDetachedMetaIndexHeaderSize),
+			"record_size":         fmt.Sprint(tsspDetachedMetaIndexRecordSize),
+			"item_size":           fmt.Sprint(tsspDetachedMetaIndexItemSize),
+			"count_stored":        "false",
+			"crc_algorithm":       "ieee",
+			"chunk_meta_expanded": "false",
 		},
 	}
 	for _, meta := range metaIndexes {
@@ -80,7 +83,25 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 		}
 		report.KeySamples = append(report.KeySamples, fmt.Sprintf("meta-index-id:%d", meta.ID))
 	}
-	populateTSSPDetachedMetaIndexReports(&report, metaIndexes, options)
+
+	chunkMetas, expanded, err := readTSSPDetachedChunkMetas(filepath.Dir(path), metaIndexes)
+	if err != nil {
+		report.Notices = append(report.Notices, fmt.Sprintf("detached chunk metadata expansion unavailable: %v", err))
+		expanded = false
+	}
+	if expanded {
+		report.BlockCount = len(chunkMetas)
+		report.BlocksByType["detached-chunk-meta"] = len(chunkMetas)
+		report.Extra["chunk_meta_expanded"] = "true"
+		report.Extra["chunk_meta_file"] = tsspDetachedChunkMetaFileName
+		report.Extra["chunk_meta_decoded"] = fmt.Sprint(len(chunkMetas))
+		if options.QueryRange.Set {
+			report.Extra["query_overlap_precision"] = "detached-chunk-meta"
+		}
+		populateTSSPDetachedChunkReports(&report, chunkMetas, options)
+	} else {
+		populateTSSPDetachedMetaIndexReports(&report, metaIndexes, options)
+	}
 	report.DecodePath = buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes, options)
 	return report, nil
 }
@@ -156,6 +177,102 @@ func populateTSSPDetachedMetaIndexReports(report *FileReport, metaIndexes []tssp
 				Type:          "detached-meta-index",
 				Offset:        meta.Offset,
 				SizeBytes:     meta.Size,
+				QueryOverlaps: overlaps,
+			})
+		}
+	}
+}
+
+func readTSSPDetachedChunkMetas(dir string, metaIndexes []tsspMetaIndex) ([]tsspChunkMeta, bool, error) {
+	path := filepath.Join(dir, tsspDetachedChunkMetaFileName)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	if info.Size() < tsspHeaderSize {
+		return nil, true, fmt.Errorf("file too small for detached TSSP chunk metadata header")
+	}
+	header := make([]byte, tsspHeaderSize)
+	if _, err := io.ReadFull(f, header); err != nil {
+		return nil, true, err
+	}
+	if string(header[:len(tsspMagic)]) != tsspMagic {
+		return nil, true, fmt.Errorf("invalid detached TSSP chunk metadata magic")
+	}
+
+	chunks := []tsspChunkMeta{}
+	for i, meta := range metaIndexes {
+		metas, err := readTSSPDetachedChunkMetaRange(f, info.Size(), meta)
+		if err != nil {
+			return nil, true, fmt.Errorf("meta-index %d id %d: %w", i, meta.ID, err)
+		}
+		chunks = append(chunks, metas...)
+	}
+	sort.SliceStable(chunks, func(i, j int) bool {
+		if chunks[i].Offset != chunks[j].Offset {
+			return chunks[i].Offset < chunks[j].Offset
+		}
+		return chunks[i].SID < chunks[j].SID
+	})
+	return chunks, true, nil
+}
+
+func readTSSPDetachedChunkMetaRange(f *os.File, fileSize int64, meta tsspMetaIndex) ([]tsspChunkMeta, error) {
+	if meta.Size == 0 {
+		return nil, nil
+	}
+	size := int64(meta.Size)
+	if meta.Offset < tsspHeaderSize || meta.Offset > fileSize || size > fileSize-meta.Offset {
+		return nil, fmt.Errorf("invalid detached chunk metadata range offset=%d size=%d", meta.Offset, meta.Size)
+	}
+	buf := make([]byte, int(meta.Size))
+	if _, err := f.ReadAt(buf, meta.Offset); err != nil {
+		return nil, err
+	}
+	if len(buf) < crc32.Size+tsspChunkMetaFixedLen {
+		return nil, fmt.Errorf("short detached chunk metadata record")
+	}
+	wantCRC := binary.BigEndian.Uint32(buf[:crc32.Size])
+	payload := buf[crc32.Size:]
+	if gotCRC := crc32.ChecksumIEEE(payload); gotCRC != wantCRC {
+		return nil, fmt.Errorf("detached chunk metadata crc mismatch")
+	}
+	chunk, consumed, err := parseTSSPChunkMetaBlockWithConsumed(payload)
+	if err != nil {
+		return nil, err
+	}
+	if consumed <= 0 || consumed > len(payload) {
+		return nil, fmt.Errorf("invalid detached chunk metadata record size %d", consumed)
+	}
+	return []tsspChunkMeta{chunk}, nil
+}
+
+func populateTSSPDetachedChunkReports(report *FileReport, chunks []tsspChunkMeta, options Options) {
+	idSet := queryMetaIndexIDSet(options.QueryMetaIndexIDs)
+	for i, chunk := range chunks {
+		overlaps := tsspQueryMetaIndexSelected(chunk.SID, idSet) && chunk.queryOverlaps(options.QueryRange)
+		if overlaps {
+			report.QueryOverlapBlocks++
+		}
+		if i < options.BlockSampleLimit {
+			minTime, maxTime := chunk.minMaxTime()
+			report.Blocks = append(report.Blocks, BlockReport{
+				MetaIndexID:   chunk.SID,
+				MinTime:       minTime,
+				MaxTime:       maxTime,
+				Type:          "detached-chunk-meta",
+				Offset:        chunk.Offset,
+				SizeBytes:     chunk.Size,
+				ColumnCount:   int(chunk.ColumnCount),
+				SegmentCount:  int(chunk.SegmentCount),
 				QueryOverlaps: overlaps,
 			})
 		}

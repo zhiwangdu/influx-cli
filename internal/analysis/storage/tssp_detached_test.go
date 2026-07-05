@@ -264,6 +264,116 @@ func TestAnalyzeTSSPDetachedMetaIndexChunkMetaReadBatches(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 10, minTime: 100, maxTime: 150, offset: 1000, size: 40},
+		{sid: 11, minTime: 200, maxTime: 260, offset: 2000, size: 80},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(210, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["chunk_meta_expanded"], "true"; got != want {
+		t.Fatalf("chunk metadata expanded = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["query_overlap_precision"], "detached-chunk-meta"; got != want {
+		t.Fatalf("query overlap precision = %q, want %q", got, want)
+	}
+	if got, want := file.BlockCount, 2; got != want {
+		t.Fatalf("block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["detached-chunk-meta"], 2; got != want {
+		t.Fatalf("detached chunk metadata blocks = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["detached-meta-index"], 2; got != want {
+		t.Fatalf("detached meta-index blocks = %d, want %d", got, want)
+	}
+	if got, want := file.QueryOverlapBlocks, 1; got != want {
+		t.Fatalf("query overlap blocks = %d, want %d", got, want)
+	}
+	if got, want := len(file.Blocks), 2; got != want {
+		t.Fatalf("block samples = %d, want %d", got, want)
+	}
+	if got, want := file.Blocks[1].Type, "detached-chunk-meta"; got != want {
+		t.Fatalf("second block type = %q, want %q", got, want)
+	}
+	if got, want := file.Blocks[1].MetaIndexID, uint64(11); got != want {
+		t.Fatalf("second block id = %d, want %d", got, want)
+	}
+	if got, want := file.Blocks[1].ColumnCount, 2; got != want {
+		t.Fatalf("second block columns = %d, want %d", got, want)
+	}
+	if got, want := file.Blocks[1].SegmentCount, 1; got != want {
+		t.Fatalf("second block segments = %d, want %d", got, want)
+	}
+	if !file.Blocks[1].QueryOverlaps {
+		t.Fatal("expected second detached chunk metadata block to overlap query")
+	}
+}
+
+func TestAnalyzeTSSPDetachedMetaIndexBadChunkMetaSidecarNotice(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 10, minTime: 100, maxTime: 150, offset: 1000, size: 40},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, tsspDetachedChunkMetaFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 0xff
+	if err := os.WriteFile(filepath.Join(dir, tsspDetachedChunkMetaFileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(100, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["chunk_meta_expanded"], "false"; got != want {
+		t.Fatalf("chunk metadata expanded = %q, want %q", got, want)
+	}
+	if got, want := file.Blocks[0].Type, "detached-meta-index"; got != want {
+		t.Fatalf("fallback block type = %q, want %q", got, want)
+	}
+	if !containsString(report.Notices, "detached chunk metadata expansion unavailable") {
+		t.Fatalf("notices = %v, want detached chunk metadata expansion notice", report.Notices)
+	}
+}
+
 func TestAnalyzeDiscoversTSSPDetachedMetaIndexInDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, tsspDetachedMetaIndexFileName)
@@ -387,4 +497,32 @@ func writeTestTSSPDetachedMetaIndex(path string, items []tsspMetaIndex) error {
 		buf.Write(payloadBytes)
 	}
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPDetachedChunkMeta(path string, chunks []testTSSPChunkSpec) ([]tsspMetaIndex, error) {
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+	metaIndexes := make([]tsspMetaIndex, 0, len(chunks))
+	for _, chunk := range chunks {
+		offset := int64(buf.Len())
+		var payload bytes.Buffer
+		writeTestTSSPChunkMeta(&payload, chunk)
+		// Detached readers validate CRC over the full payload, then let chunk
+		// metadata unmarshal ignore any future extension bytes.
+		payload.Write([]byte{0xa5, 0x5a})
+		payloadBytes := payload.Bytes()
+		var crc [4]byte
+		binary.BigEndian.PutUint32(crc[:], crc32.ChecksumIEEE(payloadBytes))
+		buf.Write(crc[:])
+		buf.Write(payloadBytes)
+		metaIndexes = append(metaIndexes, tsspMetaIndex{
+			ID:      chunk.sid,
+			MinTime: chunk.minTime,
+			MaxTime: chunk.maxTime,
+			Offset:  offset,
+			Size:    uint32(len(crc) + len(payloadBytes)),
+		})
+	}
+	return metaIndexes, os.WriteFile(path, buf.Bytes(), 0o600)
 }

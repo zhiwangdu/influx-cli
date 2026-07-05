@@ -461,9 +461,14 @@ func parseTSSPChunkMetaBlockForMode(block []byte, mode uint8, header []string) (
 }
 
 func parseTSSPChunkMetaBlock(block []byte) (tsspChunkMeta, error) {
+	chunk, _, err := parseTSSPChunkMetaBlockWithConsumed(block)
+	return chunk, err
+}
+
+func parseTSSPChunkMetaBlockWithConsumed(block []byte) (tsspChunkMeta, int, error) {
 	var chunk tsspChunkMeta
 	if len(block) < tsspChunkMetaFixedLen {
-		return chunk, fmt.Errorf("short chunk metadata header")
+		return chunk, 0, fmt.Errorf("short chunk metadata header")
 	}
 	offset := 0
 	chunk.SID = binary.BigEndian.Uint64(block[offset : offset+8])
@@ -478,14 +483,14 @@ func parseTSSPChunkMetaBlock(block []byte) (tsspChunkMeta, error) {
 	offset += 4
 
 	if chunk.SegmentCount == 0 {
-		return chunk, fmt.Errorf("chunk metadata has zero segments")
+		return chunk, 0, fmt.Errorf("chunk metadata has zero segments")
 	}
 	if chunk.ColumnCount == 0 {
-		return chunk, fmt.Errorf("chunk metadata has zero columns")
+		return chunk, 0, fmt.Errorf("chunk metadata has zero columns")
 	}
 	timeRangeBytes := int64(chunk.SegmentCount) * tsspSegmentRangeLen
 	if int64(len(block)-offset) < timeRangeBytes {
-		return chunk, fmt.Errorf("short chunk time ranges")
+		return chunk, 0, fmt.Errorf("short chunk time ranges")
 	}
 	chunk.TimeRanges = make([]tsspTimeRange, int(chunk.SegmentCount))
 	for i := range chunk.TimeRanges {
@@ -500,21 +505,21 @@ func parseTSSPChunkMetaBlock(block []byte) (tsspChunkMeta, error) {
 	// This sanity bound protects allocations. parseTSSPColumnMeta still owns
 	// exact validation because names and pre-aggregation payloads are variable.
 	if int64(chunk.ColumnCount) > int64(len(block)-offset)/minColumnBytes {
-		return chunk, fmt.Errorf("short chunk columns")
+		return chunk, 0, fmt.Errorf("short chunk columns")
 	}
 	chunk.Columns = make([]tsspColumnMeta, int(chunk.ColumnCount))
 	rest := block[offset:]
 	for i := range chunk.Columns {
 		column, remaining, err := parseTSSPColumnMeta(rest, chunk.SegmentCount)
 		if err != nil {
-			return chunk, fmt.Errorf("column %d: %w", i, err)
+			return chunk, 0, fmt.Errorf("column %d: %w", i, err)
 		}
 		chunk.Columns[i] = column
 		rest = remaining
 	}
 	// openGemini ignores the unmarshal remainder; match that tolerance for
 	// padding or future extension bytes after the known column metadata.
-	return chunk, nil
+	return chunk, len(block) - len(rest), nil
 }
 
 func parseTSSPSelfCompressedChunkMetaBlock(block []byte, header []string) (tsspChunkMeta, error) {
