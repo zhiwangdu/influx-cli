@@ -529,6 +529,8 @@ TSM 窄范围查询诊断所需字段：
 | overlap with query range | 是否应进入 cursor |
 | decoded blocks | 实际解码数量 |
 
+openGemini TSSP analyzer 先覆盖 attached 文件 trailer/meta-index/chunk metadata，以及 detached `segment.idx` meta-index sidecar。detached sidecar 只做本地结构解析、CRC 校验和 query-range candidate filtering；完整 detached data/chunk reader 执行路径仍属于后续 Phase 5。
+
 ## 12. Plugin System
 
 插件系统不进入 MVP，但内部接口按插件化方向设计。

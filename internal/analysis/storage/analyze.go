@@ -26,6 +26,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	}
 	options.QueryKeys = normalizeQueryKeys(options.QueryKeys)
 	options.QuerySeriesIDs = normalizeQuerySeriesIDs(options.QuerySeriesIDs)
+	options.QueryMetaIndexIDs = normalizeQuerySeriesIDs(options.QueryMetaIndexIDs)
 	options.QueryMeasurements = normalizeQueryKeys(options.QueryMeasurements)
 	options.QueryTags = normalizeTagFilters(options.QueryTags)
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set {
@@ -33,6 +34,9 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	}
 	if len(options.QuerySeriesIDs) > 0 && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query series id filter requires query range")
+	}
+	if len(options.QueryMetaIndexIDs) > 0 && !options.QueryRange.Set {
+		return Report{}, fmt.Errorf("query meta-index id filter requires query range")
 	}
 
 	files, err := expandPaths(ctx, paths, options)
@@ -240,6 +244,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeTSM(path, info, options)
 	case FormatTSSP:
 		return analyzeTSSP(path, info, options)
+	case FormatTSSPDetachedIndex:
+		return analyzeTSSPDetachedMetaIndex(path, info, options)
 	case FormatTSI:
 		return analyzeTSI(path, info, options)
 	default:
@@ -263,6 +269,9 @@ func detectFormat(path string) (Format, error) {
 		return FormatTSM, nil
 	}
 	if n >= len(tsspMagic) && string(header[:len(tsspMagic)]) == tsspMagic {
+		if isTSSPDetachedMetaIndexPath(path) {
+			return FormatTSSPDetachedIndex, nil
+		}
 		return FormatTSSP, nil
 	}
 	if n >= len(tsiMagic) && string(header[:len(tsiMagic)]) == tsiMagic {
@@ -281,10 +290,12 @@ func isStorageCandidate(path string, format Format) bool {
 		return strings.HasSuffix(lower, ".tsm")
 	case FormatTSSP:
 		return strings.Contains(lower, ".tssp")
+	case FormatTSSPDetachedIndex:
+		return isTSSPDetachedMetaIndexPath(path)
 	case FormatTSI:
 		return strings.HasSuffix(lower, ".tsi")
 	default:
-		return strings.HasSuffix(lower, ".tsm") || strings.Contains(lower, ".tssp") || strings.HasSuffix(lower, ".tsi")
+		return strings.HasSuffix(lower, ".tsm") || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi")
 	}
 }
 

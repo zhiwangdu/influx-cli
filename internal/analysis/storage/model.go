@@ -11,10 +11,11 @@ import (
 type Format string
 
 const (
-	FormatAuto Format = "auto"
-	FormatTSM  Format = "tsm"
-	FormatTSSP Format = "tssp"
-	FormatTSI  Format = "tsi"
+	FormatAuto              Format = "auto"
+	FormatTSM               Format = "tsm"
+	FormatTSSP              Format = "tssp"
+	FormatTSSPDetachedIndex Format = "tssp-metaindex"
+	FormatTSI               Format = "tsi"
 )
 
 type Options struct {
@@ -25,6 +26,7 @@ type Options struct {
 	QueryRange        TimeRange
 	QueryKeys         []string
 	QuerySeriesIDs    []uint64
+	QueryMetaIndexIDs []uint64
 	QueryMeasurements []string
 	QueryTags         []TagFilter
 	CursorDescending  bool
@@ -91,6 +93,7 @@ type FileReport struct {
 	DecodePath         *DecodePathSummary `json:"decode_path,omitempty"`
 	Tombstones         TombstoneSummary   `json:"tombstones,omitempty"`
 	SeriesID           SeriesIDSummary    `json:"series_id,omitempty"`
+	MetaIndexID        SeriesIDSummary    `json:"meta_index_id,omitempty"`
 	Index              *IndexSummary      `json:"index,omitempty"`
 	Extra              map[string]string  `json:"extra,omitempty"`
 	Notices            []string           `json:"notices,omitempty"`
@@ -196,6 +199,9 @@ type DecodePathSummary struct {
 	MissingKeys                  []string                  `json:"missing_keys,omitempty"`
 	MatchedSeriesIDs             []uint64                  `json:"matched_series_ids,omitempty"`
 	MissingSeriesIDs             []uint64                  `json:"missing_series_ids,omitempty"`
+	QueryMetaIndexIDs            []uint64                  `json:"query_meta_index_ids,omitempty"`
+	MatchedMetaIndexIDs          []uint64                  `json:"matched_meta_index_ids,omitempty"`
+	MissingMetaIndexIDs          []uint64                  `json:"missing_meta_index_ids,omitempty"`
 	KeyFilterApplied             bool                      `json:"key_filter_applied,omitempty"`
 	CursorSeekTime               int64                     `json:"cursor_seek_time,omitempty"`
 	BaselineDecodeBlocks         int                       `json:"baseline_decode_blocks,omitempty"`
@@ -252,6 +258,7 @@ type DecodePathBlockDecision struct {
 	Path                  string                  `json:"path,omitempty"`
 	Key                   string                  `json:"key,omitempty"`
 	SeriesID              uint64                  `json:"series_id,omitempty"`
+	MetaIndexID           uint64                  `json:"meta_index_id,omitempty"`
 	MinTime               int64                   `json:"min_time"`
 	MaxTime               int64                   `json:"max_time"`
 	Type                  string                  `json:"type"`
@@ -304,6 +311,7 @@ type DecodePathCursorOutput struct {
 type BlockReport struct {
 	Key             string `json:"key,omitempty"`
 	SeriesID        uint64 `json:"series_id,omitempty"`
+	MetaIndexID     uint64 `json:"meta_index_id,omitempty"`
 	MinTime         int64  `json:"min_time"`
 	MaxTime         int64  `json:"max_time"`
 	Type            string `json:"type"`

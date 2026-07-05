@@ -105,6 +105,19 @@ func TestParseStorageSeriesIDsRejectsMalformedValues(t *testing.T) {
 	}
 }
 
+func TestParseStorageMetaIndexIDs(t *testing.T) {
+	got, err := parseStorageMetaIndexIDs([]string{" 9 ", "", "42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != 9 || got[1] != 42 {
+		t.Fatalf("meta-index ids = %v, want [9 42]", got)
+	}
+	if _, err := parseStorageMetaIndexIDs([]string{"abc"}); err == nil || !strings.Contains(err.Error(), "parse --meta-index-id") {
+		t.Fatalf("error = %v, want meta-index flag guidance", err)
+	}
+}
+
 func TestParseStorageCursorDescending(t *testing.T) {
 	for _, value := range []string{"", "asc", "ascending"} {
 		got, err := parseStorageCursorDescending(value)
@@ -144,5 +157,14 @@ func TestStorageAnalyzeSeriesIDRequiresRange(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--series-id requires --from and --to") {
 		t.Fatalf("error = %v, want series id range requirement", err)
+	}
+}
+
+func TestStorageAnalyzeMetaIndexIDRequiresRange(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--meta-index-id", "9", "missing.tssp"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--meta-index-id requires --from and --to") {
+		t.Fatalf("error = %v, want meta-index id range requirement", err)
 	}
 }

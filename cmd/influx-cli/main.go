@@ -190,6 +190,7 @@ type storageAnalyzeFlags struct {
 	to           string
 	keys         []string
 	seriesIDs    []string
+	metaIndexIDs []string
 	measurements []string
 	tags         []string
 	cursorOrder  string
@@ -227,6 +228,13 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if len(seriesIDs) > 0 && !queryRange.Set {
 				return fmt.Errorf("--series-id requires --from and --to because decode-path planning needs a query range")
 			}
+			metaIndexIDs, err := parseStorageMetaIndexIDs(analyzeFlags.metaIndexIDs)
+			if err != nil {
+				return err
+			}
+			if len(metaIndexIDs) > 0 && !queryRange.Set {
+				return fmt.Errorf("--meta-index-id requires --from and --to because decode-path planning needs a query range")
+			}
 			tagFilters, err := parseStorageTagFilters(analyzeFlags.tags)
 			if err != nil {
 				return err
@@ -243,6 +251,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				QueryRange:        queryRange,
 				QueryKeys:         analyzeFlags.keys,
 				QuerySeriesIDs:    seriesIDs,
+				QueryMetaIndexIDs: metaIndexIDs,
 				QueryMeasurements: analyzeFlags.measurements,
 				QueryTags:         tagFilters,
 				CursorDescending:  cursorDescending,
@@ -290,12 +299,13 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, tssp, tsi")
+	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, tssp, tssp-metaindex, tsi")
 	analyzeCommand.Flags().BoolVar(&analyzeFlags.recursive, "recursive", false, "walk directories recursively")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.keys, "key", nil, "TSM index key to include in query decode-path planning; repeat for multiple keys")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "openGemini TSSP series ID to include in query decode-path planning; repeat for multiple IDs")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.cursorOrder, "cursor-order", "asc", "TSM/openGemini TSSP cursor order for decode-path planning: asc or desc")
@@ -407,6 +417,14 @@ func parseStorageTagFilters(values []string) ([]storage.TagFilter, error) {
 }
 
 func parseStorageSeriesIDs(values []string) ([]uint64, error) {
+	return parseStorageUint64Filter("--series-id", values)
+}
+
+func parseStorageMetaIndexIDs(values []string) ([]uint64, error) {
+	return parseStorageUint64Filter("--meta-index-id", values)
+}
+
+func parseStorageUint64Filter(flag string, values []string) ([]uint64, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -418,7 +436,7 @@ func parseStorageSeriesIDs(values []string) ([]uint64, error) {
 		}
 		id, err := strconv.ParseUint(trimmed, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("parse --series-id %q: use an unsigned integer", value)
+			return nil, fmt.Errorf("parse %s %q: use an unsigned integer", flag, value)
 		}
 		ids = append(ids, id)
 	}
