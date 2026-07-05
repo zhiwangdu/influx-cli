@@ -132,11 +132,12 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 	report.MinTime = minTime
 	report.MaxTime = maxTime
 	report.QueryOverlapsFile = options.QueryRange.Overlaps(minTime, maxTime)
-	tombstones, err := readTSMTombstoneSummary(path, entries, options)
+	tombstones, tombstoneEntries, err := readTSMTombstoneSummary(path, entries, options)
 	if err != nil {
 		report.Notices = append(report.Notices, fmt.Sprintf("tombstone detail unavailable: %v", err))
 	}
 	report.Tombstones = tombstones
+	report.DecodePath = buildTSMDecodePathSummary(entries, tombstoneEntries, options)
 	return report, nil
 }
 

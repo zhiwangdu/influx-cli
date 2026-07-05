@@ -61,26 +61,27 @@ type Summary struct {
 }
 
 type FileReport struct {
-	Path               string            `json:"path"`
-	Format             Format            `json:"format"`
-	SizeBytes          int64             `json:"size_bytes"`
-	ModTime            time.Time         `json:"mod_time"`
-	MinTime            int64             `json:"min_time"`
-	MaxTime            int64             `json:"max_time"`
-	MinKey             string            `json:"min_key,omitempty"`
-	MaxKey             string            `json:"max_key,omitempty"`
-	KeyCount           int               `json:"key_count"`
-	KeySamples         []string          `json:"key_samples,omitempty"`
-	BlockCount         int               `json:"block_count"`
-	BlocksByType       map[string]int    `json:"blocks_by_type,omitempty"`
-	Blocks             []BlockReport     `json:"blocks,omitempty"`
-	QueryOverlapsFile  bool              `json:"query_overlaps_file,omitempty"`
-	QueryOverlapBlocks int               `json:"query_overlap_blocks,omitempty"`
-	Tombstones         TombstoneSummary  `json:"tombstones,omitempty"`
-	SeriesID           SeriesIDSummary   `json:"series_id,omitempty"`
-	Index              *IndexSummary     `json:"index,omitempty"`
-	Extra              map[string]string `json:"extra,omitempty"`
-	Notices            []string          `json:"notices,omitempty"`
+	Path               string             `json:"path"`
+	Format             Format             `json:"format"`
+	SizeBytes          int64              `json:"size_bytes"`
+	ModTime            time.Time          `json:"mod_time"`
+	MinTime            int64              `json:"min_time"`
+	MaxTime            int64              `json:"max_time"`
+	MinKey             string             `json:"min_key,omitempty"`
+	MaxKey             string             `json:"max_key,omitempty"`
+	KeyCount           int                `json:"key_count"`
+	KeySamples         []string           `json:"key_samples,omitempty"`
+	BlockCount         int                `json:"block_count"`
+	BlocksByType       map[string]int     `json:"blocks_by_type,omitempty"`
+	Blocks             []BlockReport      `json:"blocks,omitempty"`
+	QueryOverlapsFile  bool               `json:"query_overlaps_file,omitempty"`
+	QueryOverlapBlocks int                `json:"query_overlap_blocks,omitempty"`
+	DecodePath         *DecodePathSummary `json:"decode_path,omitempty"`
+	Tombstones         TombstoneSummary   `json:"tombstones,omitempty"`
+	SeriesID           SeriesIDSummary    `json:"series_id,omitempty"`
+	Index              *IndexSummary      `json:"index,omitempty"`
+	Extra              map[string]string  `json:"extra,omitempty"`
+	Notices            []string           `json:"notices,omitempty"`
 }
 
 type SeriesIDSummary struct {
@@ -136,6 +137,35 @@ type IndexMeasurementReport struct {
 	DeletedTagKeyCount   int    `json:"deleted_tag_key_count,omitempty"`
 	TagValueCount        int    `json:"tag_value_count,omitempty"`
 	DeletedTagValueCount int    `json:"deleted_tag_value_count,omitempty"`
+}
+
+type DecodePathSummary struct {
+	Mode                    string                    `json:"mode,omitempty"`
+	QueryRange              TimeRange                 `json:"query_range,omitempty"`
+	CursorSeekTime          int64                     `json:"cursor_seek_time,omitempty"`
+	LocationBlocks          int                       `json:"location_blocks,omitempty"`
+	FilteredDecodeBlocks    int                       `json:"filtered_decode_blocks,omitempty"`
+	SavedDecodeBlocks       int                       `json:"saved_decode_blocks,omitempty"`
+	SkippedBeforeSeekBlocks int                       `json:"skipped_before_seek_blocks,omitempty"`
+	SkippedAfterRangeBlocks int                       `json:"skipped_after_range_blocks,omitempty"`
+	FullyTombstonedBlocks   int                       `json:"fully_tombstoned_blocks,omitempty"`
+	MergeWindowBlocks       int                       `json:"merge_window_blocks,omitempty"`
+	MergeWindowKeys         int                       `json:"merge_window_keys,omitempty"`
+	Amplification           float64                   `json:"amplification,omitempty"`
+	LocationBlocksByType    map[string]int            `json:"location_blocks_by_type,omitempty"`
+	DecodeBlocksByType      map[string]int            `json:"decode_blocks_by_type,omitempty"`
+	Samples                 []DecodePathBlockDecision `json:"samples,omitempty"`
+	Recommendations         []string                  `json:"recommendations,omitempty"`
+}
+
+type DecodePathBlockDecision struct {
+	Key               string `json:"key,omitempty"`
+	MinTime           int64  `json:"min_time"`
+	MaxTime           int64  `json:"max_time"`
+	Type              string `json:"type"`
+	LocationCandidate bool   `json:"location_candidate,omitempty"`
+	Decoded           bool   `json:"decoded,omitempty"`
+	Reason            string `json:"reason,omitempty"`
 }
 
 type BlockReport struct {

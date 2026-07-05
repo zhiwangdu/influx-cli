@@ -28,11 +28,11 @@ type tsmTombstoneEntry struct {
 	Max int64
 }
 
-func readTSMTombstoneSummary(path string, blocks []tsmIndexEntry, options Options) (TombstoneSummary, error) {
+func readTSMTombstoneSummary(path string, blocks []tsmIndexEntry, options Options) (TombstoneSummary, []tsmTombstoneEntry, error) {
 	tombstonePath := tsmTombstonePath(path)
 	info, err := os.Stat(tombstonePath)
 	if err != nil {
-		return TombstoneSummary{}, nil
+		return TombstoneSummary{}, nil, nil
 	}
 
 	summary := TombstoneSummary{
@@ -43,10 +43,10 @@ func readTSMTombstoneSummary(path string, blocks []tsmIndexEntry, options Option
 	tombstones, version, err := readTSMTombstones(tombstonePath)
 	summary.Version = version
 	if err != nil {
-		return summary, err
+		return summary, nil, err
 	}
 	summarizeTSMTombstoneEntries(&summary, tombstones, blocks, options)
-	return summary, nil
+	return summary, tombstones, nil
 }
 
 func tsmTombstonePath(path string) string {

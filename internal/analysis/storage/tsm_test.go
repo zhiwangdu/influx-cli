@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -65,6 +66,24 @@ func TestAnalyzeTSMMetadata(t *testing.T) {
 	if got, want := file.Blocks[0].ValueCount, 3; got != want {
 		t.Fatalf("value count = %d, want %d", got, want)
 	}
+	if file.DecodePath == nil {
+		t.Fatal("expected decode path summary")
+	}
+	if got, want := file.DecodePath.LocationBlocks, 2; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.FilteredDecodeBlocks, 1; got != want {
+		t.Fatalf("filtered decode blocks = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.SavedDecodeBlocks, 1; got != want {
+		t.Fatalf("saved decode blocks = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.SkippedAfterRangeBlocks, 1; got != want {
+		t.Fatalf("skipped after range blocks = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.Samples[1].Reason, "outside_query_range"; got != want {
+		t.Fatalf("second decode sample reason = %q, want %q", got, want)
+	}
 }
 
 func TestAnalyzeTSMTombstoneRanges(t *testing.T) {
@@ -121,6 +140,62 @@ func TestAnalyzeTSMTombstoneRanges(t *testing.T) {
 	}
 	if got, want := file.Tombstones.KeySamples[0], "cpu,host=a value"; got != want {
 		t.Fatalf("first tombstone key sample = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSMDecodePathMergeAndTombstone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 20, 30}},
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 20, maxTime: 40, timestamps: []int64{20, 30, 40}},
+		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 50, maxTime: 60, timestamps: []int64{50, 60}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSMTombstoneV3(tsmTombstonePath(path),
+		tsmTombstoneEntry{Key: "mem,host=a value", Min: 50, Max: 60},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(25, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("expected decode path summary")
+	}
+	if got, want := decode.LocationBlocks, 2; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.FilteredDecodeBlocks, 2; got != want {
+		t.Fatalf("filtered decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.FullyTombstonedBlocks, 1; got != want {
+		t.Fatalf("fully tombstoned blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowKeys, 1; got != want {
+		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowBlocks, 2; got != want {
+		t.Fatalf("merge window blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DecodeBlocksByType["float"], 2; got != want {
+		t.Fatalf("float decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[2].Reason, "fully_tombstoned"; got != want {
+		t.Fatalf("third decode sample reason = %q, want %q", got, want)
 	}
 }
 
@@ -247,32 +322,59 @@ func TestAnalyzeDirectoryExpansion(t *testing.T) {
 }
 
 func writeTestTSM(path string) error {
+	return writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}},
+		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 100, maxTime: 120, timestamps: []int64{100, 20}},
+	})
+}
+
+type testTSMBlockSpec struct {
+	key        string
+	typ        byte
+	minTime    int64
+	maxTime    int64
+	timestamps []int64
+}
+
+func writeTestTSMWithBlocks(path string, specs []testTSMBlockSpec) error {
 	var buf bytes.Buffer
 	var header [5]byte
 	binary.BigEndian.PutUint32(header[:4], tsmMagicNumber)
 	header[4] = tsmVersion
 	buf.Write(header[:])
 
-	block1 := testTSMBlock(tsmBlockFloat, []int64{10, 10, 10})
-	offset1 := int64(buf.Len())
-	buf.Write(testTSMBlockWithCRC(block1))
-	block2 := testTSMBlock(tsmBlockInteger, []int64{100, 20})
-	offset2 := int64(buf.Len())
-	buf.Write(testTSMBlockWithCRC(block2))
+	type indexGroup struct {
+		key     string
+		typ     byte
+		entries []tsmIndexEntry
+	}
+	groupsByKey := map[string]*indexGroup{}
+	var groupKeys []string
+	for _, spec := range specs {
+		block := testTSMBlock(spec.typ, spec.timestamps)
+		offset := int64(buf.Len())
+		buf.Write(testTSMBlockWithCRC(block))
+		groupKey := string([]byte{spec.typ}) + spec.key
+		group := groupsByKey[groupKey]
+		if group == nil {
+			group = &indexGroup{key: spec.key, typ: spec.typ}
+			groupsByKey[groupKey] = group
+			groupKeys = append(groupKeys, groupKey)
+		}
+		group.entries = append(group.entries, tsmIndexEntry{
+			MinTime: spec.minTime,
+			MaxTime: spec.maxTime,
+			Offset:  offset,
+			Size:    uint32(len(block) + tsmBlockCRCSize),
+		})
+	}
+	sort.Strings(groupKeys)
 
 	indexOffset := int64(buf.Len())
-	writeTestTSMIndexKey(&buf, "cpu,host=a value", tsmBlockFloat, []tsmIndexEntry{{
-		MinTime: 10,
-		MaxTime: 30,
-		Offset:  offset1,
-		Size:    uint32(len(block1) + tsmBlockCRCSize),
-	}})
-	writeTestTSMIndexKey(&buf, "mem,host=a value", tsmBlockInteger, []tsmIndexEntry{{
-		MinTime: 100,
-		MaxTime: 120,
-		Offset:  offset2,
-		Size:    uint32(len(block2) + tsmBlockCRCSize),
-	}})
+	for _, groupKey := range groupKeys {
+		group := groupsByKey[groupKey]
+		writeTestTSMIndexKey(&buf, group.key, group.typ, group.entries)
+	}
 
 	var footer [8]byte
 	binary.BigEndian.PutUint64(footer[:], uint64(indexOffset))
