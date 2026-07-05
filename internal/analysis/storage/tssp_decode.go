@@ -88,6 +88,8 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.SavedReadSegments = summary.BaselineReadSegments - summary.OptimizedReadSegments
+	summary.BaselineCursorReadCalls = summary.BaselineReadSegments
+	summary.OptimizedCursorReadCalls = summary.OptimizedReadSegments
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
@@ -155,6 +157,8 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.OptimizedDecodeValues += src.OptimizedDecodeValues
 	dst.BaselineReadSegments += src.BaselineReadSegments
 	dst.OptimizedReadSegments += src.OptimizedReadSegments
+	dst.BaselineCursorReadCalls += src.BaselineCursorReadCalls
+	dst.OptimizedCursorReadCalls += src.OptimizedCursorReadCalls
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
 	dst.IteratorCostBytes += src.IteratorCostBytes

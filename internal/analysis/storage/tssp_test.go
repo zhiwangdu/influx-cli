@@ -98,6 +98,12 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	if got, want := decode.SavedReadSegments, 2; got != want {
 		t.Fatalf("saved read segments = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineCursorReadCalls, 3; got != want {
+		t.Fatalf("baseline cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorReadCalls, 1; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
+	}
 	if got, want := decode.BaselineDecodeBytes, int64(288); got != want {
 		t.Fatalf("baseline decode bytes = %d, want %d", got, want)
 	}
@@ -408,6 +414,12 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.SavedReadSegments, 4; got != want {
 		t.Fatalf("saved read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineCursorReadCalls, 6; got != want {
+		t.Fatalf("baseline cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorReadCalls, 2; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
 	}
 	if got, want := decode.SkippedByKeyBlocks, 4; got != want {
 		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
