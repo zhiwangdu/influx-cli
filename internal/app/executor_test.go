@@ -72,6 +72,24 @@ func TestExecutorRPSMetaCommandShowsSingleDatabasePolicies(t *testing.T) {
 	assertRow(t, res.Table.Rows[1], "metrics", "short", false)
 }
 
+func TestExecutorRPSMetaCommandUsesCurrentDatabaseWhenSet(t *testing.T) {
+	fake := newFakeAdapter()
+	session := NewSession(config.Effective{Adapter: "fake", Database: "telegraf", Precision: "rfc3339"})
+	executor := NewExecutor(session, fake)
+
+	res, err := executor.Execute(context.Background(), ":rps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.showDatabasesCalls != 0 {
+		t.Fatalf("showDatabasesCalls = %d, want 0", fake.showDatabasesCalls)
+	}
+	if got, want := res.Table.RowCount(), 1; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	assertRow(t, res.Table.Rows[0], "telegraf", "raw", true)
+}
+
 func TestExecutorRPSMetaCommandShowsAllDatabasePolicies(t *testing.T) {
 	fake := newFakeAdapter()
 	executor := NewExecutor(NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}), fake)
@@ -139,11 +157,11 @@ func newFakeAdapter() *fakeAdapter {
 	return &fakeAdapter{
 		retentionPolicies: map[string][]adapter.RetentionPolicy{
 			"metrics": {
-				{Name: "autogen", Default: true},
-				{Name: "short"},
+				{Name: "autogen", Duration: "0s", ShardGroupDuration: "168h0m0s", ReplicaN: "1", Default: true},
+				{Name: "short", Duration: "24h0m0s", ShardGroupDuration: "1h0m0s", ReplicaN: "1"},
 			},
 			"telegraf": {
-				{Name: "raw", Default: true},
+				{Name: "raw", Duration: "720h0m0s", ShardGroupDuration: "24h0m0s", ReplicaN: "1", Default: true},
 			},
 		},
 	}
@@ -179,7 +197,7 @@ func (f *fakeAdapter) ShowRetentionPolicies(ctx context.Context, db string) ([]a
 	if policies, ok := f.retentionPolicies[db]; ok {
 		return policies, nil
 	}
-	return []adapter.RetentionPolicy{{Name: "autogen", Default: true}}, nil
+	return []adapter.RetentionPolicy{{Name: "autogen", Duration: "0s", ShardGroupDuration: "168h0m0s", ReplicaN: "1", Default: true}}, nil
 }
 
 func (f *fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema.Snapshot, error) {
@@ -198,10 +216,13 @@ func (f *fakeAdapter) GetSchema(ctx context.Context, scope schema.Scope) (schema
 
 func assertRow(t *testing.T, row []any, database, retentionPolicy string, isDefault bool) {
 	t.Helper()
-	if len(row) != 3 {
-		t.Fatalf("row length = %d, want 3: %#v", len(row), row)
+	if len(row) != 6 {
+		t.Fatalf("row length = %d, want 6: %#v", len(row), row)
 	}
-	if row[0] != database || row[1] != retentionPolicy || row[2] != isDefault {
-		t.Fatalf("row = %#v, want %#v", row, []any{database, retentionPolicy, isDefault})
+	if row[0] != database || row[1] != retentionPolicy || row[5] != isDefault {
+		t.Fatalf("row = %#v, want database=%q retention_policy=%q default=%v", row, database, retentionPolicy, isDefault)
+	}
+	if row[2] == "" || row[3] == "" || row[4] == "" {
+		t.Fatalf("row missing retention policy details: %#v", row)
 	}
 }

@@ -50,10 +50,10 @@ func TestShowRetentionPoliciesPreservesDefaultFlag(t *testing.T) {
 	if len(policies) != 2 {
 		t.Fatalf("policies = %d, want 2", len(policies))
 	}
-	if policies[0].Name != "autogen" || !policies[0].Default {
+	if policies[0].Name != "autogen" || policies[0].Duration != "0s" || policies[0].ShardGroupDuration != "168h0m0s" || policies[0].ReplicaN != "1" || !policies[0].Default {
 		t.Fatalf("first policy = %#v, want autogen default", policies[0])
 	}
-	if policies[1].Name != "raw" || policies[1].Default {
+	if policies[1].Name != "raw" || policies[1].Duration != "720h0m0s" || policies[1].ShardGroupDuration != "24h0m0s" || policies[1].ReplicaN != "1" || policies[1].Default {
 		t.Fatalf("second policy = %#v, want raw non-default", policies[1])
 	}
 }

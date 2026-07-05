@@ -347,9 +347,21 @@ func retentionPoliciesFromTable(table *result.Table) []adapter.RetentionPolicy {
 			continue
 		}
 		policies = append(policies, adapter.RetentionPolicy{
-			Name:    name,
-			Default: boolAt(row, table.Columns, "default"),
+			Name:               name,
+			Duration:           stringAt(row, table.Columns, "duration"),
+			ShardGroupDuration: firstNonEmptyString(stringAt(row, table.Columns, "shardGroupDuration"), stringAt(row, table.Columns, "shard_group_duration")),
+			ReplicaN:           firstNonEmptyString(stringAt(row, table.Columns, "replicaN"), stringAt(row, table.Columns, "replica_n")),
+			Default:            boolAt(row, table.Columns, "default"),
 		})
 	}
 	return policies
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

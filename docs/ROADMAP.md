@@ -62,7 +62,7 @@ REPL meta command：
 :db <db>
 :rp <rp>
 :dbs
-:rps [db]
+:rps [db]     # show named/current DB RP details; without current DB, show all DBs
 :measurements
 :msts
 :help

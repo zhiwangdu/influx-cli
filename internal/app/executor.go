@@ -90,6 +90,9 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 		if len(fields) == 2 {
 			return e.retentionPoliciesResult(ctx, []string{fields[1]})
 		}
+		if strings.TrimSpace(e.Session.Database) != "" {
+			return e.retentionPoliciesResult(ctx, []string{e.Session.Database})
+		}
 		databases, err := e.Adapter.ShowDatabases(ctx)
 		if err != nil {
 			return result.Result{}, err
@@ -191,14 +194,14 @@ func (e *Executor) defaultRetentionPolicy(ctx context.Context, database string) 
 }
 
 func (e *Executor) retentionPoliciesResult(ctx context.Context, databases []string) (result.Result, error) {
-	table := result.NewTable([]string{"database", "retention_policy", "default"})
+	table := result.NewTable([]string{"database", "retention_policy", "duration", "shard_group_duration", "replica_n", "default"})
 	for _, database := range databases {
 		policies, err := e.Adapter.ShowRetentionPolicies(ctx, database)
 		if err != nil {
 			return result.Result{}, fmt.Errorf("show retention policies for %q: %w", database, err)
 		}
 		for _, policy := range policies {
-			table.AddRow(database, policy.Name, policy.Default)
+			table.AddRow(database, policy.Name, policy.Duration, policy.ShardGroupDuration, policy.ReplicaN, policy.Default)
 		}
 	}
 	return result.FromTable(table), nil
@@ -209,7 +212,7 @@ func helpResult() result.Result {
 	table.AddRow(":use <db>[.<rp>]", "set database and optional retention policy")
 	table.AddRow(":db <db>", "set database and resolve its default retention policy")
 	table.AddRow(":rp <rp>", "set current retention policy")
-	table.AddRow(":rps [db]", "show retention policies for one database or all databases")
+	table.AddRow(":rps [db]", "show retention policy details for current, named, or all databases")
 	table.AddRow(":dbs", "show databases")
 	table.AddRow(":measurements", "show measurements in current database")
 	table.AddRow(":msts", "alias for :measurements")

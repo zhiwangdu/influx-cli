@@ -204,8 +204,11 @@ type Adapter interface {
 }
 
 type RetentionPolicy struct {
-    Name    string
-    Default bool
+    Name               string
+    Duration           string
+    ShardGroupDuration string
+    ReplicaN           string
+    Default            bool
 }
 ```
 
