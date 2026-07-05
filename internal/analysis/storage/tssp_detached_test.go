@@ -618,6 +618,39 @@ func TestInspectTSSPDataBlockPayloadBooleanFullBitpack(t *testing.T) {
 	}
 }
 
+func TestInspectTSSPDataBlockPayloadStringFullUncompressed(t *testing.T) {
+	var packed bytes.Buffer
+	packed.Write(tsspPackedStringV2Payload([]string{"red", "blue"}))
+
+	var payload bytes.Buffer
+	payload.WriteByte(34) // openGemini encoding.BlockStringFull.
+	writeUint32(&payload, 2)
+	payload.WriteByte(0) // openGemini encoding stringUncompressed << 4.
+	writeUint32(&payload, uint32(packed.Len()))
+	writeUint32(&payload, uint32(packed.Len()))
+	payload.Write(packed.Bytes())
+
+	info, ok, reason := inspectTSSPDataBlockPayload(payload.Bytes())
+	if !ok {
+		t.Fatalf("inspect TSSP data block payload failed: %s", reason)
+	}
+	if got, want := info.Type, "string-full"; got != want {
+		t.Fatalf("type = %q, want %q", got, want)
+	}
+	if got, want := info.Rows, 2; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	if !info.RowsKnown || !info.ValueKnown || info.ValueNull {
+		t.Fatalf("known/null flags rows=%v value=%v null=%v, want true/true/false", info.RowsKnown, info.ValueKnown, info.ValueNull)
+	}
+	if got, want := info.Value, "red"; got != want {
+		t.Fatalf("first value = %q, want %q", got, want)
+	}
+	if got, want := info.Values, []string{"red", "blue"}; !equalStrings(got, want) {
+		t.Fatalf("values = %v, want %v", got, want)
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{

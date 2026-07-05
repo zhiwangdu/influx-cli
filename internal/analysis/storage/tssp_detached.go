@@ -642,6 +642,14 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 				}
 				info.ValueKnown = true
 			}
+		} else if payload[0] == 34 {
+			if values, ok := decodeTSSPStringFullUncompressedValues(payload[5:], info.Rows); ok {
+				info.Values = values
+				if len(values) > 0 {
+					info.Value = values[0]
+				}
+				info.ValueKnown = true
+			}
 		}
 	default:
 		if !validTSSPRegularDataBlockHeader(payload) {
@@ -721,6 +729,120 @@ func decodeTSSPBooleanFullBitpackValues(encoded []byte, rows int) ([]string, boo
 		} else {
 			values[i] = strconv.FormatBool(false)
 		}
+	}
+	return values, true
+}
+
+func decodeTSSPStringFullUncompressedValues(encoded []byte, rows int) ([]string, bool) {
+	if rows < 0 || len(encoded) < 9 || encoded[0]>>4 != 0 {
+		return nil, false
+	}
+	sourceLen := int(binary.BigEndian.Uint32(encoded[1:5]))
+	compressedLen := int(binary.BigEndian.Uint32(encoded[5:9]))
+	if sourceLen != compressedLen || len(encoded)-9 < sourceLen {
+		return nil, false
+	}
+	return decodeTSSPPackedStringValues(encoded[9:9+sourceLen], rows)
+}
+
+const (
+	tsspStringEncodingV1  = ^uint32(0)
+	tsspStringEncodingV2  = tsspStringEncodingV1 - 1
+	tsspStringEncodingEnd = tsspStringEncodingV1 - 2
+)
+
+func decodeTSSPPackedStringValues(src []byte, rows int) ([]string, bool) {
+	if len(src) < 4 {
+		return nil, false
+	}
+	version := binary.BigEndian.Uint32(src[:4])
+	switch {
+	case version == tsspStringEncodingV2:
+		return decodeTSSPPackedStringV2Values(src[4:], rows)
+	case version == tsspStringEncodingV1 || version < tsspStringEncodingEnd:
+		return decodeTSSPPackedStringV1Values(src, rows)
+	default:
+		return nil, false
+	}
+}
+
+func decodeTSSPPackedStringV1Values(src []byte, rows int) ([]string, bool) {
+	if len(src) < 4 {
+		return nil, false
+	}
+	byteLen := int(binary.BigEndian.Uint32(src[:4]))
+	src = src[4:]
+	if len(src) < byteLen+4 {
+		return nil, false
+	}
+	data := src[:byteLen]
+	src = src[byteLen:]
+	offsetBytes := int(binary.BigEndian.Uint32(src[:4]))
+	src = src[4:]
+	if offsetBytes%4 != 0 || len(src) < offsetBytes {
+		return nil, false
+	}
+	offsetCount := offsetBytes / 4
+	if offsetCount != rows {
+		return nil, false
+	}
+	offsets := make([]uint32, offsetCount)
+	for i := range offsets {
+		offsets[i] = binary.BigEndian.Uint32(src[i*4:])
+	}
+	return materializeTSSPStringValues(data, offsets)
+}
+
+func decodeTSSPPackedStringV2Values(src []byte, rows int) ([]string, bool) {
+	if len(src) < 4 {
+		return nil, false
+	}
+	byteLen := int(binary.BigEndian.Uint32(src[:4]))
+	src = src[4:]
+	if len(src) < byteLen+4 {
+		return nil, false
+	}
+	data := src[:byteLen]
+	src = src[byteLen:]
+	offsetCount := int(binary.BigEndian.Uint32(src[:4]))
+	src = src[4:]
+	if offsetCount != rows || len(src) < offsetCount*4 {
+		return nil, false
+	}
+	offsets := make([]uint32, offsetCount)
+	var pos uint32
+	byteLenU := uint32(byteLen)
+	for i := 0; i < offsetCount; i++ {
+		length := binary.BigEndian.Uint32(src[i*4:])
+		offsets[i] = pos
+		if length > byteLenU-pos {
+			return nil, false
+		}
+		pos += length
+	}
+	if pos != byteLenU {
+		return nil, false
+	}
+	return materializeTSSPStringValues(data, offsets)
+}
+
+func materializeTSSPStringValues(data []byte, offsets []uint32) ([]string, bool) {
+	if len(offsets) > 0 && offsets[0] != 0 {
+		return nil, false
+	}
+	values := make([]string, 0, len(offsets))
+	for i, offset := range offsets {
+		if offset > uint32(len(data)) {
+			return nil, false
+		}
+		end := uint32(len(data))
+		if i+1 < len(offsets) {
+			end = offsets[i+1]
+		}
+		if end < offset || end > uint32(len(data)) {
+			return nil, false
+		}
+		values = append(values, string(data[offset:end]))
 	}
 	return values, true
 }
