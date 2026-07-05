@@ -96,7 +96,7 @@ func TestRunRejectsInvalidRenderFormatCommands(t *testing.T) {
 	if !strings.Contains(output, `error: unknown render format "wide"`) {
 		t.Fatalf("missing unknown format error:\n%s", output)
 	}
-	if !strings.Contains(output, "error: usage: :format [auto|table|sparkline|json]") {
+	if !strings.Contains(output, "error: usage: :format [auto|table|sparkline|chart|json]") {
 		t.Fatalf("missing usage error:\n%s", output)
 	}
 	if got := strings.Count(output, "format: sparkline"); got != 2 {

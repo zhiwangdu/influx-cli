@@ -9,6 +9,7 @@ const (
 	Auto      = "auto"
 	Table     = "table"
 	Sparkline = "sparkline"
+	Chart     = "chart"
 	JSON      = "json"
 )
 
@@ -18,7 +19,7 @@ func Normalize(value string) (string, error) {
 		return Table, nil
 	}
 	switch normalized {
-	case Auto, Table, Sparkline, JSON:
+	case Auto, Table, Sparkline, Chart, JSON:
 		return normalized, nil
 	default:
 		return "", fmt.Errorf("unknown render format %q", value)

@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/zhiwangdu/influx-cli/internal/history"
 	"github.com/zhiwangdu/influx-cli/internal/render"
 	"github.com/zhiwangdu/influx-cli/internal/repl"
+	"github.com/zhiwangdu/influx-cli/internal/tui"
 )
 
 type globalFlags struct {
@@ -69,7 +71,7 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&flags.overrides.Database, "db", "", "database")
 	root.PersistentFlags().StringVar(&flags.overrides.RetentionPolicy, "rp", "", "retention policy")
 	root.PersistentFlags().StringVar(&flags.overrides.Precision, "precision", "", "time precision: rfc3339, h, m, s, ms, u, ns")
-	root.PersistentFlags().StringVar(&flags.overrides.Render, "format", "", "render format: auto, table, sparkline, json")
+	root.PersistentFlags().StringVar(&flags.overrides.Render, "format", "", "render format: auto, table, sparkline, chart, json")
 	root.PersistentFlags().StringVar(&flags.overrides.Timeout, "timeout", "", "query timeout")
 	root.PersistentFlags().IntVar(&flags.width, "width", 0, "render width")
 	root.PersistentFlags().IntVar(&flags.maxRows, "max-rows", 200, "maximum table rows to print")
@@ -77,6 +79,7 @@ func newRootCommand() *cobra.Command {
 
 	root.AddCommand(newQueryCommand(flags))
 	root.AddCommand(newReplCommand(flags))
+	root.AddCommand(newTUICommand(flags))
 	root.AddCommand(newConfigCommand(flags))
 	return root
 }
@@ -145,6 +148,32 @@ func newReplCommand(flags *globalFlags) *cobra.Command {
 	}
 }
 
+func newTUICommand(flags *globalFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "tui",
+		Short: "Start the full-screen query TUI",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			effective, err := config.Resolve(flags.configPath, flags.overrides, os.Getenv)
+			if err != nil {
+				return err
+			}
+			executor, err := newExecutor(effective)
+			if err != nil {
+				return err
+			}
+
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			defer stop()
+			return tui.Run(ctx, executor, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{
+				Render:        renderOptions(effective, flags),
+				History:       history.NewStore("", history.Options{}),
+				QueryTimeout:  effective.Timeout,
+				WatchInterval: 5 * time.Second,
+			})
+		},
+	}
+}
+
 func newConfigCommand(flags *globalFlags) *cobra.Command {
 	configCommand := &cobra.Command{
 		Use:   "config",
@@ -199,7 +228,7 @@ func newExecutor(effective config.Effective) (*app.Executor, error) {
 			return nil, err
 		}
 		session := app.NewSession(effective)
-		session.AdapterName = adapter.Name()
+		session.SetAdapterName(adapter.Name())
 		return app.NewExecutor(session, adapter), nil
 	default:
 		return nil, fmt.Errorf("unsupported adapter %q", effective.Adapter)

@@ -20,7 +20,7 @@ Legacy drafts are kept under [docs/legacy](docs/legacy/) for historical context 
 
 ## Current Status
 
-This repository now contains the Phase 0 CLI MVP foundation:
+This repository now contains the Phase 0/1 CLI and REPL foundation plus the first Phase 2 TUI surface:
 
 Current files:
 
@@ -46,6 +46,7 @@ Implemented MVP surface:
 influx-cli query "SHOW DATABASES"
 influx-cli query --db metrics "SELECT mean(value) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)"
 influx-cli repl
+influx-cli tui
 influx-cli config show
 ```
 
@@ -56,8 +57,9 @@ The first implementation phase should stay narrow:
 1. CLI query execution.
 2. REPL with session context, local query history, multiline input, and Tab autocomplete.
 3. Table output by default.
-4. Sparkline output for time-series results when selected.
+4. Sparkline and ASCII chart output for time-series results when selected.
 5. Statusline showing db/rp/mode/latency/error.
+6. Full-screen TUI with query editor, result view, context panel, renderer switching, and watch refresh.
 
 Do not start with a full dashboard, plugin system, storage parser, or query optimizer.
 
@@ -67,8 +69,8 @@ Do not start with a full dashboard, plugin system, storage parser, or query opti
 | --- | --- |
 | Language | Go |
 | CLI | Cobra |
-| TUI | Bubble Tea, Lip Gloss, Bubbles planned for later phases |
-| Visualization | Table default, built-in sparkline selectable, ASCII chart later |
+| TUI | Bubble Tea, Lip Gloss, Bubbles |
+| Visualization | Table default, built-in sparkline selectable, ASCII chart selectable |
 | Initial adapter | InfluxDB 1.x HTTP query API |
 | Compatible target | openGemini via InfluxDB-compatible query path |
 

@@ -92,7 +92,8 @@ func (e *Executor) completeMeta(ctx context.Context, before, token string) (Comp
 		if len(fields) > 2 {
 			return Completion{Prefix: token}, nil
 		}
-		policies, err := e.Adapter.ShowRetentionPolicies(ctx, e.Session.Database)
+		snapshot := e.Session.Snapshot()
+		policies, err := e.Adapter.ShowRetentionPolicies(ctx, snapshot.Database)
 		if err != nil {
 			return Completion{Prefix: token}, err
 		}
@@ -105,7 +106,8 @@ func (e *Executor) completeMeta(ctx context.Context, before, token string) (Comp
 		if len(fields) > 2 {
 			return Completion{Prefix: token}, nil
 		}
-		measurements, err := e.measurements(ctx, e.Session.Database, e.Session.RP)
+		snapshot := e.Session.Snapshot()
+		measurements, err := e.measurements(ctx, snapshot.Database, snapshot.RP)
 		if err != nil {
 			return Completion{Prefix: token}, err
 		}
@@ -119,7 +121,8 @@ func (e *Executor) completeQuery(ctx context.Context, line, before, token string
 	prev := previousWord(before, token)
 	switch {
 	case prev == "from":
-		measurements, err := e.measurements(ctx, e.Session.Database, e.Session.RP)
+		snapshot := e.Session.Snapshot()
+		measurements, err := e.measurements(ctx, snapshot.Database, snapshot.RP)
 		if err != nil {
 			return Completion{Prefix: token}, err
 		}
@@ -142,21 +145,22 @@ func (e *Executor) completeQuery(ctx context.Context, line, before, token string
 
 func (e *Executor) completeSchemaCandidates(ctx context.Context, line, token string, kind schemaCandidateKind, extra []string) (Completion, error) {
 	measurement := measurementFromQuery(line)
-	if measurement == "" && strings.TrimSpace(e.Session.Database) == "" {
+	snapshot := e.Session.Snapshot()
+	if measurement == "" && strings.TrimSpace(snapshot.Database) == "" {
 		if kind == schemaTags {
 			return Completion{Prefix: token}, nil
 		}
 		candidates := append(queryKeywords(), extra...)
 		return completionFor(token, candidates), nil
 	}
-	snapshot, err := e.measurementSchema(ctx, e.Session.Database, e.Session.RP, measurement)
+	schemaSnapshot, err := e.measurementSchema(ctx, snapshot.Database, snapshot.RP, measurement)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return Completion{Prefix: token}, nil
 		}
 		return Completion{Prefix: token}, err
 	}
-	candidates := schemaCandidates(snapshot, kind)
+	candidates := schemaCandidates(schemaSnapshot, kind)
 	candidates = append(candidates, extra...)
 	return completionFor(token, candidates), nil
 }
@@ -179,7 +183,8 @@ func schemaCandidates(snapshot schema.Snapshot, kind schemaCandidateKind) []stri
 }
 
 func (e *Executor) measurements(ctx context.Context, db, rp string) ([]string, error) {
-	key := cacheKey{Adapter: e.Session.AdapterName, Database: db, RP: rp}
+	snapshot := e.Session.Snapshot()
+	key := cacheKey{Adapter: snapshot.AdapterName, Database: db, RP: rp}
 	if values, ok := e.completionCache.Measurements(key); ok {
 		return values, nil
 	}
@@ -192,11 +197,12 @@ func (e *Executor) measurements(ctx context.Context, db, rp string) ([]string, e
 }
 
 func (e *Executor) measurementSchema(ctx context.Context, db, rp, measurement string) (schema.Snapshot, error) {
-	key := schemaCacheKey{cacheKey: cacheKey{Adapter: e.Session.AdapterName, Database: db, RP: rp}, Measurement: measurement}
-	if snapshot, ok := e.completionCache.Schema(key); ok {
-		return snapshot, nil
+	sessionSnapshot := e.Session.Snapshot()
+	key := schemaCacheKey{cacheKey: cacheKey{Adapter: sessionSnapshot.AdapterName, Database: db, RP: rp}, Measurement: measurement}
+	if schemaSnapshot, ok := e.completionCache.Schema(key); ok {
+		return schemaSnapshot, nil
 	}
-	snapshot, err := e.Adapter.GetSchema(ctx, schema.Scope{
+	schemaSnapshot, err := e.Adapter.GetSchema(ctx, schema.Scope{
 		Database:        db,
 		RetentionPolicy: rp,
 		Measurement:     measurement,
@@ -204,8 +210,8 @@ func (e *Executor) measurementSchema(ctx context.Context, db, rp, measurement st
 	if err != nil {
 		return schema.Snapshot{}, err
 	}
-	e.completionCache.SetSchema(key, snapshot)
-	return snapshot, nil
+	e.completionCache.SetSchema(key, schemaSnapshot)
+	return schemaSnapshot, nil
 }
 
 type completionCache struct {

@@ -12,6 +12,7 @@ const (
 	FormatAuto      = renderformat.Auto
 	FormatTable     = renderformat.Table
 	FormatSparkline = renderformat.Sparkline
+	FormatChart     = renderformat.Chart
 	FormatJSON      = renderformat.JSON
 )
 
@@ -41,6 +42,8 @@ func Render(res result.Result, options Options) (string, string, error) {
 		return RenderTable(res, options), FormatTable, nil
 	case FormatSparkline:
 		return RenderSparkline(res, options), FormatSparkline, nil
+	case FormatChart:
+		return RenderChart(res, options), FormatChart, nil
 	case FormatJSON:
 		body, err := json.MarshalIndent(res, "", "  ")
 		if err != nil {

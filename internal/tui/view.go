@@ -1,0 +1,224 @@
+package tui
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+var (
+	statusStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("62"))
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+)
+
+func (m Model) View() string {
+	width := m.width
+	if width <= 0 {
+		width = defaultWidth
+	}
+
+	var builder strings.Builder
+	builder.WriteString(m.statusView(width))
+	builder.WriteByte('\n')
+	builder.WriteString(divider(width))
+	builder.WriteString("\n\n")
+
+	if !m.fullscreen {
+		builder.WriteString(titleStyle.Render("Query"))
+		builder.WriteByte('\n')
+		builder.WriteString(m.editor.View())
+		builder.WriteString("\n\n")
+	}
+
+	resultPanel := m.resultPanel()
+	if m.schemaVisible && width >= wideLayoutWidth && !m.fullscreen {
+		builder.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, resultPanel, strings.Repeat(" ", 2), m.contextPanel(contextPanelWidth)))
+	} else {
+		builder.WriteString(resultPanel)
+		if m.schemaVisible && !m.fullscreen {
+			builder.WriteString("\n\n")
+			builder.WriteString(m.contextPanel(width))
+		}
+	}
+
+	builder.WriteByte('\n')
+	builder.WriteString(m.footerView(width))
+	return builder.String()
+}
+
+func (m *Model) resize(width, height int) {
+	if width <= 0 {
+		width = defaultWidth
+	}
+	if height <= 0 {
+		height = defaultHeight
+	}
+	m.width = width
+	m.height = height
+
+	editorWidth := width
+	if editorWidth > 2 {
+		editorWidth -= 2
+	}
+	m.editor.SetWidth(editorWidth)
+	m.editor.SetHeight(queryEditorHeight)
+
+	mainHeight := height - 12
+	if m.fullscreen {
+		mainHeight = height - 5
+	}
+	if mainHeight < 6 {
+		mainHeight = 6
+	}
+
+	resultWidth := width
+	contextHeight := 0
+	if m.schemaVisible && width >= wideLayoutWidth && !m.fullscreen {
+		resultWidth = width - contextPanelWidth - 2
+	} else if m.schemaVisible && !m.fullscreen {
+		contextHeight = 7
+		mainHeight -= contextHeight + 2
+		if mainHeight < 6 {
+			mainHeight = 6
+		}
+	}
+	if resultWidth < 24 {
+		resultWidth = 24
+	}
+	if contextHeight > 0 && mainHeight < 6 {
+		mainHeight = 6
+	}
+
+	m.resultView.Width = resultWidth
+	m.resultView.Height = mainHeight - 1
+	if m.resultView.Height < 4 {
+		m.resultView.Height = 4
+	}
+	m.renderOptions.Width = resultWidth
+	m.rerender()
+}
+
+func (m Model) statusView(width int) string {
+	watch := "off"
+	if m.watch {
+		watch = "on"
+	}
+	state := m.statusMessage
+	if m.loading {
+		state = "running"
+	}
+	status := fmt.Sprintf("%s | format: %s | watch: %s | %s",
+		m.executor.Session.StatusLine(),
+		printValue(m.renderMode),
+		watch,
+		state,
+	)
+	status = truncateRunes(status, width)
+	if !m.renderOptions.Color {
+		return status
+	}
+	return statusStyle.Width(width).Render(status)
+}
+
+func (m Model) resultPanel() string {
+	title := "Result"
+	if m.renderer != "" {
+		title += " [" + m.renderer + "]"
+	}
+	if m.loading {
+		title += " running"
+	}
+	return titleStyle.Render(title) + "\n" + m.resultView.View()
+}
+
+func (m Model) contextPanel(width int) string {
+	if width < 24 {
+		width = 24
+	}
+	snapshot := m.executor.Session.Snapshot()
+	lines := []string{
+		titleStyle.Render("Context"),
+		"db: " + printValue(snapshot.Database),
+		"rp: " + printValue(snapshot.RP),
+		"adapter: " + printValue(snapshot.AdapterName),
+		"measurement: " + printValue(m.schemaMeasurement),
+	}
+	lines = append(lines, m.schemaLines()...)
+	return strings.Join(fitLines(lines, width), "\n")
+}
+
+func (m Model) schemaLines() []string {
+	if m.schemaLoading {
+		return []string{"schema: loading"}
+	}
+	if m.schemaErr != nil {
+		return []string{"schema: " + oneLine(m.schemaErr.Error())}
+	}
+	if m.schemaSnapshot == nil {
+		return []string{"schema: -"}
+	}
+	measurement := findMeasurement(*m.schemaSnapshot, m.schemaMeasurement)
+	if measurement.Name == "" {
+		return []string{"schema: -"}
+	}
+	fieldNames := make([]string, 0, len(measurement.Fields))
+	for _, field := range measurement.Fields {
+		if field.Type != "" {
+			fieldNames = append(fieldNames, field.Name+":"+field.Type)
+		} else {
+			fieldNames = append(fieldNames, field.Name)
+		}
+	}
+	tagNames := make([]string, 0, len(measurement.Tags))
+	for _, tag := range measurement.Tags {
+		tagNames = append(tagNames, tag.Name)
+	}
+	sort.Strings(fieldNames)
+	sort.Strings(tagNames)
+	return []string{
+		fmt.Sprintf("schema: %d fields, %d tags", len(fieldNames), len(tagNames)),
+		"fields: " + joinNames(fieldNames),
+		"tags: " + joinNames(tagNames),
+	}
+}
+
+func (m Model) footerView(width int) string {
+	mode := "edit"
+	if !m.editor.Focused() {
+		mode = "command"
+	}
+	footer := mode + " | Ctrl+J run | Ctrl+R history | Tab complete | Esc mode | 1 table | 2 sparkline | 3 chart | S schema | W watch | F fullscreen | Q quit"
+	footer = truncateRunes(footer, width)
+	if !m.renderOptions.Color {
+		return footer
+	}
+	return dimStyle.Render(footer)
+}
+
+func divider(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	return strings.Repeat("-", width)
+}
+
+func fitLines(lines []string, width int) []string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = truncateRunes(line, width)
+	}
+	return out
+}
+
+func joinNames(values []string) string {
+	if len(values) == 0 {
+		return "-"
+	}
+	if len(values) > 6 {
+		values = append(append([]string(nil), values[:6]...), "...")
+	}
+	return strings.Join(values, ", ")
+}

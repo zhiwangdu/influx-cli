@@ -17,6 +17,7 @@ func TestNormalizeAcceptsKnownFormats(t *testing.T) {
 		"auto":      Auto,
 		"table":     Table,
 		"sparkline": Sparkline,
+		"chart":     Chart,
 		"json":      JSON,
 		" Auto ":    Auto,
 		"JSON":      JSON,

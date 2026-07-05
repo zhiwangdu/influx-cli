@@ -10,18 +10,19 @@
 
 ## 2. 当前仓库状态
 
-截至 2026-07-04，当前仓库已经包含 Phase 0 CLI MVP 基础实现：
+截至 2026-07-05，当前仓库已经包含 Phase 0/1 CLI 与 REPL 基础能力，并开始交付 Phase 2 TUI：
 
 | 文件 | 状态 |
 | --- | --- |
 | `go.mod`、`go.sum` | Go module 和依赖 |
-| `cmd/influx-cli/main.go` | Cobra CLI 入口，包含 `query`、`repl`、`config` |
+| `cmd/influx-cli/main.go` | Cobra CLI 入口，包含 `query`、`repl`、`tui`、`config` |
 | `internal/config` | profile、环境变量和命令行覆盖合并 |
 | `internal/adapter/influxdb` | InfluxDB 1.x/openGemini 兼容 HTTP query path |
 | `internal/result` | table、series、schema result model |
-| `internal/render` | table 和 sparkline renderer |
+| `internal/render` | table、sparkline 和 ASCII chart renderer |
 | `internal/app`、`internal/repl` | session、statusline、meta command 和 REPL loop |
 | `internal/history` | REPL query history 本地持久化和检索 |
+| `internal/tui` | Bubble Tea TUI：query editor、result view、context panel、watch、renderer switch |
 | `docs/PRODUCT_DESIGN.md` | 产品设计书 |
 | `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
@@ -66,8 +67,8 @@ REPL meta command：
 :rps [db]     # show named/current DB RP details; without current DB, show all DBs
 :measurements
 :msts
-:format [auto|table|sparkline|json]
-:fmt [auto|table|sparkline|json]
+:format [auto|table|sparkline|chart|json]
+:fmt [auto|table|sparkline|chart|json]
 :help
 :q
 ```

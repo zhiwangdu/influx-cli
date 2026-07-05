@@ -17,29 +17,33 @@ func TestExecutorMetaUseAndRPUpdateSession(t *testing.T) {
 	if _, err := executor.Execute(context.Background(), ":use metrics"); err != nil {
 		t.Fatal(err)
 	}
-	if executor.Session.Database != "metrics" || executor.Session.RP != "autogen" {
-		t.Fatalf("context = %q/%q, want metrics/autogen", executor.Session.Database, executor.Session.RP)
+	snapshot := executor.Session.Snapshot()
+	if snapshot.Database != "metrics" || snapshot.RP != "autogen" {
+		t.Fatalf("context = %q/%q, want metrics/autogen", snapshot.Database, snapshot.RP)
 	}
 
 	if _, err := executor.Execute(context.Background(), ":db telegraf"); err != nil {
 		t.Fatal(err)
 	}
-	if executor.Session.Database != "telegraf" || executor.Session.RP != "raw" {
-		t.Fatalf("context = %q/%q, want telegraf/raw", executor.Session.Database, executor.Session.RP)
+	snapshot = executor.Session.Snapshot()
+	if snapshot.Database != "telegraf" || snapshot.RP != "raw" {
+		t.Fatalf("context = %q/%q, want telegraf/raw", snapshot.Database, snapshot.RP)
 	}
 
 	if _, err := executor.Execute(context.Background(), ":use metrics.short"); err != nil {
 		t.Fatal(err)
 	}
-	if executor.Session.Database != "metrics" || executor.Session.RP != "short" {
-		t.Fatalf("context = %q/%q, want metrics/short", executor.Session.Database, executor.Session.RP)
+	snapshot = executor.Session.Snapshot()
+	if snapshot.Database != "metrics" || snapshot.RP != "short" {
+		t.Fatalf("context = %q/%q, want metrics/short", snapshot.Database, snapshot.RP)
 	}
 
 	if _, err := executor.Execute(context.Background(), ":rp autogen"); err != nil {
 		t.Fatal(err)
 	}
-	if executor.Session.RP != "autogen" {
-		t.Fatalf("rp = %q, want autogen", executor.Session.RP)
+	snapshot = executor.Session.Snapshot()
+	if snapshot.RP != "autogen" {
+		t.Fatalf("rp = %q, want autogen", snapshot.RP)
 	}
 }
 

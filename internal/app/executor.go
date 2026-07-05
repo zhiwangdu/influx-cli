@@ -38,13 +38,23 @@ func (e *Executor) Execute(ctx context.Context, input string) (result.Result, er
 	return res, err
 }
 
+func (e *Executor) Schema(ctx context.Context, measurement string) (schema.Snapshot, error) {
+	measurement = strings.TrimSpace(measurement)
+	if measurement == "" {
+		return schema.Snapshot{}, fmt.Errorf("measurement is required")
+	}
+	snapshot := e.Session.Snapshot()
+	return e.measurementSchema(ctx, snapshot.Database, snapshot.RP, measurement)
+}
+
 func (e *Executor) execute(ctx context.Context, input string) (result.Result, error) {
 	if strings.HasPrefix(input, ":") {
 		return e.executeMeta(ctx, input)
 	}
 
-	q := query.New(input, e.Session.Database, e.Session.RP, e.Session.Precision)
-	e.Session.Dialect = q.Dialect
+	snapshot := e.Session.Snapshot()
+	q := query.New(input, snapshot.Database, snapshot.RP, snapshot.Precision)
+	e.Session.SetDialect(q.Dialect)
 	return e.Adapter.Query(ctx, q)
 }
 
@@ -67,8 +77,7 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 				return result.Result{}, err
 			}
 		}
-		e.Session.Database = database
-		e.Session.RP = retentionPolicy
+		e.Session.SetContext(database, retentionPolicy)
 		return contextResult(database, retentionPolicy), nil
 	case ":db":
 		if len(fields) != 2 {
@@ -79,14 +88,13 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 		if err != nil {
 			return result.Result{}, err
 		}
-		e.Session.Database = database
-		e.Session.RP = retentionPolicy
+		e.Session.SetContext(database, retentionPolicy)
 		return contextResult(database, retentionPolicy), nil
 	case ":rp":
 		if len(fields) != 2 {
 			return result.Result{}, fmt.Errorf("usage: :rp <retention_policy>")
 		}
-		e.Session.RP = fields[1]
+		e.Session.SetRetentionPolicy(fields[1])
 		return statusResult("retention_policy", fields[1]), nil
 	case ":rps":
 		if len(fields) > 2 {
@@ -95,8 +103,9 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 		if len(fields) == 2 {
 			return e.retentionPoliciesResult(ctx, []string{fields[1]})
 		}
-		if strings.TrimSpace(e.Session.Database) != "" {
-			return e.retentionPoliciesResult(ctx, []string{e.Session.Database})
+		snapshot := e.Session.Snapshot()
+		if strings.TrimSpace(snapshot.Database) != "" {
+			return e.retentionPoliciesResult(ctx, []string{snapshot.Database})
 		}
 		databases, err := e.Adapter.ShowDatabases(ctx)
 		if err != nil {
@@ -114,15 +123,17 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 		}
 		return result.FromTable(table), nil
 	case ":measurements", ":msts":
-		q := query.New("SHOW MEASUREMENTS", e.Session.Database, e.Session.RP, e.Session.Precision)
+		snapshot := e.Session.Snapshot()
+		q := query.New("SHOW MEASUREMENTS", snapshot.Database, snapshot.RP, snapshot.Precision)
 		return e.Adapter.Query(ctx, q)
 	case ":schema", ":fields", ":tags":
 		if len(fields) != 2 {
 			return result.Result{}, fmt.Errorf("usage: %s <measurement>", command)
 		}
-		snapshot, err := e.Adapter.GetSchema(ctx, schema.Scope{
-			Database:        e.Session.Database,
-			RetentionPolicy: e.Session.RP,
+		sessionSnapshot := e.Session.Snapshot()
+		schemaSnapshot, err := e.Adapter.GetSchema(ctx, schema.Scope{
+			Database:        sessionSnapshot.Database,
+			RetentionPolicy: sessionSnapshot.RP,
 			Measurement:     fields[1],
 		})
 		if err != nil {
@@ -130,11 +141,11 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 		}
 		switch command {
 		case ":fields":
-			return fieldsResult(snapshot), nil
+			return fieldsResult(schemaSnapshot), nil
 		case ":tags":
-			return tagsResult(snapshot), nil
+			return tagsResult(schemaSnapshot), nil
 		default:
-			return result.SchemaResult(snapshot), nil
+			return result.SchemaResult(schemaSnapshot), nil
 		}
 	case ":refresh":
 		if len(fields) != 2 || strings.ToLower(fields[1]) != "schema" {
@@ -143,14 +154,15 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 		e.RefreshSchemaCache()
 		return statusResult("schema_cache", "refreshed"), nil
 	case ":status":
+		snapshot := e.Session.Snapshot()
 		table := result.NewTable([]string{"key", "value"})
-		table.AddRow("db", e.Session.Database)
-		table.AddRow("rp", e.Session.RP)
-		table.AddRow("mode", e.Session.Dialect)
-		table.AddRow("adapter", e.Session.AdapterName)
-		table.AddRow("latency", e.Session.LastLatency.String())
-		if e.Session.LastError != nil {
-			table.AddRow("last_error", e.Session.LastError.Error())
+		table.AddRow("db", snapshot.Database)
+		table.AddRow("rp", snapshot.RP)
+		table.AddRow("mode", snapshot.Dialect)
+		table.AddRow("adapter", snapshot.AdapterName)
+		table.AddRow("latency", snapshot.LastLatency.String())
+		if snapshot.LastError != nil {
+			table.AddRow("last_error", snapshot.LastError.Error())
 		} else {
 			table.AddRow("last_error", "")
 		}
@@ -258,7 +270,7 @@ func helpResult() result.Result {
 	table.AddRow(":tags <measurement>", "show tag keys for a measurement")
 	table.AddRow(":schema <measurement>", "show field and tag keys for a measurement")
 	table.AddRow(":refresh schema", "clear autocomplete schema cache")
-	table.AddRow(":format [format]", "show or set REPL render format: auto, table, sparkline, json")
+	table.AddRow(":format [format]", "show or set REPL render format: auto, table, sparkline, chart, json")
 	table.AddRow(":fmt [format]", "alias for :format")
 	table.AddRow(":history [limit] [filter]", "show recent REPL query history")
 	table.AddRow(":hist [limit] [filter]", "alias for :history")

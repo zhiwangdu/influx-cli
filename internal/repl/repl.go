@@ -235,7 +235,7 @@ func handleFormatCommand(line string, options *Options, out io.Writer) (bool, er
 		return false, nil
 	}
 	if len(fields) > 2 {
-		return true, fmt.Errorf("usage: :format [auto|table|sparkline|json]")
+		return true, fmt.Errorf("usage: :format [auto|table|sparkline|chart|json]")
 	}
 	if len(fields) == 1 {
 		format, err := render.NormalizeFormat(options.Render.Format)
@@ -328,10 +328,11 @@ func persistHistory(executor *app.Executor, store *history.Store, line string) e
 	if store == nil {
 		return nil
 	}
+	snapshot := executor.Session.Snapshot()
 	return store.Append(history.Entry{
-		Database:        executor.Session.Database,
-		RetentionPolicy: executor.Session.RP,
-		Dialect:         string(executor.Session.Dialect),
+		Database:        snapshot.Database,
+		RetentionPolicy: snapshot.RP,
+		Dialect:         string(snapshot.Dialect),
 		Query:           line,
 	})
 }
