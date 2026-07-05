@@ -691,6 +691,7 @@ type mergesetDecodedBlockItems struct {
 	FirstItem   []byte
 	LastItem    []byte
 	Samples     [][]byte
+	Items       [][]byte
 	QueryKeys   []string
 	SeekResults map[string]mergesetSeekResult
 }
@@ -830,16 +831,18 @@ func decodeMergesetZSTDBlockItems(header mergesetBlockHeader, itemsData, lensDat
 }
 
 func newMergesetDecodedBlockItems(firstItem []byte, sampleLimit int, queryKeys []string) mergesetDecodedBlockItems {
+	item := append([]byte(nil), firstItem...)
 	decoded := mergesetDecodedBlockItems{
 		Count:       1,
-		FirstItem:   append([]byte(nil), firstItem...),
-		LastItem:    append([]byte(nil), firstItem...),
+		FirstItem:   item,
+		LastItem:    item,
+		Items:       [][]byte{item},
 		QueryKeys:   queryKeys,
 		SeekResults: map[string]mergesetSeekResult{},
 	}
 	decoded.observeQuerySeek(firstItem)
 	if sampleLimit > 0 {
-		decoded.Samples = append(decoded.Samples, append([]byte(nil), firstItem...))
+		decoded.Samples = append(decoded.Samples, item)
 	}
 	return decoded
 }
@@ -848,11 +851,13 @@ func (decoded *mergesetDecodedBlockItems) appendItem(item []byte, sampleLimit in
 	if bytes.Compare(decoded.LastItem, item) > 0 {
 		return fmt.Errorf("decoded data block contains unsorted items")
 	}
+	item = append([]byte(nil), item...)
 	decoded.Count++
-	decoded.LastItem = append(decoded.LastItem[:0], item...)
+	decoded.LastItem = item
+	decoded.Items = append(decoded.Items, item)
 	decoded.observeQuerySeek(item)
 	if len(decoded.Samples) < sampleLimit {
-		decoded.Samples = append(decoded.Samples, append([]byte(nil), item...))
+		decoded.Samples = append(decoded.Samples, item)
 	}
 	return nil
 }
@@ -991,6 +996,7 @@ func (p *mergesetScanPlan) ObserveDecodedBlock(index int, header mergesetBlockHe
 	}
 	summary := p.DecodePath
 	summary.OptimizedOutputValues += uint64ToInt(decoded.Count)
+	summary.mergesetScanItems = append(summary.mergesetScanItems, decoded.Items...)
 	if p.SampleLimit > 0 && len(summary.CursorWindows) < p.SampleLimit {
 		window := DecodePathCursorWindow{
 			Key:             hex.EncodeToString(header.FirstItem),

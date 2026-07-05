@@ -278,6 +278,12 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 	if got, want := decode.TableSearchOutputValues, 5; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
 	}
+	if got, want := decode.DeduplicatedOutputValues, 5; got != want {
+		t.Fatalf("deduplicated output values = %d, want %d", got, want)
+	}
+	if got, want := decode.DuplicateOutputValues, 0; got != want {
+		t.Fatalf("duplicate output values = %d, want %d", got, want)
+	}
 	if got, want := decode.CursorWindowCount, 2; got != want {
 		t.Fatalf("cursor window count = %d, want %d", got, want)
 	}
@@ -311,6 +317,71 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "TableSearch-style heap ordering") {
 		t.Fatalf("recommendations = %v, want file-set scan recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
+	dir := t.TempDir()
+	partPath1 := filepath.Join(dir, "3_1_1847A3A45055EEF0")
+	if err := writeTestMergesetPart(partPath1, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6164",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	partPath2 := filepath.Join(dir, "3_1_1847A3A45055EEF1")
+	if err := writeTestMergesetPart(partPath2, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6165",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		BlockSampleLimit: 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := decode.TableSearchOutputValues, 6; got != want {
+		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+	if got, want := decode.DeduplicatedOutputValues, 4; got != want {
+		t.Fatalf("deduplicated output values = %d, want %d", got, want)
+	}
+	if got, want := decode.DuplicateOutputValues, 2; got != want {
+		t.Fatalf("duplicate output values = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowKeys, 2; got != want {
+		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 6; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	wantValues := [][]byte{
+		[]byte("aa"),
+		[]byte("aa"),
+		[]byte{'a', 'a', 0, 0, 0, 0, 0, 0, 0, 1},
+		[]byte{'a', 'a', 0, 0, 0, 0, 0, 0, 0, 1},
+		[]byte("ad"),
+		[]byte("ae"),
+	}
+	for i, want := range wantValues {
+		if got := []byte(decode.CursorOutputSamples[i].OptimizedValue); !bytes.Equal(got, want) {
+			t.Fatalf("cursor output sample[%d] = %x, want %x", i, got, want)
+		}
+	}
+	if !containsString(decode.Recommendations, "merge/dedup 2 duplicate table-scan item candidate") {
+		t.Fatalf("recommendations = %v, want duplicate heap output recommendation", decode.Recommendations)
 	}
 }
 

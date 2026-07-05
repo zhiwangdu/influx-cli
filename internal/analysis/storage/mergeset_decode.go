@@ -2,8 +2,8 @@ package storage
 
 import (
 	"bytes"
+	"container/heap"
 	"fmt"
-	"sort"
 )
 
 func buildMergesetFileSetDecodePathSummary(files []FileReport, options Options) *DecodePathSummary {
@@ -82,7 +82,7 @@ func buildMergesetFileSetScanSummary(files []FileReport, options Options) *Decod
 		LocationBlocksByType: map[string]int{},
 		DecodeBlocksByType:   map[string]int{},
 	}
-	outputSamples := []DecodePathCursorOutput{}
+	streams := []mergesetFileSetScanStream{}
 	includedParts := 0
 	for _, file := range files {
 		if file.Format != FormatMergeset || file.DecodePath == nil || !isMergesetTableScanSummary(file.DecodePath) {
@@ -90,19 +90,20 @@ func buildMergesetFileSetScanSummary(files []FileReport, options Options) *Decod
 		}
 		includedParts++
 		addMergesetFileScanSummary(summary, file.DecodePath, file.Path, options.BlockSampleLimit)
-		outputSamples = append(outputSamples, file.DecodePath.CursorOutputSamples...)
+		if len(file.DecodePath.mergesetScanItems) > 0 {
+			streams = append(streams, newMergesetFileSetScanStream(file.Path, file.DecodePath.mergesetScanItems, options))
+		}
 	}
 	if includedParts == 0 {
 		return nil
 	}
 	summary.TableSearchSeekCalls = includedParts
-	summary.TableSearchHeapCandidates = includedParts
-	summary.TableSearchOutputValues = summary.OptimizedOutputValues
+	summary.TableSearchHeapCandidates = len(streams)
 	if includedParts > 1 {
 		summary.MergeWindowCount = 1
 		summary.MergeWindowBlocks = includedParts
 	}
-	populateMergesetFileSetScanOutputSamples(summary, outputSamples, options)
+	populateMergesetFileSetScanCursor(summary, streams, options)
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
@@ -209,22 +210,137 @@ func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tabl
 	}
 }
 
-func populateMergesetFileSetScanOutputSamples(summary *DecodePathSummary, samples []DecodePathCursorOutput, options Options) {
-	if options.BlockSampleLimit <= 0 || len(samples) == 0 {
+type mergesetFileSetScanStream struct {
+	path  string
+	items [][]byte
+	index int
+}
+
+func newMergesetFileSetScanStream(path string, items [][]byte, options Options) mergesetFileSetScanStream {
+	index := 0
+	if options.CursorDescending {
+		index = len(items) - 1
+	}
+	return mergesetFileSetScanStream{
+		path:  path,
+		items: items,
+		index: index,
+	}
+}
+
+func (s *mergesetFileSetScanStream) current() []byte {
+	if s.index < 0 || s.index >= len(s.items) {
+		return nil
+	}
+	return s.items[s.index]
+}
+
+func (s *mergesetFileSetScanStream) advance(descending bool) bool {
+	if descending {
+		s.index--
+		return s.index >= 0
+	}
+	s.index++
+	return s.index < len(s.items)
+}
+
+type mergesetFileSetScanHeap struct {
+	streams    []*mergesetFileSetScanStream
+	descending bool
+}
+
+func (h mergesetFileSetScanHeap) Len() int {
+	return len(h.streams)
+}
+
+func (h mergesetFileSetScanHeap) Less(i, j int) bool {
+	left := h.streams[i]
+	right := h.streams[j]
+	cmp := bytes.Compare(left.current(), right.current())
+	if cmp == 0 {
+		if left.path == right.path {
+			if h.descending {
+				return left.index > right.index
+			}
+			return left.index < right.index
+		}
+		return left.path < right.path
+	}
+	if h.descending {
+		return cmp > 0
+	}
+	return cmp < 0
+}
+
+func (h mergesetFileSetScanHeap) Swap(i, j int) {
+	h.streams[i], h.streams[j] = h.streams[j], h.streams[i]
+}
+
+func (h *mergesetFileSetScanHeap) Push(x any) {
+	h.streams = append(h.streams, x.(*mergesetFileSetScanStream))
+}
+
+func (h *mergesetFileSetScanHeap) Pop() any {
+	streams := h.streams
+	stream := streams[len(streams)-1]
+	h.streams = streams[:len(streams)-1]
+	return stream
+}
+
+func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mergesetFileSetScanStream, options Options) {
+	if len(streams) == 0 {
+		summary.TableSearchOutputValues = summary.OptimizedOutputValues
 		return
 	}
-	sort.SliceStable(samples, func(i, j int) bool {
-		cmp := bytes.Compare([]byte(samples[i].OptimizedValue), []byte(samples[j].OptimizedValue))
-		if options.CursorDescending {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
-	limit := options.BlockSampleLimit
-	if limit > len(samples) {
-		limit = len(samples)
+	cursorHeap := mergesetFileSetScanHeap{
+		streams:    make([]*mergesetFileSetScanStream, 0, len(streams)),
+		descending: options.CursorDescending,
 	}
-	summary.CursorOutputSamples = append(summary.CursorOutputSamples, samples[:limit]...)
+	for i := range streams {
+		cursorHeap.streams = append(cursorHeap.streams, &streams[i])
+	}
+	heap.Init(&cursorHeap)
+
+	total := 0
+	unique := 0
+	duplicates := 0
+	duplicateGroups := 0
+	groupSize := 0
+	var previous []byte
+	for cursorHeap.Len() > 0 {
+		stream := heap.Pop(&cursorHeap).(*mergesetFileSetScanStream)
+		item := stream.current()
+		total++
+		if previous == nil || !bytes.Equal(previous, item) {
+			if groupSize > 1 {
+				duplicateGroups++
+			}
+			unique++
+			groupSize = 1
+			previous = append(previous[:0], item...)
+		} else {
+			duplicates++
+			groupSize++
+		}
+		if options.BlockSampleLimit > 0 && len(summary.CursorOutputSamples) < options.BlockSampleLimit {
+			summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
+				Key:            string(item),
+				Type:           "mergeset-table-search-item",
+				OptimizedValue: string(item),
+				Matches:        true,
+			})
+		}
+		if stream.advance(options.CursorDescending) {
+			heap.Push(&cursorHeap, stream)
+		}
+	}
+	if groupSize > 1 {
+		duplicateGroups++
+	}
+	summary.TableSearchOutputValues = total
+	summary.DeduplicatedOutputValues = unique
+	summary.DuplicateOutputValues = duplicates
+	summary.MergeWindowKeys = duplicateGroups
 }
 
 func appendMergesetFileSearchSamples(dst, src *DecodePathSummary, path string, sampleLimit int) {
@@ -275,8 +391,15 @@ func mergesetFileSetScanRecommendations(summary *DecodePathSummary) []string {
 			summary.MergeWindowBlocks,
 		))
 	}
+	if summary.DuplicateOutputValues > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"merge/dedup %d duplicate table-scan item candidate(s) across %d duplicate group(s)",
+			summary.DuplicateOutputValues,
+			summary.MergeWindowKeys,
+		))
+	}
 	if len(summary.CursorOutputSamples) > 0 {
-		recommendations = append(recommendations, "file-set scan output samples are ordered by decoded mergeset item bytes")
+		recommendations = append(recommendations, "file-set scan output samples follow TableSearch heap cursor order")
 	}
 	if len(recommendations) == 0 {
 		recommendations = append(recommendations, "mergeset file-set table scan has no decoded item payload candidates")
