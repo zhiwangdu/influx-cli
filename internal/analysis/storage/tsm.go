@@ -26,12 +26,14 @@ const (
 )
 
 type tsmIndexEntry struct {
-	Key     string
-	Type    byte
-	MinTime int64
-	MaxTime int64
-	Offset  int64
-	Size    uint32
+	Key                 string
+	Type                byte
+	MinTime             int64
+	MaxTime             int64
+	Offset              int64
+	Size                uint32
+	ValueCount          int
+	ValueCountAvailable bool
 }
 
 func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, error) {
@@ -60,6 +62,7 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 	if err != nil {
 		return FileReport{}, err
 	}
+	valueCountErrors := populateTSMBlockValueCounts(f, entries)
 	if len(entries) == 0 {
 		return FileReport{}, fmt.Errorf("TSM index has no entries")
 	}
@@ -107,11 +110,10 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 				SizeBytes:     entry.Size,
 				QueryOverlaps: queryOverlaps,
 			}
-			count, err := readTSMBlockValueCount(f, entry)
-			if err == nil {
-				block.ValueCount = count
-			} else {
-				report.Notices = append(report.Notices, fmt.Sprintf("block %d count unavailable: %v", i, err))
+			if entry.ValueCountAvailable {
+				block.ValueCount = entry.ValueCount
+			} else if valueCountErrors[i] != nil {
+				report.Notices = append(report.Notices, fmt.Sprintf("block %d count unavailable: %v", i, valueCountErrors[i]))
 			}
 			report.Blocks = append(report.Blocks, block)
 		}
@@ -129,6 +131,20 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 	report.Tombstones = tombstones
 	report.DecodePath = buildTSMDecodePathSummary(entries, tombstoneEntries, options)
 	return report, nil
+}
+
+func populateTSMBlockValueCounts(f *os.File, entries []tsmIndexEntry) []error {
+	errs := make([]error, len(entries))
+	for i := range entries {
+		count, err := readTSMBlockValueCount(f, entries[i])
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+		entries[i].ValueCount = count
+		entries[i].ValueCountAvailable = true
+	}
+	return errs
 }
 
 func readTSMIndex(f *os.File, size int64) (int64, int64, []string, []tsmIndexEntry, error) {

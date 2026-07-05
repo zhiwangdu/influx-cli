@@ -194,6 +194,12 @@ type DecodePathSummary struct {
 	CursorSeekTime          int64                     `json:"cursor_seek_time,omitempty"`
 	BaselineDecodeBlocks    int                       `json:"baseline_decode_blocks,omitempty"`
 	OptimizedDecodeBlocks   int                       `json:"optimized_decode_blocks,omitempty"`
+	BaselineDecodeBytes     int64                     `json:"baseline_decode_bytes,omitempty"`
+	OptimizedDecodeBytes    int64                     `json:"optimized_decode_bytes,omitempty"`
+	SavedDecodeBytes        int64                     `json:"saved_decode_bytes,omitempty"`
+	BaselineDecodeValues    int                       `json:"baseline_decode_values,omitempty"`
+	OptimizedDecodeValues   int                       `json:"optimized_decode_values,omitempty"`
+	SavedDecodeValues       int                       `json:"saved_decode_values,omitempty"`
 	LocationBlocks          int                       `json:"location_blocks,omitempty"`
 	FilteredDecodeBlocks    int                       `json:"filtered_decode_blocks,omitempty"`
 	SavedDecodeBlocks       int                       `json:"saved_decode_blocks,omitempty"`
@@ -219,6 +225,8 @@ type DecodePathBlockDecision struct {
 	MinTime           int64  `json:"min_time"`
 	MaxTime           int64  `json:"max_time"`
 	Type              string `json:"type"`
+	SizeBytes         uint32 `json:"size_bytes,omitempty"`
+	ValueCount        int    `json:"value_count,omitempty"`
 	LocationCandidate bool   `json:"location_candidate,omitempty"`
 	Decoded           bool   `json:"decoded,omitempty"`
 	Reason            string `json:"reason,omitempty"`

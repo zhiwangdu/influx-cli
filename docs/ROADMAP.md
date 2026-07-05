@@ -35,7 +35,7 @@ Phase 5 已开始一个窄切面的本地文件分析命令：
 influx-cli storage analyze <file-or-dir>...
 ```
 
-当前覆盖 InfluxDB TSM attached file metadata、tombstone range/impact summary、基于 query range/key 的 TSM decode path estimate、per-file 和 FileStore-level cursor window/merge window simulation、优化前后 decode count estimate、TSI index file measurement/tag summary 和 measurement/tag predicate inspection，以及 openGemini attached TSSP trailer/meta-index metadata 和 none/snappy/LZ4/self-compressed chunk metadata。完整 storage-engine cursor execution 和优化前后真实 decode path 对比仍属于后续 Phase 5 工作。
+当前覆盖 InfluxDB TSM attached file metadata、tombstone range/impact summary、基于 query range/key 的 TSM decode path estimate、per-file 和 FileStore-level cursor window/merge window simulation、优化前后 block/byte/value decode path estimate、TSI index file measurement/tag summary 和 measurement/tag predicate inspection，以及 openGemini attached TSSP trailer/meta-index metadata 和 none/snappy/LZ4/self-compressed chunk metadata。完整 storage-engine cursor execution 和优化前后真实 cursor 输出对比仍属于后续 Phase 5 工作。
 
 ## 3. Phase 0: CLI MVP Foundation
 

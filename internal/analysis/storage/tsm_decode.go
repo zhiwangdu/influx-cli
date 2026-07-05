@@ -57,6 +57,10 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			reason = "before_cursor_seek"
 		case !queryOverlaps:
 			summary.LocationBlocks++
+			summary.BaselineDecodeBytes += int64(entry.Size)
+			if entry.ValueCountAvailable {
+				summary.BaselineDecodeValues += entry.ValueCount
+			}
 			summary.LocationBlocksByType[typeName]++
 			summary.SkippedAfterRangeBlocks++
 			reason = "outside_query_range"
@@ -67,6 +71,12 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 		default:
 			summary.LocationBlocks++
 			summary.FilteredDecodeBlocks++
+			summary.BaselineDecodeBytes += int64(entry.Size)
+			summary.OptimizedDecodeBytes += int64(entry.Size)
+			if entry.ValueCountAvailable {
+				summary.BaselineDecodeValues += entry.ValueCount
+				summary.OptimizedDecodeValues += entry.ValueCount
+			}
 			summary.LocationBlocksByType[typeName]++
 			summary.DecodeBlocksByType[typeName]++
 			decoded = true
@@ -83,6 +93,8 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 				MinTime:           entry.MinTime,
 				MaxTime:           entry.MaxTime,
 				Type:              typeName,
+				SizeBytes:         entry.Size,
+				ValueCount:        entry.ValueCount,
 				LocationCandidate: locationCandidate,
 				Decoded:           decoded,
 				Reason:            reason,
@@ -102,6 +114,8 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	summary.BaselineDecodeBlocks = summary.LocationBlocks
 	summary.OptimizedDecodeBlocks = summary.FilteredDecodeBlocks
 	summary.SavedDecodeBlocks = summary.LocationBlocks - summary.FilteredDecodeBlocks
+	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
+	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}

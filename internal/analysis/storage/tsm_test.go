@@ -85,6 +85,24 @@ func TestAnalyzeTSMMetadata(t *testing.T) {
 	if got, want := file.DecodePath.SavedDecodeBlocks, 1; got != want {
 		t.Fatalf("saved decode blocks = %d, want %d", got, want)
 	}
+	if got, want := file.DecodePath.BaselineDecodeBytes, int64(56); got != want {
+		t.Fatalf("baseline decode bytes = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.OptimizedDecodeBytes, int64(32); got != want {
+		t.Fatalf("optimized decode bytes = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.SavedDecodeBytes, int64(24); got != want {
+		t.Fatalf("saved decode bytes = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.BaselineDecodeValues, 5; got != want {
+		t.Fatalf("baseline decode values = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.OptimizedDecodeValues, 3; got != want {
+		t.Fatalf("optimized decode values = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.SavedDecodeValues, 2; got != want {
+		t.Fatalf("saved decode values = %d, want %d", got, want)
+	}
 	if got, want := file.DecodePath.CursorWindowCount, 2; got != want {
 		t.Fatalf("cursor window count = %d, want %d", got, want)
 	}
@@ -102,6 +120,12 @@ func TestAnalyzeTSMMetadata(t *testing.T) {
 	}
 	if got, want := file.DecodePath.Samples[1].Reason, "outside_query_range"; got != want {
 		t.Fatalf("second decode sample reason = %q, want %q", got, want)
+	}
+	if got, want := file.DecodePath.Samples[0].SizeBytes, uint32(32); got != want {
+		t.Fatalf("first decode sample size = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.Samples[0].ValueCount, 3; got != want {
+		t.Fatalf("first decode sample values = %d, want %d", got, want)
 	}
 }
 
@@ -426,6 +450,24 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	if got, want := decode.SavedDecodeBlocks, 1; got != want {
 		t.Fatalf("saved decode blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineDecodeBytes, int64(96); got != want {
+		t.Fatalf("baseline decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBytes, int64(64); got != want {
+		t.Fatalf("optimized decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBytes, int64(32); got != want {
+		t.Fatalf("saved decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeValues, 9; got != want {
+		t.Fatalf("baseline decode values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeValues, 6; got != want {
+		t.Fatalf("optimized decode values = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeValues, 3; got != want {
+		t.Fatalf("saved decode values = %d, want %d", got, want)
+	}
 	if got, want := decode.SkippedByKeyBlocks, 1; got != want {
 		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
 	}
@@ -449,6 +491,12 @@ func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.Samples[0].Path, path1; got != want {
 		t.Fatalf("first sample path = %q, want %q", got, want)
+	}
+	if got, want := decode.Samples[0].SizeBytes, uint32(32); got != want {
+		t.Fatalf("first sample size = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].ValueCount, 3; got != want {
+		t.Fatalf("first sample values = %d, want %d", got, want)
 	}
 }
 

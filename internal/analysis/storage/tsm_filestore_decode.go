@@ -97,9 +97,17 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 		for _, location := range locations {
 			typeName := tsmBlockTypeName(location.entry.Type)
 			summary.LocationBlocks++
+			summary.BaselineDecodeBytes += int64(location.entry.Size)
+			if location.entry.ValueCountAvailable {
+				summary.BaselineDecodeValues += location.entry.ValueCount
+			}
 			summary.LocationBlocksByType[typeName]++
 			if location.decoded {
 				summary.FilteredDecodeBlocks++
+				summary.OptimizedDecodeBytes += int64(location.entry.Size)
+				if location.entry.ValueCountAvailable {
+					summary.OptimizedDecodeValues += location.entry.ValueCount
+				}
 				summary.DecodeBlocksByType[typeName]++
 			} else {
 				summary.SkippedAfterRangeBlocks++
@@ -115,6 +123,8 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 					MinTime:           location.entry.MinTime,
 					MaxTime:           location.entry.MaxTime,
 					Type:              typeName,
+					SizeBytes:         location.entry.Size,
+					ValueCount:        location.entry.ValueCount,
 					LocationCandidate: true,
 					Decoded:           location.decoded,
 					Reason:            reason,
@@ -135,6 +145,8 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	summary.BaselineDecodeBlocks = summary.LocationBlocks
 	summary.OptimizedDecodeBlocks = summary.FilteredDecodeBlocks
 	summary.SavedDecodeBlocks = summary.LocationBlocks - summary.FilteredDecodeBlocks
+	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
+	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
@@ -171,6 +183,7 @@ func readTSMFileStoreData(path string) (tsmFileStoreData, error) {
 	if err != nil {
 		return tsmFileStoreData{}, fmt.Errorf("%s: %w", path, err)
 	}
+	populateTSMBlockValueCounts(f, entries)
 	if len(entries) == 0 {
 		return tsmFileStoreData{}, fmt.Errorf("%s: TSM index has no entries", path)
 	}
