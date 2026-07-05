@@ -60,8 +60,11 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 		decodePath, err := buildTSMFileStoreDecodePathSummary(report.Files, options)
 		if err != nil {
 			report.Notices = append(report.Notices, fmt.Sprintf("tsm filestore decode path unavailable: %v", err))
-		} else {
+		} else if decodePath != nil {
 			report.DecodePath = decodePath
+		}
+		if report.DecodePath == nil {
+			report.DecodePath = buildTSSPFileSetDecodePathSummary(report.Files, options)
 		}
 	}
 	report.Summary.FileCount = len(report.Files)

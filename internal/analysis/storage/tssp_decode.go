@@ -92,6 +92,104 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	return summary
 }
 
+func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *DecodePathSummary {
+	if !options.QueryRange.Set {
+		return nil
+	}
+
+	summary := &DecodePathSummary{
+		Mode:                 "tssp-file-set-location-cursor-ascending",
+		QueryRange:           options.QueryRange,
+		CursorSeekTime:       options.QueryRange.Min,
+		QuerySeriesIDs:       append([]uint64(nil), options.QuerySeriesIDs...),
+		KeyFilterApplied:     len(options.QuerySeriesIDs) > 0,
+		LocationBlocksByType: map[string]int{},
+		DecodeBlocksByType:   map[string]int{},
+	}
+	matchedSeriesIDs := map[uint64]struct{}{}
+	included := false
+	for _, file := range files {
+		if file.Format != FormatTSSP || file.DecodePath == nil {
+			continue
+		}
+		included = true
+		addTSSPFileDecodePathSummary(summary, file.DecodePath, file.Path, options.BlockSampleLimit)
+		for _, id := range file.DecodePath.MatchedSeriesIDs {
+			matchedSeriesIDs[id] = struct{}{}
+		}
+	}
+	if !included {
+		return nil
+	}
+
+	if len(summary.QuerySeriesIDs) > 0 {
+		for _, id := range summary.QuerySeriesIDs {
+			if _, ok := matchedSeriesIDs[id]; ok {
+				summary.MatchedSeriesIDs = append(summary.MatchedSeriesIDs, id)
+			} else {
+				summary.MissingSeriesIDs = append(summary.MissingSeriesIDs, id)
+			}
+		}
+	}
+	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
+	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
+	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
+	summary.SavedReadSegments = summary.BaselineReadSegments - summary.OptimizedReadSegments
+	if summary.FilteredDecodeBlocks > 0 {
+		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
+	}
+	summary.Recommendations = tsspDecodeRecommendations(summary)
+	return summary
+}
+
+func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, sampleLimit int) {
+	dst.BaselineDecodeBlocks += src.BaselineDecodeBlocks
+	dst.OptimizedDecodeBlocks += src.OptimizedDecodeBlocks
+	dst.BaselineDecodeBytes += src.BaselineDecodeBytes
+	dst.OptimizedDecodeBytes += src.OptimizedDecodeBytes
+	dst.BaselineDecodeValues += src.BaselineDecodeValues
+	dst.OptimizedDecodeValues += src.OptimizedDecodeValues
+	dst.BaselineReadSegments += src.BaselineReadSegments
+	dst.OptimizedReadSegments += src.OptimizedReadSegments
+	dst.LocationBlocks += src.LocationBlocks
+	dst.FilteredDecodeBlocks += src.FilteredDecodeBlocks
+	dst.SkippedByKeyBlocks += src.SkippedByKeyBlocks
+	dst.SkippedBeforeSeekBlocks += src.SkippedBeforeSeekBlocks
+	dst.SkippedAfterRangeBlocks += src.SkippedAfterRangeBlocks
+	dst.FullyTombstonedBlocks += src.FullyTombstonedBlocks
+	dst.CursorWindowCount += src.CursorWindowCount
+	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
+	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
+	appendTSSPFileDecodePathSamples(dst, src, path, sampleLimit)
+}
+
+func addTSSPDecodePathCounts(dst, src map[string]int) {
+	for key, count := range src {
+		dst[key] += count
+	}
+}
+
+func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, sampleLimit int) {
+	if sampleLimit <= 0 {
+		return
+	}
+	for _, sample := range src.Samples {
+		if len(dst.Samples) >= sampleLimit {
+			break
+		}
+		if sample.Path == "" {
+			sample.Path = path
+		}
+		dst.Samples = append(dst.Samples, sample)
+	}
+	for _, window := range src.CursorWindows {
+		if len(dst.CursorWindows) >= sampleLimit {
+			break
+		}
+		dst.CursorWindows = append(dst.CursorWindows, window)
+	}
+}
+
 func populateTSSPDecodeSeriesMatches(summary *DecodePathSummary, metaIndexes []tsspMetaIndex) {
 	if len(summary.QuerySeriesIDs) == 0 {
 		return
@@ -190,7 +288,7 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	var recommendations []string
 	if len(summary.MissingSeriesIDs) > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"%d query series id(s) were not found in this TSSP file",
+			"%d query series id(s) were not found in analyzed TSSP file(s)",
 			len(summary.MissingSeriesIDs),
 		))
 	}

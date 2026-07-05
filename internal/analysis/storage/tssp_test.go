@@ -289,6 +289,120 @@ func TestAnalyzeTSSPDecodePathSeriesIDFilter(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "00000001-0001-00000000.tssp")
+	path2 := filepath.Join(dir, "00000002-0001-00000000.tssp")
+	if err := writeTestTSSP(path1); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPWithCompression(path2, tsspChunkMetaCompressSnappy); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(150, 175)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QuerySeriesIDs:   []uint64{7},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(report.Files), 2; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level TSSP decode path summary")
+	}
+	if got, want := decode.Mode, "tssp-file-set-location-cursor-ascending"; got != want {
+		t.Fatalf("mode = %q, want %q", got, want)
+	}
+	if got, want := decode.QuerySeriesIDs, []uint64{7}; !equalUint64s(got, want) {
+		t.Fatalf("query series ids = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedSeriesIDs, []uint64{7}; !equalUint64s(got, want) {
+		t.Fatalf("matched series ids = %v, want %v", got, want)
+	}
+	if len(decode.MissingSeriesIDs) != 0 {
+		t.Fatalf("missing series ids = %v, want none", decode.MissingSeriesIDs)
+	}
+	if got, want := decode.LocationBlocks, 6; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 6; got != want {
+		t.Fatalf("baseline decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
+		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.FilteredDecodeBlocks, 2; got != want {
+		t.Fatalf("filtered decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBlocks, 4; got != want {
+		t.Fatalf("saved decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeBytes, int64(576); got != want {
+		t.Fatalf("baseline decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBytes, int64(192); got != want {
+		t.Fatalf("optimized decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBytes, int64(384); got != want {
+		t.Fatalf("saved decode bytes = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeValues, 6; got != want {
+		t.Fatalf("baseline decode values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeValues, 2; got != want {
+		t.Fatalf("optimized decode values = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeValues, 4; got != want {
+		t.Fatalf("saved decode values = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineReadSegments, 6; got != want {
+		t.Fatalf("baseline read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadSegments, 2; got != want {
+		t.Fatalf("optimized read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadSegments, 4; got != want {
+		t.Fatalf("saved read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedByKeyBlocks, 4; got != want {
+		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedBeforeSeekBlocks, 2; got != want {
+		t.Fatalf("skipped before seek blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedAfterRangeBlocks, 2; got != want {
+		t.Fatalf("skipped after range blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 6; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := decode.LocationBlocksByType["chunk-meta"], 6; got != want {
+		t.Fatalf("chunk-meta location count = %d, want %d", got, want)
+	}
+	if got, want := decode.DecodeBlocksByType["chunk-meta"], 2; got != want {
+		t.Fatalf("chunk-meta decode count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.Samples), 5; got != want {
+		t.Fatalf("decode samples = %d, want %d", got, want)
+	}
+	for _, sample := range decode.Samples {
+		if sample.Path == "" {
+			t.Fatalf("decode sample missing path: %+v", sample)
+		}
+	}
+}
+
 func TestParseTSSPChunkMetaBlockAllowsTrailingBytes(t *testing.T) {
 	var buf bytes.Buffer
 	writeTestTSSPChunkMeta(&buf, testTSSPChunkSpec{
