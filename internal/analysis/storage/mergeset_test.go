@@ -130,6 +130,53 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got, want := file.Extra["item_payload_samples_hex"], "6161,61610000000000000001"; got != want {
 		t.Fatalf("payload samples extra = %q, want %q", got, want)
 	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("expected mergeset table scan decode path")
+	}
+	if got, want := decode.Mode, "mergeset-table-scan-ascending"; got != want {
+		t.Fatalf("decode mode = %q, want %q", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 2; got != want {
+		t.Fatalf("baseline blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
+		t.Fatalf("optimized blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeValues, 41; got != want {
+		t.Fatalf("baseline values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeValues, 41; got != want {
+		t.Fatalf("optimized values = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedOutputValues, 41; got != want {
+		t.Fatalf("optimized output values = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 2; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Key, "6161"; got != want {
+		t.Fatalf("first cursor window key = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[0].DecodedBlocks, 1; got != want {
+		t.Fatalf("first cursor window decoded blocks = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 2; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].OptimizedValue, "aa"; got != want {
+		t.Fatalf("first cursor output sample = %q, want %q", got, want)
+	}
+	wantSecondOutput := []byte{'a', 'a', 0, 0, 0, 0, 0, 0, 0, 1}
+	if got := []byte(decode.CursorOutputSamples[1].OptimizedValue); !bytes.Equal(got, wantSecondOutput) {
+		t.Fatalf("second cursor output sample = %x, want %x", got, wantSecondOutput)
+	}
+	if !containsString(decode.Recommendations, "scan 41 decoded mergeset item") {
+		t.Fatalf("recommendations = %v, want scan recommendation", decode.Recommendations)
+	}
 	if file.SizeBytes == 0 {
 		t.Fatal("expected non-zero component size")
 	}

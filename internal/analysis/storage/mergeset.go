@@ -601,7 +601,11 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 		Blocks: len(headers),
 	}
 	search := newMergesetSearchPlan(headers, options, firstItem, lastItem)
+	scan := newMergesetScanPlan(options)
 	summary.DecodePath = search.DecodePath
+	if summary.DecodePath == nil {
+		summary.DecodePath = scan.DecodePath
+	}
 	if len(headers) == 0 {
 		return summary, nil
 	}
@@ -632,6 +636,7 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 	notices := []string{}
 	for i, header := range headers {
 		search.ObserveHeader(i, header)
+		scan.ObserveHeader(i, header)
 		if header.ItemsBlockOffset > itemsSize || uint64(header.ItemsBlockSize) > itemsSize-header.ItemsBlockOffset {
 			continue
 		}
@@ -648,21 +653,36 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d lens_offset=%d lens_size=%d: %v", i+1, header.LensBlockOffset, header.LensBlockSize, err))
 			continue
 		}
-		decoded, err := decodeMergesetBlockItems(header, itemsData, lensData, decoder, options.KeySampleLimit-len(summary.Samples), search.QueryKeys)
+		payloadSampleLimit := options.KeySampleLimit - len(summary.Samples)
+		decodeSampleLimit := payloadSampleLimit
+		if scan.DecodePath != nil {
+			scanSampleLimit := options.BlockSampleLimit - len(scan.DecodePath.CursorOutputSamples)
+			if scanSampleLimit > decodeSampleLimit {
+				decodeSampleLimit = scanSampleLimit
+			}
+		}
+		decoded, err := decodeMergesetBlockItems(header, itemsData, lensData, decoder, decodeSampleLimit, search.QueryKeys)
 		if err != nil {
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d first_item=%s: %v", i+1, hex.EncodeToString(header.FirstItem), err))
 			continue
 		}
 		search.ObserveDecodedBlock(i, decoded)
+		scan.ObserveDecodedBlock(i, header, decoded)
 		summary.DecodedBlocks++
 		summary.ItemsDecoded += decoded.Count
 		if len(summary.FirstItem) == 0 {
 			summary.FirstItem = append(summary.FirstItem[:0], decoded.FirstItem...)
 		}
 		summary.LastItem = append(summary.LastItem[:0], decoded.LastItem...)
-		summary.Samples = append(summary.Samples, decoded.Samples...)
+		if payloadSampleLimit > len(decoded.Samples) {
+			payloadSampleLimit = len(decoded.Samples)
+		}
+		if payloadSampleLimit > 0 {
+			summary.Samples = append(summary.Samples, decoded.Samples[:payloadSampleLimit]...)
+		}
 	}
 	search.Finish(options)
+	scan.Finish(options)
 	return summary, notices
 }
 
@@ -881,6 +901,11 @@ type mergesetSearchPlan struct {
 	DecodePath      *DecodePathSummary
 }
 
+type mergesetScanPlan struct {
+	SampleLimit int
+	DecodePath  *DecodePathSummary
+}
+
 func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options, firstItem, lastItem []byte) *mergesetSearchPlan {
 	plan := &mergesetSearchPlan{}
 	if len(options.QueryKeys) == 0 {
@@ -914,6 +939,107 @@ func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options, first
 		DecodeBlocksByType:   map[string]int{},
 	}
 	return plan
+}
+
+func newMergesetScanPlan(options Options) *mergesetScanPlan {
+	plan := &mergesetScanPlan{}
+	if len(options.QueryKeys) > 0 {
+		return plan
+	}
+	plan.SampleLimit = options.BlockSampleLimit
+	plan.DecodePath = &DecodePathSummary{
+		Mode:                 mergesetScanMode(options),
+		LocationBlocksByType: map[string]int{},
+		DecodeBlocksByType:   map[string]int{},
+	}
+	return plan
+}
+
+func (p *mergesetScanPlan) ObserveHeader(index int, header mergesetBlockHeader) {
+	if p == nil || p.DecodePath == nil {
+		return
+	}
+	summary := p.DecodePath
+	blockBytes := int64(header.ItemsBlockSize) + int64(header.LensBlockSize)
+	summary.BaselineDecodeBlocks++
+	summary.BaselineDecodeValues += uint64ToInt(uint64(header.ItemsCount))
+	summary.BaselineDecodeBytes += blockBytes
+	summary.OptimizedDecodeBlocks++
+	summary.FilteredDecodeBlocks++
+	summary.LocationBlocks++
+	summary.OptimizedDecodeValues += uint64ToInt(uint64(header.ItemsCount))
+	summary.OptimizedDecodeBytes += blockBytes
+	summary.LocationBlocksByType["mergeset-block"]++
+	summary.DecodeBlocksByType["mergeset-block"]++
+	if p.SampleLimit <= 0 || len(summary.Samples) >= p.SampleLimit {
+		return
+	}
+	summary.Samples = append(summary.Samples, DecodePathBlockDecision{
+		Key:               hex.EncodeToString(header.FirstItem),
+		Type:              "mergeset-block",
+		SizeBytes:         addUint32Saturating(header.ItemsBlockSize, header.LensBlockSize),
+		ValueCount:        uint64ToInt(uint64(header.ItemsCount)),
+		LocationCandidate: true,
+		Decoded:           true,
+		Reason:            "table_scan_block",
+	})
+}
+
+func (p *mergesetScanPlan) ObserveDecodedBlock(index int, header mergesetBlockHeader, decoded mergesetDecodedBlockItems) {
+	if p == nil || p.DecodePath == nil {
+		return
+	}
+	summary := p.DecodePath
+	summary.OptimizedOutputValues += uint64ToInt(decoded.Count)
+	if p.SampleLimit > 0 && len(summary.CursorWindows) < p.SampleLimit {
+		window := DecodePathCursorWindow{
+			Key:             hex.EncodeToString(header.FirstItem),
+			LocationBlocks:  1,
+			DecodedBlocks:   1,
+			Reason:          "table_scan_block",
+			FirstBlockIndex: index,
+		}
+		if p.DecodePath.Mode == "mergeset-table-scan-descending" {
+			summary.CursorWindows = append([]DecodePathCursorWindow{window}, summary.CursorWindows...)
+		} else {
+			summary.CursorWindows = append(summary.CursorWindows, window)
+		}
+	}
+	if p.SampleLimit <= 0 {
+		return
+	}
+	for _, item := range decoded.Samples {
+		if len(summary.CursorOutputSamples) >= p.SampleLimit {
+			break
+		}
+		output := DecodePathCursorOutput{
+			Key:            string(item),
+			Type:           "mergeset-table-scan-item",
+			OptimizedValue: string(item),
+			Matches:        true,
+		}
+		if p.DecodePath.Mode == "mergeset-table-scan-descending" {
+			summary.CursorOutputSamples = append([]DecodePathCursorOutput{output}, summary.CursorOutputSamples...)
+		} else {
+			summary.CursorOutputSamples = append(summary.CursorOutputSamples, output)
+		}
+	}
+}
+
+func (p *mergesetScanPlan) Finish(options Options) {
+	if p == nil || p.DecodePath == nil {
+		return
+	}
+	summary := p.DecodePath
+	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
+	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
+	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
+	summary.BaselineOutputValues = summary.BaselineDecodeValues
+	summary.CursorWindowCount = summary.LocationBlocks
+	if summary.OptimizedDecodeBlocks > 0 {
+		summary.Amplification = float64(summary.BaselineDecodeBlocks) / float64(summary.OptimizedDecodeBlocks)
+	}
+	summary.Recommendations = mergesetScanRecommendations(summary, options)
 }
 
 func (p *mergesetSearchPlan) ObserveHeader(index int, header mergesetBlockHeader) {
@@ -1025,6 +1151,27 @@ func mergesetSearchMode(options Options) string {
 		return "mergeset-item-search-descending"
 	}
 	return "mergeset-item-search-ascending"
+}
+
+func mergesetScanMode(options Options) string {
+	if options.CursorDescending {
+		return "mergeset-table-scan-descending"
+	}
+	return "mergeset-table-scan-ascending"
+}
+
+func mergesetScanRecommendations(summary *DecodePathSummary, options Options) []string {
+	recommendations := []string{}
+	if summary.OptimizedOutputValues > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("scan %d decoded mergeset item(s) across %d block(s)", summary.OptimizedOutputValues, summary.OptimizedDecodeBlocks))
+	}
+	if len(summary.CursorOutputSamples) > 0 {
+		recommendations = append(recommendations, "decoded item payloads are available for table scan output samples")
+	}
+	if len(recommendations) == 0 {
+		recommendations = append(recommendations, "mergeset table scan has no decoded item payload candidates")
+	}
+	return recommendations
 }
 
 func mergesetSearchRecommendations(summary *DecodePathSummary, options Options) []string {
