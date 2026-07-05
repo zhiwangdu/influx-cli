@@ -559,6 +559,48 @@ func TestInspectTSSPDetachedDataBlockEmptyRows(t *testing.T) {
 	}
 }
 
+func TestInspectTSSPDataBlockPayloadFloatFull(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		codec  byte
+		values []float64
+		want   []string
+	}{
+		{name: "raw", codec: 0, values: []float64{1.25, 2.5}, want: []string{"1.25", "2.5"}},
+		{name: "snappy", codec: 2, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
+		{name: "gorilla", codec: 3, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
+		{name: "same", codec: 4, values: []float64{7.5, 7.5, 7.5}, want: []string{"7.5", "7.5", "7.5"}},
+		{name: "rle", codec: 5, values: []float64{1.5, 1.5, 0, 0, 2.5}, want: []string{"1.5", "1.5", "0", "0", "2.5"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := testTSSPFloatFullPayload(tc.values, tc.codec)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			info, ok, reason := inspectTSSPDataBlockPayload(payload)
+			if !ok {
+				t.Fatalf("inspect TSSP data block payload failed: %s", reason)
+			}
+			if got, want := info.Type, "float-full"; got != want {
+				t.Fatalf("type = %q, want %q", got, want)
+			}
+			if got, want := info.Rows, len(tc.values); got != want {
+				t.Fatalf("rows = %d, want %d", got, want)
+			}
+			if !info.RowsKnown || !info.ValueKnown || info.ValueNull {
+				t.Fatalf("known/null flags rows=%v value=%v null=%v, want true/true/false", info.RowsKnown, info.ValueKnown, info.ValueNull)
+			}
+			if got, want := info.Value, tc.want[0]; got != want {
+				t.Fatalf("first value = %q, want %q", got, want)
+			}
+			if got, want := info.Values, tc.want; !equalStrings(got, want) {
+				t.Fatalf("values = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestInspectTSSPDataBlockPayloadIntegerFullUncompressed(t *testing.T) {
 	var payload bytes.Buffer
 	payload.WriteByte(32) // openGemini encoding.BlockIntegerFull.

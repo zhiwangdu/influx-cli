@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	gsnappy "github.com/golang/snappy"
 	ksnappy "github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
@@ -630,6 +631,14 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 		if tsspDataBlockTypeIsEmpty(payload[0]) {
 			info.ValueKnown = true
 			info.ValueNull = true
+		} else if payload[0] == 31 {
+			if values, ok := decodeTSSPFloatFullValues(payload[5:], info.Rows); ok {
+				info.Values = values
+				if len(values) > 0 {
+					info.Value = values[0]
+				}
+				info.ValueKnown = true
+			}
 		} else if payload[0] == 32 {
 			if values, ok := decodeTSSPIntegerFullValues(payload[5:], info.Rows); ok {
 				info.Values = values
@@ -692,6 +701,117 @@ func decodeTSSPDetachedOneBlockValue(payload []byte) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func decodeTSSPFloatFullValues(encoded []byte, rows int) ([]string, bool) {
+	if rows < 0 || len(encoded) < 1 {
+		return nil, false
+	}
+	switch encoded[0] >> 4 {
+	case 0:
+		return decodeTSSPFloatFullRawValues(encoded[1:], rows)
+	case 2:
+		decoded, err := gsnappy.Decode(nil, encoded[1:])
+		if err != nil {
+			return nil, false
+		}
+		return decodeTSSPFloatFullRawValues(decoded, rows)
+	case 3:
+		values, err := decodeTSMFloatValues(encoded[1:])
+		if err != nil || len(values) != rows {
+			return nil, false
+		}
+		return formatTSSPFloatValues(values), true
+	case 4:
+		values, ok := decodeTSSPFloatFullSameValues(encoded[1:], rows)
+		if !ok {
+			return nil, false
+		}
+		return formatTSSPFloatValues(values), true
+	case 5:
+		values, ok := decodeTSSPFloatFullRLEValues(encoded[1:], rows)
+		if !ok {
+			return nil, false
+		}
+		return formatTSSPFloatValues(values), true
+	default:
+		return nil, false
+	}
+}
+
+func decodeTSSPFloatFullRawValues(raw []byte, rows int) ([]string, bool) {
+	if len(raw) != rows*8 {
+		return nil, false
+	}
+	values := make([]float64, rows)
+	for offset := 0; offset < len(raw); offset += 8 {
+		values[offset/8] = math.Float64frombits(binary.LittleEndian.Uint64(raw[offset : offset+8]))
+	}
+	return formatTSSPFloatValues(values), true
+}
+
+func decodeTSSPFloatFullSameValues(encoded []byte, rows int) ([]float64, bool) {
+	if rows < 0 || len(encoded) < 2 {
+		return nil, false
+	}
+	count := int(binary.BigEndian.Uint16(encoded[:2]))
+	if count != rows {
+		return nil, false
+	}
+	value := 0.0
+	if len(encoded) > 2 {
+		if len(encoded) < 10 {
+			return nil, false
+		}
+		value = math.Float64frombits(binary.LittleEndian.Uint64(encoded[2:10]))
+	}
+	values := make([]float64, count)
+	for i := range values {
+		values[i] = value
+	}
+	return values, true
+}
+
+func decodeTSSPFloatFullRLEValues(encoded []byte, rows int) ([]float64, bool) {
+	if rows < 0 {
+		return nil, false
+	}
+	values := make([]float64, 0, rows)
+	for len(encoded) > 0 {
+		if len(encoded) < 2 {
+			return nil, false
+		}
+		countBits := binary.BigEndian.Uint16(encoded[:2])
+		encoded = encoded[2:]
+		zero := countBits>>15 == 1
+		count := int(countBits &^ (uint16(1) << 15))
+		if count == 0 || len(values)+count > rows {
+			return nil, false
+		}
+		value := 0.0
+		if !zero {
+			if len(encoded) < 8 {
+				return nil, false
+			}
+			value = math.Float64frombits(binary.LittleEndian.Uint64(encoded[:8]))
+			encoded = encoded[8:]
+		}
+		for i := 0; i < count; i++ {
+			values = append(values, value)
+		}
+	}
+	if len(values) != rows {
+		return nil, false
+	}
+	return values, true
+}
+
+func formatTSSPFloatValues(values []float64) []string {
+	formatted := make([]string, len(values))
+	for i, value := range values {
+		formatted[i] = strconv.FormatFloat(value, 'f', -1, 64)
+	}
+	return formatted
 }
 
 func decodeTSSPIntegerFullValues(encoded []byte, rows int) ([]string, bool) {

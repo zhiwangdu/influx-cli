@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -265,6 +266,79 @@ func TestAnalyzeTSSPSamplesAttachedOneRowValueBlocks(t *testing.T) {
 	}
 	if !containsStringWithPrefix(decode.Recommendations, "sampled 1 TSSP value output") {
 		t.Fatalf("recommendations = %v, want value output recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPSamplesAttachedFloatFullBlocks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		codec  byte
+		values []float64
+		want   []string
+	}{
+		{name: "raw", codec: 0, values: []float64{1.25, 2.5}, want: []string{"1.25", "2.5"}},
+		{name: "snappy", codec: 2, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
+		{name: "gorilla", codec: 3, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
+		{name: "same", codec: 4, values: []float64{7.5, 7.5, 7.5}, want: []string{"7.5", "7.5", "7.5"}},
+		{name: "rle", codec: 5, values: []float64{1.5, 1.5, 0, 0, 2.5}, want: []string{"1.5", "1.5", "0", "0", "2.5"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+			times, err := writeTestTSSPWithFloatFullValues(path, tc.values, tc.codec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := Analyze(context.Background(), []string{path}, Options{
+				Format:           FormatTSSP,
+				QueryRange:       queryRange,
+				KeySampleLimit:   3,
+				BlockSampleLimit: len(tc.values) + 2,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := report.Files[0]
+			if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+				t.Fatalf("data block probe blocks = %q, want %q", got, want)
+			}
+			if got, want := file.Extra["data_block_probe_value_blocks"], "2"; got != want {
+				t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+			}
+			if got, want := file.Extra["data_block_probe_types"], "float-full:1,integer-full:1"; got != want {
+				t.Fatalf("data block probe types = %q, want %q", got, want)
+			}
+			decode := file.DecodePath
+			if decode == nil {
+				t.Fatal("decode path is nil")
+			}
+			if got, want := decode.OptimizedValueOutputPoints, len(tc.values); got != want {
+				t.Fatalf("optimized value output points = %d, want %d", got, want)
+			}
+			if got, want := len(decode.CursorOutputSamples), len(tc.values); got != want {
+				t.Fatalf("cursor output samples = %d, want %d", got, want)
+			}
+			for i, value := range tc.want {
+				want := DecodePathCursorOutput{
+					Key:            "sid:7/value",
+					Time:           times[i],
+					Type:           "float-full",
+					OptimizedValue: value,
+					Matches:        true,
+				}
+				got := decode.CursorOutputSamples[i]
+				if got != want {
+					t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+				}
+			}
+			if got, want := decode.Samples[0].ValueOutputPoints, len(tc.values); got != want {
+				t.Fatalf("decode sample value output points = %d, want %d", got, want)
+			}
+		})
 	}
 }
 
@@ -1407,6 +1481,71 @@ func writeTestTSSPWithOneRowData(path string) error {
 	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+func writeTestTSSPWithFloatFullValues(path string, values []float64, codec byte) ([]int64, error) {
+	if len(values) == 0 {
+		return nil, fmt.Errorf("test TSSP float values must not be empty")
+	}
+	times := make([]int64, len(values))
+	for i := range times {
+		times[i] = 333 + int64(i)*111
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+
+	dataOffset := int64(buf.Len())
+	valueOffset := int64(buf.Len())
+	valueSize, err := writeTestTSSPAttachedFloatFullBlock(&buf, values, codec)
+	if err != nil {
+		return nil, err
+	}
+	timeSize := writeTestTSSPAttachedIntegerFullBlock(&buf, times)
+	dataSize := int64(valueSize + timeSize)
+	chunk := testTSSPChunkSpec{
+		sid:      7,
+		minTime:  times[0],
+		maxTime:  times[len(times)-1],
+		offset:   valueOffset,
+		size:     valueSize,
+		timeSize: timeSize,
+	}
+
+	payload := testTSSPChunkMetaPayload(chunk)
+	payloadOffset := int64(buf.Len())
+	buf.Write(payload)
+
+	metaOffset := int64(buf.Len())
+	writeTestTSSPMetaIndex(&buf, tsspMetaIndex{
+		ID:      7,
+		MinTime: times[0],
+		MaxTime: times[len(times)-1],
+		Offset:  payloadOffset,
+		Count:   1,
+		Size:    uint32(len(payload)),
+	})
+
+	trailerOffset := int64(buf.Len())
+	writeTestTSSPTrailer(&buf, tsspTrailer{
+		DataOffset:         dataOffset,
+		DataSize:           dataSize,
+		IndexSize:          metaOffset - dataOffset - dataSize,
+		MetaIndexSize:      int64(buf.Len()) - metaOffset,
+		BloomSize:          0,
+		IDTimeSize:         0,
+		IDCount:            1,
+		MinID:              7,
+		MaxID:              7,
+		MinTime:            times[0],
+		MaxTime:            times[len(times)-1],
+		MetaIndexItemCount: 1,
+		ChunkMetaCompress:  tsspChunkMetaCompressNone,
+		MeasurementName:    "cpu",
+	})
+	writeGeminiInt64(&buf, trailerOffset)
+	return times, os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
 func writeTestTSSPWithIntegerFullData(path string) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsspMagic)
@@ -1750,6 +1889,102 @@ func writeTestTSSPAttachedIntegerOneBlock(buf *bytes.Buffer, value int64) uint32
 	binary.LittleEndian.PutUint64(payload[1:], uint64(value))
 	buf.Write(payload[:])
 	return uint32(len(payload))
+}
+
+func writeTestTSSPAttachedFloatFullBlock(buf *bytes.Buffer, values []float64, codec byte) (uint32, error) {
+	encoded, err := testTSSPFloatFullEncodedPayload(values, codec)
+	if err != nil {
+		return 0, err
+	}
+	start := buf.Len()
+	buf.WriteByte(31) // openGemini encoding.BlockFloatFull.
+	writeUint32(buf, uint32(len(values)))
+	buf.Write(encoded)
+	return uint32(buf.Len() - start), nil
+}
+
+func testTSSPFloatFullPayload(values []float64, codec byte) ([]byte, error) {
+	encoded, err := testTSSPFloatFullEncodedPayload(values, codec)
+	if err != nil {
+		return nil, err
+	}
+	var payload bytes.Buffer
+	payload.WriteByte(31) // openGemini encoding.BlockFloatFull.
+	writeUint32(&payload, uint32(len(values)))
+	payload.Write(encoded)
+	return payload.Bytes(), nil
+}
+
+func testTSSPFloatFullEncodedPayload(values []float64, codec byte) ([]byte, error) {
+	var payload bytes.Buffer
+	payload.WriteByte(codec << 4)
+	raw := testTSSPFloatRawBytes(values)
+	switch codec {
+	case 0:
+		payload.Write(raw)
+	case 2:
+		payload.Write(snappy.Encode(nil, raw))
+	case 3:
+		payload.Write(testTSMFloatValueBlock(values))
+	case 4:
+		encoded, err := testTSSPFloatSamePayload(values)
+		if err != nil {
+			return nil, err
+		}
+		payload.Write(encoded)
+	case 5:
+		payload.Write(testTSSPFloatRLEPayload(values))
+	default:
+		return nil, fmt.Errorf("unsupported test TSSP float codec %d", codec)
+	}
+	return payload.Bytes(), nil
+}
+
+func testTSSPFloatRawBytes(values []float64) []byte {
+	raw := make([]byte, len(values)*8)
+	for i, value := range values {
+		binary.LittleEndian.PutUint64(raw[i*8:], math.Float64bits(value))
+	}
+	return raw
+}
+
+func testTSSPFloatSamePayload(values []float64) ([]byte, error) {
+	if len(values) > 1 {
+		for _, value := range values[1:] {
+			if value != values[0] {
+				return nil, fmt.Errorf("same-value TSSP float payload received mixed values")
+			}
+		}
+	}
+	var payload bytes.Buffer
+	writeUint16(&payload, uint16(len(values)))
+	if len(values) > 0 && values[0] != 0 {
+		var raw [8]byte
+		binary.LittleEndian.PutUint64(raw[:], math.Float64bits(values[0]))
+		payload.Write(raw[:])
+	}
+	return payload.Bytes(), nil
+}
+
+func testTSSPFloatRLEPayload(values []float64) []byte {
+	var payload bytes.Buffer
+	for i := 0; i < len(values); {
+		value := values[i]
+		count := 1
+		for i+count < len(values) && values[i+count] == value && count < 1<<14 {
+			count++
+		}
+		if value == 0 {
+			writeUint16(&payload, uint16(count)|(uint16(1)<<15))
+		} else {
+			writeUint16(&payload, uint16(count))
+			var raw [8]byte
+			binary.LittleEndian.PutUint64(raw[:], math.Float64bits(value))
+			payload.Write(raw[:])
+		}
+		i += count
+	}
+	return payload.Bytes()
 }
 
 func writeTestTSSPAttachedIntegerFullBlock(buf *bytes.Buffer, values []int64) uint32 {
