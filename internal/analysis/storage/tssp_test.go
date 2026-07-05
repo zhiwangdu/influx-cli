@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/golang/snappy"
+	"github.com/pierrec/lz4/v4"
 )
 
 func TestAnalyzeTSSPMetadata(t *testing.T) {
@@ -70,9 +74,77 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	}
 }
 
-func TestAnalyzeTSSPCompressedChunkMetadataFallsBackToMetaIndex(t *testing.T) {
+func TestAnalyzeTSSPSnappyChunkMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
-	if err := writeTestTSSPWithCompression(path, 1); err != nil {
+	if err := writeTestTSSPWithCompression(path, tsspChunkMetaCompressSnappy); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(150, 175)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.QueryOverlapBlocks, 1; got != want {
+		t.Fatalf("query overlap blocks = %d, want %d", got, want)
+	}
+	if got, want := file.Blocks[0].Type, "chunk-meta"; got != want {
+		t.Fatalf("first block type = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["query_overlap_precision"], "chunk-meta"; got != want {
+		t.Fatalf("query overlap precision = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["chunk_meta_compress_supported"], "true"; got != want {
+		t.Fatalf("chunk meta compression support = %q, want %q", got, want)
+	}
+	if len(file.Notices) != 0 {
+		t.Fatalf("notices = %v, want none", file.Notices)
+	}
+}
+
+func TestAnalyzeTSSPLZ4ChunkMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithCompression(path, tsspChunkMetaCompressLZ4); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(150, 175)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.QueryOverlapBlocks, 1; got != want {
+		t.Fatalf("query overlap blocks = %d, want %d", got, want)
+	}
+	if got, want := file.Blocks[0].Type, "chunk-meta"; got != want {
+		t.Fatalf("first block type = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["query_overlap_precision"], "chunk-meta"; got != want {
+		t.Fatalf("query overlap precision = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSSPSelfCompressedChunkMetadataFallsBackToMetaIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithCompression(path, tsspChunkMetaCompressSelf); err != nil {
 		t.Fatal(err)
 	}
 
@@ -136,8 +208,54 @@ func TestSplitTSSPChunkMetaDataRejectsNonIncreasingOffsets(t *testing.T) {
 	}
 }
 
+func TestDecompressTSSPChunkMetaBlockRoundTrip(t *testing.T) {
+	payload := testTSSPChunkMetaPayload(
+		testTSSPChunkSpec{sid: 7, minTime: 100, maxTime: 120, offset: 1024, size: 80},
+		testTSSPChunkSpec{sid: 7, minTime: 150, maxTime: 180, offset: 1104, size: 80},
+	)
+
+	for _, mode := range []uint8{tsspChunkMetaCompressNone, tsspChunkMetaCompressSnappy, tsspChunkMetaCompressLZ4} {
+		encoded, err := compressTestTSSPChunkMetaPayload(payload, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := decompressTSSPChunkMetaBlock(encoded, mode)
+		if err != nil {
+			t.Fatalf("mode %d decompress: %v", mode, err)
+		}
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("mode %d decompressed payload mismatch", mode)
+		}
+	}
+}
+
+func TestDecompressTSSPChunkMetaBlockRejectsMalformedInputs(t *testing.T) {
+	if _, err := decompressTSSPChunkMetaBlock([]byte{0x01, 0x02, 0x03}, tsspChunkMetaCompressLZ4); err == nil {
+		t.Fatal("expected short LZ4 block error")
+	}
+	if _, err := decompressTSSPChunkMetaBlock([]byte{0x00, 0x00, 0x00, 0x00}, tsspChunkMetaCompressLZ4); err == nil {
+		t.Fatal("expected zero-length LZ4 block error")
+	}
+
+	payload := []byte("chunk metadata payload")
+	encoded, err := compressTestTSSPChunkMetaPayload(payload, tsspChunkMetaCompressLZ4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.BigEndian.PutUint32(encoded[:4], uint32(len(payload)+1))
+	if _, err := decompressTSSPChunkMetaBlock(encoded, tsspChunkMetaCompressLZ4); err == nil {
+		t.Fatal("expected LZ4 length mismatch error")
+	}
+	if _, err := decompressTSSPChunkMetaBlock(payload, tsspChunkMetaCompressSelf); err == nil {
+		t.Fatal("expected self-compressed mode error")
+	}
+	if _, err := decompressTSSPChunkMetaBlock(payload, 99); err == nil {
+		t.Fatal("expected unsupported mode error")
+	}
+}
+
 func writeTestTSSP(path string) error {
-	return writeTestTSSPWithCompression(path, 0)
+	return writeTestTSSPWithCompression(path, tsspChunkMetaCompressNone)
 }
 
 func writeTestTSSPWithCompression(path string, chunkMetaCompress uint8) error {
@@ -154,6 +272,15 @@ func writeTestTSSPWithCompression(path string, chunkMetaCompress uint8) error {
 		testTSSPChunkSpec{sid: 9, minTime: 300, maxTime: 330, offset: 1264, size: 96},
 		testTSSPChunkSpec{sid: 9, minTime: 340, maxTime: 400, offset: 1360, size: 96},
 	)
+	var err error
+	payload7, err = compressTestTSSPChunkMetaPayload(payload7, chunkMetaCompress)
+	if err != nil {
+		return err
+	}
+	payload9, err = compressTestTSSPChunkMetaPayload(payload9, chunkMetaCompress)
+	if err != nil {
+		return err
+	}
 	payload7Offset := int64(buf.Len())
 	buf.Write(payload7)
 	payload9Offset := int64(buf.Len())
@@ -196,6 +323,30 @@ func writeTestTSSPWithCompression(path string, chunkMetaCompress uint8) error {
 	})
 	writeGeminiInt64(&buf, trailerOffset)
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func compressTestTSSPChunkMetaPayload(payload []byte, mode uint8) ([]byte, error) {
+	switch mode {
+	case tsspChunkMetaCompressNone, tsspChunkMetaCompressSelf:
+		return payload, nil
+	case tsspChunkMetaCompressSnappy:
+		return snappy.Encode(nil, payload), nil
+	case tsspChunkMetaCompressLZ4:
+		dst := make([]byte, lz4.CompressBlockBound(len(payload)))
+		n, err := lz4.CompressBlock(payload, dst, nil)
+		if err != nil {
+			return nil, err
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("test LZ4 compression produced empty output")
+		}
+		var out bytes.Buffer
+		writeUint32(&out, uint32(len(payload)))
+		out.Write(dst[:n])
+		return out.Bytes(), nil
+	default:
+		return nil, fmt.Errorf("unsupported test compression mode %d", mode)
+	}
 }
 
 type testTSSPChunkSpec struct {

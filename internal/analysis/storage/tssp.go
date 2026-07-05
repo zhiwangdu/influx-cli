@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/golang/snappy"
+	"github.com/pierrec/lz4/v4"
 )
 
 const (
@@ -13,10 +16,13 @@ const (
 	tsspFooterSize   = 8
 	tsspMetaIndexLen = 40
 
-	tsspChunkMetaCompressNone = 0
-	tsspChunkMetaFixedLen     = 8 + 8 + 4 + 4 + 4
-	tsspSegmentLen            = 8 + 4
-	tsspSegmentRangeLen       = 8 + 8
+	tsspChunkMetaCompressNone   = 0
+	tsspChunkMetaCompressSnappy = 1
+	tsspChunkMetaCompressLZ4    = 2
+	tsspChunkMetaCompressSelf   = 3
+	tsspChunkMetaFixedLen       = 8 + 8 + 4 + 4 + 4
+	tsspSegmentLen              = 8 + 4
+	tsspSegmentRangeLen         = 8 + 8
 )
 
 type tsspTrailer struct {
@@ -167,8 +173,9 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 	}
 
 	chunkMetas, expanded := []tsspChunkMeta(nil), false
-	if trailer.ChunkMetaCompress == tsspChunkMetaCompressNone {
-		chunks, err := readTSSPChunkMetas(f, metaIndexes, trailerOffset)
+	switch trailer.ChunkMetaCompress {
+	case tsspChunkMetaCompressNone, tsspChunkMetaCompressSnappy, tsspChunkMetaCompressLZ4:
+		chunks, err := readTSSPChunkMetas(f, metaIndexes, trailerOffset, trailer.ChunkMetaCompress)
 		if err != nil {
 			report.Notices = append(report.Notices, fmt.Sprintf("chunk metadata expansion unavailable: %v", err))
 		} else {
@@ -177,12 +184,15 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			report.BlockCount = len(chunkMetas)
 			report.BlocksByType["chunk-meta"] = len(chunkMetas)
 			report.Extra["chunk_meta_expanded"] = "true"
+			report.Extra["chunk_meta_compress_supported"] = "true"
 			if options.QueryRange.Set {
 				report.Extra["query_overlap_precision"] = "chunk-meta"
 			}
 		}
-	} else {
-		report.Notices = append(report.Notices, "chunk metadata is compressed; detailed chunk decode is not expanded in this report")
+	case tsspChunkMetaCompressSelf:
+		report.Notices = append(report.Notices, "self-compressed chunk metadata requires openGemini adaptive chunk-meta codec; falling back to meta-index granularity")
+	default:
+		report.Notices = append(report.Notices, fmt.Sprintf("unsupported chunk metadata compression mode %d; falling back to meta-index granularity", trailer.ChunkMetaCompress))
 	}
 
 	if expanded {
@@ -297,10 +307,10 @@ func readTSSPMetaIndexes(f *os.File, offset, size int64) ([]tsspMetaIndex, error
 	return items, nil
 }
 
-func readTSSPChunkMetas(f *os.File, items []tsspMetaIndex, trailerOffset int64) ([]tsspChunkMeta, error) {
+func readTSSPChunkMetas(f *os.File, items []tsspMetaIndex, trailerOffset int64, compressMode uint8) ([]tsspChunkMeta, error) {
 	chunks := make([]tsspChunkMeta, 0, sumTSSPChunkMetaCount(items))
 	for idx, item := range items {
-		metas, err := readTSSPChunkMetaBlock(f, item, trailerOffset)
+		metas, err := readTSSPChunkMetaBlock(f, item, trailerOffset, compressMode)
 		if err != nil {
 			return nil, fmt.Errorf("meta-index %d sid %d: %w", idx, item.ID, err)
 		}
@@ -309,7 +319,7 @@ func readTSSPChunkMetas(f *os.File, items []tsspMetaIndex, trailerOffset int64) 
 	return chunks, nil
 }
 
-func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64) ([]tsspChunkMeta, error) {
+func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64, compressMode uint8) ([]tsspChunkMeta, error) {
 	if item.Count == 0 {
 		return nil, nil
 	}
@@ -322,6 +332,10 @@ func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64)
 	}
 	buf := make([]byte, int(item.Size))
 	if _, err := f.ReadAt(buf, item.Offset); err != nil {
+		return nil, err
+	}
+	buf, err := decompressTSSPChunkMetaBlock(buf, compressMode)
+	if err != nil {
 		return nil, err
 	}
 	data, offsets, err := splitTSSPChunkMetaData(buf, item.Count)
@@ -345,6 +359,37 @@ func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64)
 		chunks = append(chunks, chunk)
 	}
 	return chunks, nil
+}
+
+func decompressTSSPChunkMetaBlock(src []byte, mode uint8) ([]byte, error) {
+	switch mode {
+	case tsspChunkMetaCompressNone:
+		return src, nil
+	case tsspChunkMetaCompressSnappy:
+		return snappy.Decode(nil, src)
+	case tsspChunkMetaCompressLZ4:
+		if len(src) < 4 {
+			return nil, fmt.Errorf("short LZ4 chunk metadata block")
+		}
+		// openGemini IndexCompressWriter prefixes LZ4 chunk-meta blocks with the uncompressed length.
+		originalLen := binary.BigEndian.Uint32(src[:4])
+		if originalLen == 0 {
+			return nil, fmt.Errorf("invalid LZ4 chunk metadata original length 0")
+		}
+		dst := make([]byte, int(originalLen))
+		n, err := lz4.UncompressBlock(src[4:], dst)
+		if err != nil {
+			return nil, err
+		}
+		if n != int(originalLen) {
+			return nil, fmt.Errorf("LZ4 chunk metadata length mismatch got=%d want=%d", n, originalLen)
+		}
+		return dst, nil
+	case tsspChunkMetaCompressSelf:
+		return nil, fmt.Errorf("self-compressed chunk metadata is not supported")
+	default:
+		return nil, fmt.Errorf("unsupported chunk metadata compression mode %d", mode)
+	}
 }
 
 func splitTSSPChunkMetaData(src []byte, itemCount uint32) ([]byte, []uint32, error) {
