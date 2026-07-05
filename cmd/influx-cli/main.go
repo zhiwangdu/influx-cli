@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,10 +10,12 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/zhiwangdu/influx-cli/internal/adapter/influxdb"
+	"github.com/zhiwangdu/influx-cli/internal/analysis/storage"
 	"github.com/zhiwangdu/influx-cli/internal/app"
 	"github.com/zhiwangdu/influx-cli/internal/config"
 	"github.com/zhiwangdu/influx-cli/internal/history"
@@ -78,6 +81,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newQueryCommand(flags))
 	root.AddCommand(newReplCommand(flags))
 	root.AddCommand(newConfigCommand(flags))
+	root.AddCommand(newStorageCommand(flags))
 	return root
 }
 
@@ -179,6 +183,96 @@ func newConfigCommand(flags *globalFlags) *cobra.Command {
 	return configCommand
 }
 
+type storageAnalyzeFlags struct {
+	format     string
+	recursive  bool
+	from       string
+	to         string
+	sampleKeys int
+	maxBlocks  int
+}
+
+func newStorageCommand(flags *globalFlags) *cobra.Command {
+	storageCommand := &cobra.Command{
+		Use:   "storage",
+		Short: "Analyze local TSDB storage files",
+	}
+
+	analyzeFlags := &storageAnalyzeFlags{
+		format:     string(storage.FormatAuto),
+		sampleKeys: 5,
+		maxBlocks:  50,
+	}
+	analyzeCommand := &cobra.Command{
+		Use:   "analyze <file-or-dir>...",
+		Short: "Inspect InfluxDB TSM and openGemini TSSP file metadata",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			queryRange, err := parseStorageRange(analyzeFlags.from, analyzeFlags.to)
+			if err != nil {
+				return err
+			}
+			report, err := storage.Analyze(cmd.Context(), args, storage.Options{
+				Format:           storage.Format(strings.ToLower(analyzeFlags.format)),
+				Recursive:        analyzeFlags.recursive,
+				KeySampleLimit:   analyzeFlags.sampleKeys,
+				BlockSampleLimit: analyzeFlags.maxBlocks,
+				QueryRange:       queryRange,
+			})
+			if err != nil {
+				return fmt.Errorf("storage analyze: %w", err)
+			}
+
+			outputFormat := firstNonEmpty(flags.overrides.Render, render.FormatTable)
+			normalized, err := render.NormalizeFormat(outputFormat)
+			if err != nil {
+				return err
+			}
+			if normalized == render.FormatAuto {
+				normalized = render.FormatTable
+			}
+			switch normalized {
+			case render.FormatJSON:
+				body, err := json.MarshalIndent(report, "", "  ")
+				if err != nil {
+					return fmt.Errorf("render storage json: %w", err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), string(body))
+			case render.FormatTable:
+				options := render.Options{
+					Format:    render.FormatTable,
+					Width:     renderWidth(flags),
+					MaxRows:   flags.maxRows,
+					MaxSeries: flags.maxSeries,
+					Color:     colorEnabled(),
+				}
+				output, _, err := render.Render(report.Result(), options)
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(output) != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), output)
+				}
+				for _, notice := range report.Notices {
+					fmt.Fprintln(cmd.ErrOrStderr(), "warning:", notice)
+				}
+			default:
+				return fmt.Errorf("storage analyze supports table or json output, got %q", normalized)
+			}
+			return nil
+		},
+	}
+	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, tssp")
+	analyzeCommand.Flags().BoolVar(&analyzeFlags.recursive, "recursive", false, "walk directories recursively")
+	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
+	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")
+	analyzeCommand.Flags().IntVar(&analyzeFlags.sampleKeys, "sample-keys", analyzeFlags.sampleKeys, "maximum key or series ID samples per file")
+	analyzeCommand.Flags().IntVar(&analyzeFlags.maxBlocks, "max-blocks", analyzeFlags.maxBlocks, "maximum block samples per file")
+
+	storageCommand.AddCommand(analyzeCommand)
+	return storageCommand
+}
+
 func newExecutor(effective config.Effective) (*app.Executor, error) {
 	client := &http.Client{Timeout: effective.Timeout}
 	adapterName := strings.ToLower(effective.Adapter)
@@ -207,17 +301,50 @@ func newExecutor(effective config.Effective) (*app.Executor, error) {
 }
 
 func renderOptions(effective config.Effective, flags *globalFlags) render.Options {
-	width := flags.width
-	if width <= 0 {
-		width = envInt("COLUMNS", 80)
-	}
 	return render.Options{
 		Format:    firstNonEmpty(effective.Render, render.FormatTable),
-		Width:     width,
+		Width:     renderWidth(flags),
 		MaxRows:   flags.maxRows,
 		MaxSeries: flags.maxSeries,
 		Color:     colorEnabled(),
 	}
+}
+
+func renderWidth(flags *globalFlags) int {
+	width := flags.width
+	if width <= 0 {
+		width = envInt("COLUMNS", 80)
+	}
+	return width
+}
+
+func parseStorageRange(from, to string) (storage.TimeRange, error) {
+	if strings.TrimSpace(from) == "" && strings.TrimSpace(to) == "" {
+		return storage.TimeRange{}, nil
+	}
+	if strings.TrimSpace(from) == "" || strings.TrimSpace(to) == "" {
+		return storage.TimeRange{}, fmt.Errorf("both --from and --to are required when filtering by query range")
+	}
+	minTime, err := parseStorageTime(from)
+	if err != nil {
+		return storage.TimeRange{}, fmt.Errorf("parse --from: %w", err)
+	}
+	maxTime, err := parseStorageTime(to)
+	if err != nil {
+		return storage.TimeRange{}, fmt.Errorf("parse --to: %w", err)
+	}
+	return storage.NewTimeRange(minTime, maxTime)
+}
+
+func parseStorageTime(value string) (int64, error) {
+	trimmed := strings.TrimSpace(value)
+	if parsed, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		return parsed, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
+		return parsed.UnixNano(), nil
+	}
+	return 0, fmt.Errorf("use RFC3339/RFC3339Nano or unix nanoseconds")
 }
 
 func colorEnabled() bool {

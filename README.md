@@ -49,6 +49,16 @@ influx-cli repl
 influx-cli config show
 ```
 
+Initial Phase 5 storage analyzer surface:
+
+```bash
+influx-cli storage analyze /path/to/shard --recursive
+influx-cli storage analyze /path/to/file.tsm --from 2026-07-05T00:00:00Z --to 2026-07-05T01:00:00Z
+influx-cli --format json storage analyze /path/to/file.tssp
+```
+
+Use `--storage-format tsm|tssp` to override auto-detection when needed.
+
 ## MVP Scope
 
 The first implementation phase should stay narrow:
