@@ -10,12 +10,12 @@
 
 ## 2. 当前仓库状态
 
-截至 2026-07-05，当前仓库已经包含 Phase 0/1 CLI 与 REPL 基础能力，并开始交付 Phase 2 TUI：
+截至 2026-07-05，当前仓库已经包含 Phase 0/1 CLI 与 REPL 基础能力，开始交付 Phase 2 TUI，并已补充 Phase 4 Dataset Generator 的基础能力：
 
 | 文件 | 状态 |
 | --- | --- |
 | `go.mod`、`go.sum` | Go module 和依赖 |
-| `cmd/influx-cli/main.go` | Cobra CLI 入口，包含 `query`、`repl`、`tui`、`config` |
+| `cmd/influx-cli/main.go` | Cobra CLI 入口，包含 `query`、`repl`、`tui`、`ingest`、`config` |
 | `internal/config` | profile、环境变量和命令行覆盖合并 |
 | `internal/adapter/influxdb` | InfluxDB 1.x/openGemini 兼容 HTTP query path |
 | `internal/result` | table、series、schema result model |
@@ -23,6 +23,9 @@
 | `internal/app`、`internal/repl` | session、statusline、meta command 和 REPL loop |
 | `internal/history` | REPL query history 本地持久化和检索 |
 | `internal/tui` | Bubble Tea TUI：query editor、result view、context panel、watch、renderer switch |
+| `cmd/influx-cli ingest` | Dataset Generator 命令入口，支持 demo、高基数、乱序和 covering-block 数据 |
+| `internal/ingest` | Dataset Generator 的 deterministic line protocol 生成、批量写入和 dry-run |
+| `internal/adapter/influxdb` write path | InfluxDB 1.x/openGemini 兼容 `/write` line protocol 写入 |
 | `docs/PRODUCT_DESIGN.md` | 产品设计书 |
 | `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
@@ -241,7 +244,10 @@ GROUP BY time(1s) over 30d may return too many points
 influx-cli ingest demo-cpu --rate 10k/s --duration 5m
 influx-cli ingest high-cardinality --hosts 1000 --pids 10000
 influx-cli ingest out-of-order --ratio 0.1
+influx-cli ingest demo-cpu --start 2026-07-05T00:00:00Z --dry-run
 ```
+
+需要可复现实验时应指定 `--start`；未指定时，模拟时间范围相对当前时钟生成。
 
 支持：
 
