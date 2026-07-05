@@ -321,6 +321,12 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_crc_mismatches"], "0"; got != want {
 		t.Fatalf("data block probe crc mismatches = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_row_count_blocks"], "2"; got != want {
+		t.Fatalf("data block probe row count blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_types"], "integer-full:2"; got != want {
 		t.Fatalf("data block probe types = %q, want %q", got, want)
 	}
@@ -385,6 +391,9 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
 		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeBlocks, 2; got != want {
 		t.Fatalf("data block probe blocks = %d, want %d", got, want)
 	}
@@ -424,6 +433,9 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if !decode.Samples[1].ValueOutputAvailable {
 		t.Fatal("expected second sample value output to be available")
 	}
+	if got, want := decode.Samples[1].ValueOutputPoints, 1; got != want {
+		t.Fatalf("second sample value output points = %d, want %d", got, want)
+	}
 	if got, want := len(decode.Samples[1].OptimizedReadAtRanges), 2; got != want {
 		t.Fatalf("second sample ReadAt ranges = %d, want %d", got, want)
 	}
@@ -444,6 +456,9 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "verified 2 detached TSSP data block") {
 		t.Fatalf("recommendations = %v, want detached data block probe recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "materialized 1 detached TSSP output point") {
+		t.Fatalf("recommendations = %v, want detached row-count materialization recommendation", decode.Recommendations)
 	}
 }
 
@@ -506,6 +521,9 @@ func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
 	}
 	if got, want := decode.ValueOutputUnavailableBlocks, 1; got != want {
 		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeBlocks, 2; got != want {
 		t.Fatalf("data block probe blocks = %d, want %d", got, want)
