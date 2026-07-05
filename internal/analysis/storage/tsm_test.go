@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"hash/crc32"
@@ -55,8 +56,95 @@ func TestAnalyzeTSMMetadata(t *testing.T) {
 	if !file.Tombstones.Exists {
 		t.Fatalf("expected tombstone summary")
 	}
+	if got, want := file.Tombstones.Version, "v1"; got != want {
+		t.Fatalf("tombstone version = %q, want %q", got, want)
+	}
+	if got, want := file.Tombstones.RangeCount, 1; got != want {
+		t.Fatalf("tombstone range count = %d, want %d", got, want)
+	}
 	if got, want := file.Blocks[0].ValueCount, 3; got != want {
 		t.Fatalf("value count = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeTSMTombstoneRanges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "000000001-000000001.tsm")
+	if err := writeTestTSM(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSMTombstoneV3(tsmTombstonePath(path),
+		tsmTombstoneEntry{Key: "cpu,host=a value", Min: 20, Max: 25},
+		tsmTombstoneEntry{Key: "mem,host=a value", Min: 110, Max: 115},
+		tsmTombstoneEntry{Key: "disk,host=a value", Min: 200, Max: 300},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(22, 22)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Tombstones.Version, "v3"; got != want {
+		t.Fatalf("tombstone version = %q, want %q", got, want)
+	}
+	if got, want := file.Tombstones.RangeCount, 3; got != want {
+		t.Fatalf("tombstone range count = %d, want %d", got, want)
+	}
+	if got, want := file.Tombstones.KeyCount, 3; got != want {
+		t.Fatalf("tombstone key count = %d, want %d", got, want)
+	}
+	if got, want := file.Tombstones.QueryOverlapRanges, 1; got != want {
+		t.Fatalf("tombstone query overlap ranges = %d, want %d", got, want)
+	}
+	if got, want := file.Tombstones.AffectedBlocks, 2; got != want {
+		t.Fatalf("tombstone affected blocks = %d, want %d", got, want)
+	}
+	if got, want := len(file.Tombstones.RangeSamples), 2; got != want {
+		t.Fatalf("tombstone range samples = %d, want %d", got, want)
+	}
+	if got, want := file.Tombstones.RangeSamples[0].AffectedBlocks, 1; got != want {
+		t.Fatalf("first tombstone sample affected blocks = %d, want %d", got, want)
+	}
+	if got, want := file.Tombstones.RangeSamples[0].QueryOverlaps, true; got != want {
+		t.Fatalf("first tombstone sample query overlaps = %t, want %t", got, want)
+	}
+	if got, want := file.Tombstones.KeySamples[0], "cpu,host=a value"; got != want {
+		t.Fatalf("first tombstone key sample = %q, want %q", got, want)
+	}
+}
+
+func TestReadTSMTombstoneV4MultiStream(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tombstone")
+	if err := writeTestTSMTombstoneV4(path,
+		[]tsmTombstoneEntry{{Key: "cpu value", Min: 1, Max: 2}},
+		[]tsmTombstoneEntry{{Key: "mem value", Min: 3, Max: 4}},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	tombstones, version, err := readTSMTombstones(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := version, "v4"; got != want {
+		t.Fatalf("version = %q, want %q", got, want)
+	}
+	if got, want := len(tombstones), 2; got != want {
+		t.Fatalf("tombstones = %d, want %d", got, want)
+	}
+	if got, want := tombstones[1].Key, "mem value"; got != want {
+		t.Fatalf("second key = %q, want %q", got, want)
 	}
 }
 
@@ -186,6 +274,53 @@ func writeTestTSM(path string) error {
 	binary.BigEndian.PutUint64(footer[:], uint64(indexOffset))
 	buf.Write(footer[:])
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSMTombstoneV3(path string, entries ...tsmTombstoneEntry) error {
+	var buf bytes.Buffer
+	writeUint32(&buf, tsmTombstoneV3Header)
+	if err := writeTestTSMTombstoneGzipMember(&buf, entries); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSMTombstoneV4(path string, entryGroups ...[]tsmTombstoneEntry) error {
+	var buf bytes.Buffer
+	writeUint32(&buf, tsmTombstoneV4Header)
+	for _, entries := range entryGroups {
+		if err := writeTestTSMTombstoneGzipMember(&buf, entries); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSMTombstoneGzipMember(buf *bytes.Buffer, entries []tsmTombstoneEntry) error {
+	gz := gzip.NewWriter(buf)
+	for _, entry := range entries {
+		if err := writeTestTSMTombstoneEntry(gz, entry); err != nil {
+			_ = gz.Close()
+			return err
+		}
+	}
+	return gz.Close()
+}
+
+func writeTestTSMTombstoneEntry(buf *gzip.Writer, entry tsmTombstoneEntry) error {
+	var keyLen [4]byte
+	binary.BigEndian.PutUint32(keyLen[:], uint32(len(entry.Key)))
+	if _, err := buf.Write(keyLen[:]); err != nil {
+		return err
+	}
+	if _, err := buf.Write([]byte(entry.Key)); err != nil {
+		return err
+	}
+	var times [16]byte
+	binary.BigEndian.PutUint64(times[:8], uint64(entry.Min))
+	binary.BigEndian.PutUint64(times[8:], uint64(entry.Max))
+	_, err := buf.Write(times[:])
+	return err
 }
 
 func testTSMBlock(blockType byte, timestamps []int64) []byte {

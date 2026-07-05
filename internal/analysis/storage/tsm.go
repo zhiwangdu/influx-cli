@@ -6,7 +6,6 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 )
 
@@ -133,7 +132,11 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 	report.MinTime = minTime
 	report.MaxTime = maxTime
 	report.QueryOverlapsFile = options.QueryRange.Overlaps(minTime, maxTime)
-	report.Tombstones = readTSMTombstoneSummary(path)
+	tombstones, err := readTSMTombstoneSummary(path, entries, options)
+	if err != nil {
+		report.Notices = append(report.Notices, fmt.Sprintf("tombstone detail unavailable: %v", err))
+	}
+	report.Tombstones = tombstones
 	return report, nil
 }
 
@@ -286,27 +289,6 @@ func tsmBlockTypeName(typ byte) string {
 		return "unsigned"
 	default:
 		return fmt.Sprintf("unknown(%d)", typ)
-	}
-}
-
-func readTSMTombstoneSummary(path string) TombstoneSummary {
-	tombstonePath := path
-	if filepath.Ext(path) != ".tombstone" {
-		base := filepath.Base(path)
-		ext := filepath.Ext(base)
-		if ext != "" {
-			base = base[:len(base)-len(ext)]
-		}
-		tombstonePath = filepath.Join(filepath.Dir(path), base+".tombstone")
-	}
-	info, err := os.Stat(tombstonePath)
-	if err != nil {
-		return TombstoneSummary{}
-	}
-	return TombstoneSummary{
-		Exists:    true,
-		Path:      tombstonePath,
-		SizeBytes: info.Size(),
 	}
 }
 

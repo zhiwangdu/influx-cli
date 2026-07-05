@@ -88,9 +88,26 @@ type SeriesIDSummary struct {
 }
 
 type TombstoneSummary struct {
-	Exists    bool   `json:"exists"`
-	Path      string `json:"path,omitempty"`
-	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Exists             bool                   `json:"exists"`
+	Path               string                 `json:"path,omitempty"`
+	SizeBytes          int64                  `json:"size_bytes,omitempty"`
+	Version            string                 `json:"version,omitempty"`
+	RangeCount         int                    `json:"range_count,omitempty"`
+	KeyCount           int                    `json:"key_count,omitempty"`
+	KeySamples         []string               `json:"key_samples,omitempty"`
+	MinTime            int64                  `json:"min_time,omitempty"`
+	MaxTime            int64                  `json:"max_time,omitempty"`
+	QueryOverlapRanges int                    `json:"query_overlap_ranges,omitempty"`
+	AffectedBlocks     int                    `json:"affected_blocks,omitempty"`
+	RangeSamples       []TombstoneRangeReport `json:"range_samples,omitempty"`
+}
+
+type TombstoneRangeReport struct {
+	Key            string `json:"key"`
+	MinTime        int64  `json:"min_time"`
+	MaxTime        int64  `json:"max_time"`
+	QueryOverlaps  bool   `json:"query_overlaps,omitempty"`
+	AffectedBlocks int    `json:"affected_blocks,omitempty"`
 }
 
 type BlockReport struct {
@@ -125,6 +142,13 @@ func (r Report) Result() result.Result {
 		tombstone := ""
 		if file.Tombstones.Exists {
 			tombstone = fmt.Sprintf("yes (%d bytes)", file.Tombstones.SizeBytes)
+			if file.Tombstones.RangeCount > 0 {
+				tombstone = fmt.Sprintf("yes (%d bytes, %d ranges", file.Tombstones.SizeBytes, file.Tombstones.RangeCount)
+				if file.Tombstones.AffectedBlocks > 0 {
+					tombstone += fmt.Sprintf(", %d blocks", file.Tombstones.AffectedBlocks)
+				}
+				tombstone += ")"
+			}
 		}
 		table.AddRow(
 			file.Path,

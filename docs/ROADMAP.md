@@ -22,7 +22,7 @@
 | `internal/render` | table 和 sparkline renderer |
 | `internal/app`、`internal/repl` | session、statusline、meta command 和 REPL loop |
 | `internal/history` | REPL query history 本地持久化和检索 |
-| `internal/analysis/storage` | Phase 5 初始 storage file analyzer：TSM/TSSP 文件元数据、key/series 样例、block/meta-index 统计、未压缩 TSSP chunk metadata、query range overlap |
+| `internal/analysis/storage` | Phase 5 初始 storage file analyzer：TSM/TSSP 文件元数据、key/series 样例、block/meta-index 统计、TSM tombstone range/impact、未压缩 TSSP chunk metadata、query range overlap |
 | `docs/PRODUCT_DESIGN.md` | 产品设计书 |
 | `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
@@ -35,7 +35,7 @@ Phase 5 已开始一个窄切面的本地文件分析命令：
 influx-cli storage analyze <file-or-dir>...
 ```
 
-当前覆盖 InfluxDB TSM attached file metadata，以及 openGemini attached TSSP trailer/meta-index metadata 和未压缩 chunk metadata。TSI 深度解析、压缩 TSSP chunk metadata 解码、cursor simulation 和优化前后 decode path 对比仍属于后续 Phase 5 工作。
+当前覆盖 InfluxDB TSM attached file metadata、tombstone range/impact summary，以及 openGemini attached TSSP trailer/meta-index metadata 和未压缩 chunk metadata。TSI 深度解析、压缩 TSSP chunk metadata 解码、cursor simulation 和优化前后 decode path 对比仍属于后续 Phase 5 工作。
 
 ## 3. Phase 0: CLI MVP Foundation
 
