@@ -529,6 +529,8 @@ TSM 窄范围查询诊断所需字段：
 | overlap with query range | 是否应进入 cursor |
 | decoded blocks | 实际解码数量 |
 
+InfluxDB WAL analyzer 覆盖 TSM1 WAL segment 的本地 entry 解码：entry type、snappy payload size、key samples、write point time range、delete/delete-range target，以及基于 query range/key 的 replay candidate filtering。WAL analyzer 不直接调用 engine cache 或 WAL replay runtime。
+
 openGemini TSSP analyzer 先覆盖 attached 文件 trailer/meta-index/chunk metadata，以及 detached `segment.idx` meta-index sidecar。detached sidecar 只做本地结构解析、CRC 校验和 query-range candidate filtering；完整 detached data/chunk reader 执行路径仍属于后续 Phase 5。
 
 ## 12. Plugin System

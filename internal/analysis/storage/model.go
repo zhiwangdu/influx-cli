@@ -13,6 +13,7 @@ type Format string
 const (
 	FormatAuto              Format = "auto"
 	FormatTSM               Format = "tsm"
+	FormatWAL               Format = "wal"
 	FormatTSSP              Format = "tssp"
 	FormatTSSPDetachedIndex Format = "tssp-metaindex"
 	FormatTSI               Format = "tsi"

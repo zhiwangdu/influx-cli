@@ -22,7 +22,7 @@
 | `internal/render` | table 和 sparkline renderer |
 | `internal/app`、`internal/repl` | session、statusline、meta command 和 REPL loop |
 | `internal/history` | REPL query history 本地持久化和检索 |
-| `internal/analysis/storage` | Phase 5 初始 storage file analyzer：TSM/TSSP/TSI 文件元数据、key/series 样例、block/meta-index 统计、TSM tombstone range/impact、TSM decode path estimate、TSSP chunk metadata、detached TSSP meta-index sidecar、query range overlap |
+| `internal/analysis/storage` | Phase 5 初始 storage file analyzer：TSM/WAL/TSSP/TSI 文件元数据、key/series 样例、block/meta-index/entry 统计、TSM tombstone range/impact、TSM/WAL decode path estimate、TSSP chunk metadata、detached TSSP meta-index sidecar、query range overlap |
 | `docs/PRODUCT_DESIGN.md` | 产品设计书 |
 | `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
@@ -35,7 +35,7 @@ Phase 5 已开始一个窄切面的本地文件分析命令：
 influx-cli storage analyze <file-or-dir>...
 ```
 
-当前覆盖 InfluxDB TSM attached file metadata、tombstone range/impact summary、基于 query range/key 的 TSM decode path estimate、per-file 和 FileStore-level ascending/descending cursor window/merge window simulation、优化前后 block/byte/value decode path estimate、decoded timestamp output/dedup estimate、TSM value output comparison、local TSM KeyCursor-style execution stats/output samples、TSM FileStore.Cost-style file/block/byte estimate、TSI index file measurement/tag summary 和 measurement/tag predicate inspection，以及 openGemini attached TSSP trailer/meta-index metadata、none/snappy/LZ4/self-compressed chunk metadata、per-file 和 file-set series-id filtered segment-level decode path estimate、TSSP ContainsValue/MetaIndex-style candidate cost estimate、ascending/descending TSSP LocationCursor-style segment window samples、TSSP ReadAt call estimate、sampled optimized column-segment read ranges、detached `segment.idx` meta-index CRC validation 和 query-range candidate filtering。完整 storage-engine-backed cursor execution 仍属于后续 Phase 5 工作。
+当前覆盖 InfluxDB TSM attached file metadata、WAL write/delete/delete-range entry metadata、tombstone range/impact summary、基于 query range/key 的 TSM/WAL decode path estimate、per-file 和 FileStore-level ascending/descending cursor window/merge window simulation、优化前后 block/entry/byte/value decode path estimate、decoded timestamp output/dedup estimate、TSM value output comparison、local TSM KeyCursor-style execution stats/output samples、TSM FileStore.Cost-style file/block/byte estimate、TSI index file measurement/tag summary 和 measurement/tag predicate inspection，以及 openGemini attached TSSP trailer/meta-index metadata、none/snappy/LZ4/self-compressed chunk metadata、per-file 和 file-set series-id filtered segment-level decode path estimate、TSSP ContainsValue/MetaIndex-style candidate cost estimate、ascending/descending TSSP LocationCursor-style segment window samples、TSSP ReadAt call estimate、sampled optimized column-segment read ranges、detached `segment.idx` meta-index CRC validation 和 query-range candidate filtering。完整 storage-engine-backed cursor execution 仍属于后续 Phase 5 工作。
 
 ## 3. Phase 0: CLI MVP Foundation
 

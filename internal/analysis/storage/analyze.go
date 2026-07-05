@@ -242,6 +242,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 	switch format {
 	case FormatTSM:
 		return analyzeTSM(path, info, options)
+	case FormatWAL:
+		return analyzeWAL(path, info, options)
 	case FormatTSSP:
 		return analyzeTSSP(path, info, options)
 	case FormatTSSPDetachedIndex:
@@ -254,6 +256,10 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 }
 
 func detectFormat(path string) (Format, error) {
+	if isWALPath(path) {
+		return FormatWAL, nil
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -288,6 +294,8 @@ func isStorageCandidate(path string, format Format) bool {
 	switch format {
 	case FormatTSM:
 		return strings.HasSuffix(lower, ".tsm")
+	case FormatWAL:
+		return isWALPath(path)
 	case FormatTSSP:
 		return strings.Contains(lower, ".tssp")
 	case FormatTSSPDetachedIndex:
@@ -295,7 +303,7 @@ func isStorageCandidate(path string, format Format) bool {
 	case FormatTSI:
 		return strings.HasSuffix(lower, ".tsi")
 	default:
-		return strings.HasSuffix(lower, ".tsm") || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi")
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi")
 	}
 }
 
