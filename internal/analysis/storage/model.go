@@ -222,6 +222,9 @@ type DecodePathSummary struct {
 	OptimizedCursorOutputPoints  int                       `json:"optimized_cursor_output_points,omitempty"`
 	BaselineCursorReadCalls      int                       `json:"baseline_cursor_read_calls,omitempty"`
 	OptimizedCursorReadCalls     int                       `json:"optimized_cursor_read_calls,omitempty"`
+	BaselineReadAtCalls          int                       `json:"baseline_read_at_calls,omitempty"`
+	OptimizedReadAtCalls         int                       `json:"optimized_read_at_calls,omitempty"`
+	SavedReadAtCalls             int                       `json:"saved_read_at_calls,omitempty"`
 	IteratorCostFiles            int                       `json:"iterator_cost_files,omitempty"`
 	IteratorCostBlocks           int                       `json:"iterator_cost_blocks,omitempty"`
 	IteratorCostBytes            int64                     `json:"iterator_cost_bytes,omitempty"`
@@ -246,22 +249,34 @@ type DecodePathSummary struct {
 }
 
 type DecodePathBlockDecision struct {
-	Path                 string `json:"path,omitempty"`
-	Key                  string `json:"key,omitempty"`
-	SeriesID             uint64 `json:"series_id,omitempty"`
-	MinTime              int64  `json:"min_time"`
-	MaxTime              int64  `json:"max_time"`
-	Type                 string `json:"type"`
-	SizeBytes            uint32 `json:"size_bytes,omitempty"`
-	ValueCount           int    `json:"value_count,omitempty"`
-	SegmentCount         int    `json:"segment_count,omitempty"`
-	OutputValues         int    `json:"output_values,omitempty"`
-	OutputSegments       int    `json:"output_segments,omitempty"`
-	ValueOutputPoints    int    `json:"value_output_points,omitempty"`
-	ValueOutputAvailable bool   `json:"value_output_available,omitempty"`
-	LocationCandidate    bool   `json:"location_candidate,omitempty"`
-	Decoded              bool   `json:"decoded,omitempty"`
-	Reason               string `json:"reason,omitempty"`
+	Path                  string                  `json:"path,omitempty"`
+	Key                   string                  `json:"key,omitempty"`
+	SeriesID              uint64                  `json:"series_id,omitempty"`
+	MinTime               int64                   `json:"min_time"`
+	MaxTime               int64                   `json:"max_time"`
+	Type                  string                  `json:"type"`
+	SizeBytes             uint32                  `json:"size_bytes,omitempty"`
+	ValueCount            int                     `json:"value_count,omitempty"`
+	SegmentCount          int                     `json:"segment_count,omitempty"`
+	OutputValues          int                     `json:"output_values,omitempty"`
+	OutputSegments        int                     `json:"output_segments,omitempty"`
+	ValueOutputPoints     int                     `json:"value_output_points,omitempty"`
+	ValueOutputAvailable  bool                    `json:"value_output_available,omitempty"`
+	BaselineReadAtCalls   int                     `json:"baseline_read_at_calls,omitempty"`
+	OptimizedReadAtCalls  int                     `json:"optimized_read_at_calls,omitempty"`
+	LocationCandidate     bool                    `json:"location_candidate,omitempty"`
+	Decoded               bool                    `json:"decoded,omitempty"`
+	Reason                string                  `json:"reason,omitempty"`
+	OptimizedReadAtRanges []DecodePathReadAtRange `json:"optimized_read_at_ranges,omitempty"`
+}
+
+type DecodePathReadAtRange struct {
+	Segment   int    `json:"segment"`
+	Column    string `json:"column,omitempty"`
+	MinTime   int64  `json:"min_time"`
+	MaxTime   int64  `json:"max_time"`
+	Offset    int64  `json:"offset"`
+	SizeBytes uint32 `json:"size_bytes"`
 }
 
 type DecodePathCursorWindow struct {
@@ -373,6 +388,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.BaselineCursorReadCalls > 0 || summary.OptimizedCursorReadCalls > 0 {
 		parts = append(parts, fmt.Sprintf("cursor_reads %d->%d", summary.BaselineCursorReadCalls, summary.OptimizedCursorReadCalls))
+	}
+	if summary.BaselineReadAtCalls > 0 || summary.OptimizedReadAtCalls > 0 {
+		parts = append(parts, fmt.Sprintf("read_at calls %d->%d", summary.BaselineReadAtCalls, summary.OptimizedReadAtCalls))
 	}
 	if summary.IteratorCostFiles > 0 || summary.IteratorCostBlocks > 0 || summary.IteratorCostBytes > 0 {
 		parts = append(parts, fmt.Sprintf("iterator_cost files=%d blocks=%d bytes=%d", summary.IteratorCostFiles, summary.IteratorCostBlocks, summary.IteratorCostBytes))

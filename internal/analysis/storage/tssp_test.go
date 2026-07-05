@@ -104,6 +104,15 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	if got, want := decode.OptimizedCursorReadCalls, 1; got != want {
 		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineReadAtCalls, 6; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 2; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadAtCalls, 4; got != want {
+		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
+	}
 	if got, want := decode.BaselineDecodeBytes, int64(288); got != want {
 		t.Fatalf("baseline decode bytes = %d, want %d", got, want)
 	}
@@ -152,6 +161,31 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	if got, want := decode.Samples[1].Reason, "segment_overlap"; got != want {
 		t.Fatalf("second decode sample reason = %q, want %q", got, want)
 	}
+	if !containsStringWithPrefix(decode.Recommendations, "issue 2 TSSP ReadAt call(s)") {
+		t.Fatalf("recommendations = %v, want ReadAt call recommendation", decode.Recommendations)
+	}
+	overlapSample := decode.Samples[1]
+	if got, want := overlapSample.BaselineReadAtCalls, 2; got != want {
+		t.Fatalf("overlap sample baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := overlapSample.OptimizedReadAtCalls, 2; got != want {
+		t.Fatalf("overlap sample optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := len(overlapSample.OptimizedReadAtRanges), 2; got != want {
+		t.Fatalf("overlap sample optimized ReadAt ranges = %d, want %d", got, want)
+	}
+	if got, want := overlapSample.OptimizedReadAtRanges[0].Column, "value"; got != want {
+		t.Fatalf("first ReadAt range column = %q, want %q", got, want)
+	}
+	if got, want := overlapSample.OptimizedReadAtRanges[0].Offset, int64(1104); got != want {
+		t.Fatalf("first ReadAt range offset = %d, want %d", got, want)
+	}
+	if got, want := overlapSample.OptimizedReadAtRanges[1].Column, "time"; got != want {
+		t.Fatalf("second ReadAt range column = %q, want %q", got, want)
+	}
+	if got, want := overlapSample.OptimizedReadAtRanges[1].SizeBytes, uint32(16); got != want {
+		t.Fatalf("second ReadAt range size = %d, want %d", got, want)
+	}
 	if len(file.Notices) != 0 {
 		t.Fatalf("notices = %v, want none", file.Notices)
 	}
@@ -193,6 +227,15 @@ func TestAnalyzeTSSPDecodePathDescendingCursor(t *testing.T) {
 	if got, want := decode.OptimizedReadSegments, 1; got != want {
 		t.Fatalf("optimized read segments = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineReadAtCalls, 6; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 2; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadAtCalls, 4; got != want {
+		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
+	}
 	if got, want := len(decode.CursorWindows), 3; got != want {
 		t.Fatalf("cursor window samples = %d, want %d", got, want)
 	}
@@ -210,6 +253,15 @@ func TestAnalyzeTSSPDecodePathDescendingCursor(t *testing.T) {
 	}
 	if got, want := decode.Samples[0].MinTime, int64(190); got != want {
 		t.Fatalf("first decode sample min time = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].BaselineReadAtCalls, 2; got != want {
+		t.Fatalf("outside sample baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].OptimizedReadAtCalls, 0; got != want {
+		t.Fatalf("outside sample optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got := len(decode.Samples[0].OptimizedReadAtRanges); got != 0 {
+		t.Fatalf("outside sample optimized ReadAt ranges = %d, want none", got)
 	}
 }
 
@@ -477,6 +529,15 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 	if got, want := decode.OptimizedCursorReadCalls, 2; got != want {
 		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineReadAtCalls, 12; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 4; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadAtCalls, 8; got != want {
+		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
+	}
 	if got, want := decode.SkippedByKeyBlocks, 4; got != want {
 		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
 	}
@@ -554,6 +615,15 @@ func TestAnalyzeTSSPFileSetDecodePathDescendingCursor(t *testing.T) {
 	}
 	if got, want := decode.OptimizedReadSegments, 2; got != want {
 		t.Fatalf("optimized read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineReadAtCalls, 12; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 4; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadAtCalls, 8; got != want {
+		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
 	}
 	if got, want := len(decode.CursorWindows), 5; got != want {
 		t.Fatalf("cursor window samples = %d, want %d", got, want)
@@ -708,6 +778,15 @@ func equalUint64s(a, b []uint64) bool {
 		}
 	}
 	return true
+}
+
+func containsStringWithPrefix(values []string, prefix string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeTestTSSPWithCompression(path string, chunkMetaCompress uint8) error {

@@ -5,6 +5,8 @@ import (
 	"sort"
 )
 
+const maxTSSPReadAtRangeSamples = 8
+
 func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options) *DecodePathSummary {
 	if !options.QueryRange.Set {
 		return nil
@@ -66,23 +68,28 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 			segmentCount := len(chunk.TimeRanges)
 			outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange)
 			baselineBytes := tsspChunkSegmentBytes(chunk)
+			baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0)
+			optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples)
 
 			summary.BaselineDecodeBytes += int64(baselineBytes)
 			summary.BaselineDecodeValues += segmentCount
 			summary.BaselineReadSegments += segmentCount
+			summary.BaselineReadAtCalls += baselineReadAtCalls
 			if outputSegments > 0 {
 				summary.OptimizedDecodeBlocks++
 				summary.FilteredDecodeBlocks++
 				summary.OptimizedDecodeBytes += int64(outputBytes)
 				summary.OptimizedDecodeValues += outputSegments
 				summary.OptimizedReadSegments += outputSegments
+				summary.OptimizedReadAtCalls += optimizedReadAtCalls
 				summary.DecodeBlocksByType["chunk-meta"]++
 			} else if maxTime < options.QueryRange.Min {
 				summary.SkippedBeforeSeekBlocks++
 			} else {
 				summary.SkippedAfterRangeBlocks++
 			}
-			appendTSSPChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes, options.BlockSampleLimit)
+			appendTSSPChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
+				baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, options.BlockSampleLimit)
 			appendTSSPChunkCursorWindow(summary, chunk, minTime, maxTime, segmentCount, outputSegments, options.BlockSampleLimit)
 		}
 	}
@@ -93,6 +100,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	summary.SavedReadSegments = summary.BaselineReadSegments - summary.OptimizedReadSegments
 	summary.BaselineCursorReadCalls = summary.BaselineReadSegments
 	summary.OptimizedCursorReadCalls = summary.OptimizedReadSegments
+	summary.SavedReadAtCalls = summary.BaselineReadAtCalls - summary.OptimizedReadAtCalls
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
@@ -141,6 +149,7 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.SavedReadSegments = summary.BaselineReadSegments - summary.OptimizedReadSegments
+	summary.SavedReadAtCalls = summary.BaselineReadAtCalls - summary.OptimizedReadAtCalls
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
@@ -216,6 +225,8 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.OptimizedReadSegments += src.OptimizedReadSegments
 	dst.BaselineCursorReadCalls += src.BaselineCursorReadCalls
 	dst.OptimizedCursorReadCalls += src.OptimizedCursorReadCalls
+	dst.BaselineReadAtCalls += src.BaselineReadAtCalls
+	dst.OptimizedReadAtCalls += src.OptimizedReadAtCalls
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
 	dst.IteratorCostBytes += src.IteratorCostBytes
@@ -297,7 +308,8 @@ func appendTSSPMetaIndexDecodeSample(summary *DecodePathSummary, meta tsspMetaIn
 	})
 }
 
-func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32, sampleLimit int) {
+func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32,
+	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, sampleLimit int) {
 	if sampleLimit <= 0 || len(summary.Samples) >= sampleLimit {
 		return
 	}
@@ -307,17 +319,20 @@ func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta
 		reason = "segment_overlap"
 	}
 	summary.Samples = append(summary.Samples, DecodePathBlockDecision{
-		Key:               fmt.Sprintf("sid:%d", chunk.SID),
-		SeriesID:          chunk.SID,
-		MinTime:           minTime,
-		MaxTime:           maxTime,
-		Type:              "chunk-meta",
-		SizeBytes:         sizeBytes,
-		SegmentCount:      segmentCount,
-		OutputSegments:    outputSegments,
-		LocationCandidate: true,
-		Decoded:           decoded,
-		Reason:            reason,
+		Key:                   fmt.Sprintf("sid:%d", chunk.SID),
+		SeriesID:              chunk.SID,
+		MinTime:               minTime,
+		MaxTime:               maxTime,
+		Type:                  "chunk-meta",
+		SizeBytes:             sizeBytes,
+		SegmentCount:          segmentCount,
+		OutputSegments:        outputSegments,
+		BaselineReadAtCalls:   baselineReadAtCalls,
+		OptimizedReadAtCalls:  optimizedReadAtCalls,
+		LocationCandidate:     true,
+		Decoded:               decoded,
+		Reason:                reason,
+		OptimizedReadAtRanges: readAtRanges,
 	})
 }
 
@@ -376,6 +391,34 @@ func tsspChunkSegmentBytesAt(chunk tsspChunkMeta, segment int) uint32 {
 	return size
 }
 
+func tsspChunkReadAtPlan(chunk tsspChunkMeta, queryRange TimeRange, queryOnly bool, sampleLimit int) (int, []DecodePathReadAtRange) {
+	calls := 0
+	var ranges []DecodePathReadAtRange
+	for segment, timeRange := range chunk.TimeRanges {
+		if queryOnly && !queryRange.Overlaps(timeRange.Min, timeRange.Max) {
+			continue
+		}
+		for _, column := range chunk.Columns {
+			if segment < 0 || segment >= len(column.Segments) {
+				continue
+			}
+			location := column.Segments[segment]
+			calls++
+			if sampleLimit > 0 && len(ranges) < sampleLimit {
+				ranges = append(ranges, DecodePathReadAtRange{
+					Segment:   segment,
+					Column:    column.Name,
+					MinTime:   timeRange.Min,
+					MaxTime:   timeRange.Max,
+					Offset:    location.Offset,
+					SizeBytes: location.Size,
+				})
+			}
+		}
+	}
+	return calls, ranges
+}
+
 func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	var recommendations []string
 	if len(summary.MissingSeriesIDs) > 0 {
@@ -407,6 +450,13 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			"read %d overlapping TSSP segment(s) instead of %d meta-index candidate segment(s)",
 			summary.OptimizedReadSegments,
 			summary.BaselineReadSegments,
+		))
+	}
+	if summary.SavedReadAtCalls > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"issue %d TSSP ReadAt call(s) instead of %d candidate column-segment ReadAt call(s)",
+			summary.OptimizedReadAtCalls,
+			summary.BaselineReadAtCalls,
 		))
 	}
 	if len(recommendations) == 0 && summary.FilteredDecodeBlocks > 0 {

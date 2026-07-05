@@ -23,6 +23,8 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				SavedReadSegments:        2,
 				BaselineCursorReadCalls:  3,
 				OptimizedCursorReadCalls: 1,
+				BaselineReadAtCalls:      6,
+				OptimizedReadAtCalls:     2,
 				IteratorCostFiles:        1,
 				IteratorCostBlocks:       3,
 				IteratorCostBytes:        273,
@@ -42,6 +44,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"saved_bytes 192",
 		"segments 3->1",
 		"cursor_reads 3->1",
+		"read_at calls 6->2",
 		"iterator_cost files=1 blocks=3 bytes=273",
 	} {
 		if !strings.Contains(decodeText, want) {
