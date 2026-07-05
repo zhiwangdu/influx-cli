@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/zhiwangdu/influx-cli/internal/result"
@@ -304,6 +305,8 @@ func (r Report) Result() result.Result {
 		"query_blocks",
 		"tombstone",
 		"samples",
+		"decode_path",
+		"advice",
 	})
 	for _, file := range r.Files {
 		tombstone := ""
@@ -328,6 +331,8 @@ func (r Report) Result() result.Result {
 			file.QueryOverlapBlocks,
 			tombstone,
 			joinSamples(file.KeySamples),
+			decodePathText(file.DecodePath),
+			joinSamples(decodePathRecommendations(file.DecodePath)),
 		)
 	}
 	return result.Result{
@@ -339,6 +344,39 @@ func (r Report) Result() result.Result {
 			Source:   "storage-analyzer",
 		},
 	}
+}
+
+func decodePathText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := make([]string, 0, 6)
+	if summary.Mode != "" {
+		parts = append(parts, summary.Mode)
+	}
+	if summary.BaselineDecodeBlocks > 0 || summary.OptimizedDecodeBlocks > 0 || summary.SavedDecodeBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("blocks %d->%d", summary.BaselineDecodeBlocks, summary.OptimizedDecodeBlocks))
+	}
+	if summary.SavedDecodeBytes > 0 {
+		parts = append(parts, fmt.Sprintf("saved_bytes %d", summary.SavedDecodeBytes))
+	}
+	if summary.BaselineReadSegments > 0 || summary.OptimizedReadSegments > 0 || summary.SavedReadSegments > 0 {
+		parts = append(parts, fmt.Sprintf("segments %d->%d", summary.BaselineReadSegments, summary.OptimizedReadSegments))
+	}
+	if summary.BaselineCursorReadCalls > 0 || summary.OptimizedCursorReadCalls > 0 {
+		parts = append(parts, fmt.Sprintf("cursor_reads %d->%d", summary.BaselineCursorReadCalls, summary.OptimizedCursorReadCalls))
+	}
+	if summary.ValueOutputMismatches > 0 {
+		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func decodePathRecommendations(summary *DecodePathSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	return summary.Recommendations
 }
 
 func FormatUnixNano(v int64) string {
