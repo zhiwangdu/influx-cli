@@ -188,6 +188,7 @@ type storageAnalyzeFlags struct {
 	recursive  bool
 	from       string
 	to         string
+	keys       []string
 	sampleKeys int
 	maxBlocks  int
 }
@@ -212,12 +213,16 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if hasNonEmptyValues(analyzeFlags.keys) && !queryRange.Set {
+				return fmt.Errorf("--key requires --from and --to because decode-path planning needs a query range")
+			}
 			report, err := storage.Analyze(cmd.Context(), args, storage.Options{
 				Format:           storage.Format(strings.ToLower(analyzeFlags.format)),
 				Recursive:        analyzeFlags.recursive,
 				KeySampleLimit:   analyzeFlags.sampleKeys,
 				BlockSampleLimit: analyzeFlags.maxBlocks,
 				QueryRange:       queryRange,
+				QueryKeys:        analyzeFlags.keys,
 			})
 			if err != nil {
 				return fmt.Errorf("storage analyze: %w", err)
@@ -266,6 +271,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().BoolVar(&analyzeFlags.recursive, "recursive", false, "walk directories recursively")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.keys, "key", nil, "TSM index key to include in query decode-path planning; repeat for multiple keys")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.sampleKeys, "sample-keys", analyzeFlags.sampleKeys, "maximum key or series ID samples per file")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.maxBlocks, "max-blocks", analyzeFlags.maxBlocks, "maximum block samples per file")
 
@@ -373,6 +379,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func hasNonEmptyValues(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func init() {

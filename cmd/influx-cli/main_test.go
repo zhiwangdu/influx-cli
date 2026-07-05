@@ -60,3 +60,12 @@ func TestParseStorageTimeRejectsUnknownFormat(t *testing.T) {
 		t.Fatalf("error = %v, want format guidance", err)
 	}
 }
+
+func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--key", "cpu value", "missing.tsm"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--key requires --from and --to") {
+		t.Fatalf("error = %v, want key range requirement", err)
+	}
+}

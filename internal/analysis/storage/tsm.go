@@ -78,6 +78,7 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 	if len(entries) == 0 {
 		return FileReport{}, fmt.Errorf("TSM index has no entries")
 	}
+	keySet := queryKeySet(options.QueryKeys)
 
 	report := FileReport{
 		Path:         path,
@@ -106,8 +107,9 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 		}
 		typeName := tsmBlockTypeName(entry.Type)
 		report.BlocksByType[typeName]++
-		overlaps := options.QueryRange.Overlaps(entry.MinTime, entry.MaxTime)
-		if overlaps {
+		timeOverlaps := options.QueryRange.Overlaps(entry.MinTime, entry.MaxTime)
+		queryOverlaps := timeOverlaps && tsmQueryKeySelected(entry.Key, keySet)
+		if queryOverlaps {
 			report.QueryOverlapBlocks++
 		}
 		if i < options.BlockSampleLimit {
@@ -118,7 +120,7 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 				Type:          typeName,
 				Offset:        entry.Offset,
 				SizeBytes:     entry.Size,
-				QueryOverlaps: overlaps,
+				QueryOverlaps: queryOverlaps,
 			}
 			count, err := readTSMBlockValueCount(f, entry)
 			if err == nil {
@@ -132,6 +134,9 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 	report.MinTime = minTime
 	report.MaxTime = maxTime
 	report.QueryOverlapsFile = options.QueryRange.Overlaps(minTime, maxTime)
+	if options.QueryRange.Set && len(keySet) > 0 {
+		report.QueryOverlapsFile = report.QueryOverlapBlocks > 0
+	}
 	tombstones, tombstoneEntries, err := readTSMTombstoneSummary(path, entries, options)
 	if err != nil {
 		report.Notices = append(report.Notices, fmt.Sprintf("tombstone detail unavailable: %v", err))

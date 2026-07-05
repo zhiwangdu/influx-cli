@@ -22,6 +22,7 @@ type Options struct {
 	KeySampleLimit   int
 	BlockSampleLimit int
 	QueryRange       TimeRange
+	QueryKeys        []string
 }
 
 type TimeRange struct {
@@ -142,10 +143,17 @@ type IndexMeasurementReport struct {
 type DecodePathSummary struct {
 	Mode                    string                    `json:"mode,omitempty"`
 	QueryRange              TimeRange                 `json:"query_range,omitempty"`
+	QueryKeys               []string                  `json:"query_keys,omitempty"`
+	MatchedKeys             []string                  `json:"matched_keys,omitempty"`
+	MissingKeys             []string                  `json:"missing_keys,omitempty"`
+	KeyFilterApplied        bool                      `json:"key_filter_applied,omitempty"`
 	CursorSeekTime          int64                     `json:"cursor_seek_time,omitempty"`
+	BaselineDecodeBlocks    int                       `json:"baseline_decode_blocks,omitempty"`
+	OptimizedDecodeBlocks   int                       `json:"optimized_decode_blocks,omitempty"`
 	LocationBlocks          int                       `json:"location_blocks,omitempty"`
 	FilteredDecodeBlocks    int                       `json:"filtered_decode_blocks,omitempty"`
 	SavedDecodeBlocks       int                       `json:"saved_decode_blocks,omitempty"`
+	SkippedByKeyBlocks      int                       `json:"skipped_by_key_blocks,omitempty"`
 	SkippedBeforeSeekBlocks int                       `json:"skipped_before_seek_blocks,omitempty"`
 	SkippedAfterRangeBlocks int                       `json:"skipped_after_range_blocks,omitempty"`
 	FullyTombstonedBlocks   int                       `json:"fully_tombstoned_blocks,omitempty"`

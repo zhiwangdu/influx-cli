@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -71,6 +72,12 @@ func TestAnalyzeTSMMetadata(t *testing.T) {
 	}
 	if got, want := file.DecodePath.LocationBlocks, 2; got != want {
 		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.BaselineDecodeBlocks, 2; got != want {
+		t.Fatalf("baseline decode blocks = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.OptimizedDecodeBlocks, 1; got != want {
+		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
 	}
 	if got, want := file.DecodePath.FilteredDecodeBlocks, 1; got != want {
 		t.Fatalf("filtered decode blocks = %d, want %d", got, want)
@@ -199,6 +206,109 @@ func TestAnalyzeTSMDecodePathMergeAndTombstone(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMDecodePathQueryKeyFilter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 20, 30}},
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 20, maxTime: 40, timestamps: []int64{20, 30, 40}},
+		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 40, timestamps: []int64{20, 30, 40}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(25, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		QueryKeys:        []string{"missing value", "cpu,host=a value", "cpu,host=a value", " "},
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.QueryOverlapBlocks, 2; got != want {
+		t.Fatalf("query overlap blocks = %d, want %d", got, want)
+	}
+	if !file.QueryOverlapsFile {
+		t.Fatal("expected file to overlap selected query key")
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("expected decode path summary")
+	}
+	if !decode.KeyFilterApplied {
+		t.Fatal("expected key filter to be applied")
+	}
+	if got, want := decode.QueryKeys, []string{"cpu,host=a value", "missing value"}; !equalStrings(got, want) {
+		t.Fatalf("query keys = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedKeys, []string{"cpu,host=a value"}; !equalStrings(got, want) {
+		t.Fatalf("matched keys = %v, want %v", got, want)
+	}
+	if got, want := decode.MissingKeys, []string{"missing value"}; !equalStrings(got, want) {
+		t.Fatalf("missing keys = %v, want %v", got, want)
+	}
+	if got, want := decode.LocationBlocks, 2; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 2; got != want {
+		t.Fatalf("baseline decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
+		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedByKeyBlocks, 1; got != want {
+		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[2].Reason, "key_not_selected"; got != want {
+		t.Fatalf("third decode sample reason = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSMDecodePathMissingQueryKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSM(path); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(15, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		QueryKeys:        []string{"disk value"},
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if file.QueryOverlapsFile {
+		t.Fatal("expected file not to overlap missing query key")
+	}
+	if got, want := file.QueryOverlapBlocks, 0; got != want {
+		t.Fatalf("query overlap blocks = %d, want %d", got, want)
+	}
+	decode := file.DecodePath
+	if got, want := decode.LocationBlocks, 0; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedByKeyBlocks, 2; got != want {
+		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.MissingKeys, []string{"disk value"}; !equalStrings(got, want) {
+		t.Fatalf("missing keys = %v, want %v", got, want)
+	}
+}
+
 func TestReadTSMTombstoneV4MultiStream(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "000000001-000000001.tombstone")
 	if err := writeTestTSMTombstoneV4(path,
@@ -243,6 +353,16 @@ func TestAnalyzeTSMWithZeroBlockSampleLimit(t *testing.T) {
 	}
 	if got := len(file.Blocks); got != 0 {
 		t.Fatalf("sampled blocks = %d, want 0", got)
+	}
+}
+
+func TestAnalyzeQueryKeysRequireRange(t *testing.T) {
+	_, err := Analyze(context.Background(), []string{"unused.tsm"}, Options{
+		Format:    FormatTSM,
+		QueryKeys: []string{"cpu value"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "query key filter requires query range") {
+		t.Fatalf("error = %v, want query-key range requirement", err)
 	}
 }
 
@@ -326,6 +446,18 @@ func writeTestTSM(path string) error {
 		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}},
 		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 100, maxTime: 120, timestamps: []int64{100, 20}},
 	})
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type testTSMBlockSpec struct {

@@ -14,16 +14,31 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 		LocationBlocksByType: map[string]int{},
 		DecodeBlocksByType:   map[string]int{},
 	}
+	keySet := queryKeySet(options.QueryKeys)
+	if len(keySet) > 0 {
+		summary.QueryKeys = append([]string(nil), options.QueryKeys...)
+		summary.KeyFilterApplied = true
+	}
+
+	matchedKeys := map[string]struct{}{}
 	overlapByKey := map[string]int{}
 	for _, entry := range entries {
 		typeName := tsmBlockTypeName(entry.Type)
-		fullyTombstoned := tsmEntryFullyTombstoned(entry, tombstones)
+		selectedKey := tsmQueryKeySelected(entry.Key, keySet)
+		if len(keySet) > 0 && selectedKey {
+			matchedKeys[entry.Key] = struct{}{}
+		}
 		queryOverlaps := options.QueryRange.Overlaps(entry.MinTime, entry.MaxTime)
 		locationCandidate := true
+		decoded := false
 		reason := "query_overlap"
 
 		switch {
-		case fullyTombstoned:
+		case !selectedKey:
+			locationCandidate = false
+			summary.SkippedByKeyBlocks++
+			reason = "key_not_selected"
+		case tsmEntryFullyTombstoned(entry, tombstones):
 			locationCandidate = false
 			summary.FullyTombstonedBlocks++
 			reason = "fully_tombstoned"
@@ -41,6 +56,7 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			summary.FilteredDecodeBlocks++
 			summary.LocationBlocksByType[typeName]++
 			summary.DecodeBlocksByType[typeName]++
+			decoded = true
 			overlapByKey[entry.Key]++
 		}
 
@@ -51,12 +67,23 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 				MaxTime:           entry.MaxTime,
 				Type:              typeName,
 				LocationCandidate: locationCandidate,
-				Decoded:           locationCandidate && queryOverlaps,
+				Decoded:           decoded,
 				Reason:            reason,
 			})
 		}
 	}
 
+	if len(keySet) > 0 {
+		for _, key := range options.QueryKeys {
+			if _, ok := matchedKeys[key]; ok {
+				summary.MatchedKeys = append(summary.MatchedKeys, key)
+			} else {
+				summary.MissingKeys = append(summary.MissingKeys, key)
+			}
+		}
+	}
+	summary.BaselineDecodeBlocks = summary.LocationBlocks
+	summary.OptimizedDecodeBlocks = summary.FilteredDecodeBlocks
 	summary.SavedDecodeBlocks = summary.LocationBlocks - summary.FilteredDecodeBlocks
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
@@ -71,6 +98,14 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	return summary
 }
 
+func tsmQueryKeySelected(key string, keySet map[string]struct{}) bool {
+	if len(keySet) == 0 {
+		return true
+	}
+	_, ok := keySet[key]
+	return ok
+}
+
 func tsmEntryFullyTombstoned(entry tsmIndexEntry, tombstones []tsmTombstoneEntry) bool {
 	for _, tombstone := range tombstones {
 		if tombstone.Key == entry.Key && tombstone.Min <= entry.MinTime && tombstone.Max >= entry.MaxTime {
@@ -82,6 +117,18 @@ func tsmEntryFullyTombstoned(entry tsmIndexEntry, tombstones []tsmTombstoneEntry
 
 func tsmDecodeRecommendations(summary *DecodePathSummary) []string {
 	var recommendations []string
+	if len(summary.MissingKeys) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"%d query key(s) were not found in this TSM file",
+			len(summary.MissingKeys),
+		))
+	}
+	if summary.SkippedByKeyBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"key filter excludes %d block(s) from cursor planning",
+			summary.SkippedByKeyBlocks,
+		))
+	}
 	if summary.SkippedAfterRangeBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"filter %d cursor location block(s) that do not overlap the query range before decode",

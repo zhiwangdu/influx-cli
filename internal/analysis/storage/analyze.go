@@ -24,6 +24,10 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	if options.BlockSampleLimit < 0 {
 		return Report{}, fmt.Errorf("block sample limit cannot be negative")
 	}
+	options.QueryKeys = normalizeQueryKeys(options.QueryKeys)
+	if len(options.QueryKeys) > 0 && !options.QueryRange.Set {
+		return Report{}, fmt.Errorf("query key filter requires query range")
+	}
 
 	files, err := expandPaths(ctx, paths, options)
 	if err != nil {
@@ -48,6 +52,38 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	}
 	report.Summary.FileCount = len(report.Files)
 	return report, nil
+}
+
+func normalizeQueryKeys(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	keys := make([]string, 0, len(values))
+	for _, value := range values {
+		key := strings.TrimSpace(value)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func queryKeySet(keys []string) map[string]struct{} {
+	if len(keys) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		set[key] = struct{}{}
+	}
+	return set
 }
 
 func expandPaths(ctx context.Context, paths []string, options Options) ([]string, error) {
