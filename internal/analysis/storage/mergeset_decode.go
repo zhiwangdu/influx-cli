@@ -14,6 +14,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 		DecodeBlocksByType:   map[string]int{},
 	}
 	matchedKeys := map[string]struct{}{}
+	matchedKeyFiles := map[string][]string{}
 	included := false
 	for _, file := range files {
 		if file.Format != FormatMergeset || file.DecodePath == nil {
@@ -23,6 +24,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 		addMergesetFileSearchSummary(summary, file.DecodePath, file.Path, options.BlockSampleLimit)
 		for _, key := range file.DecodePath.MatchedKeys {
 			matchedKeys[key] = struct{}{}
+			matchedKeyFiles[key] = append(matchedKeyFiles[key], file.Path)
 		}
 	}
 	if !included {
@@ -36,7 +38,10 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 		}
 	}
 	summary.BaselineOutputValues = len(options.QueryKeys)
-	summary.OptimizedOutputValues = len(summary.MatchedKeys)
+	summary.OptimizedOutputValues = countMergesetMatchedItemFiles(matchedKeyFiles)
+	summary.DeduplicatedOutputValues = len(summary.MatchedKeys)
+	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
+	populateMergesetFileSetCursorWindows(summary, matchedKeyFiles, options)
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
@@ -57,10 +62,34 @@ func addMergesetFileSearchSummary(dst, src *DecodePathSummary, path string, samp
 	dst.LocationBlocks += src.LocationBlocks
 	dst.FilteredDecodeBlocks += src.FilteredDecodeBlocks
 	dst.SkippedByKeyBlocks += src.SkippedByKeyBlocks
-	dst.CursorWindowCount += src.CursorWindowCount
 	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
 	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
 	appendMergesetFileSearchSamples(dst, src, path, sampleLimit)
+}
+
+func populateMergesetFileSetCursorWindows(summary *DecodePathSummary, matchedKeyFiles map[string][]string, options Options) {
+	summary.CursorWindowCount = len(matchedKeyFiles)
+	for _, key := range options.QueryKeys {
+		files := matchedKeyFiles[key]
+		if len(files) == 0 {
+			continue
+		}
+		if len(files) > 1 {
+			summary.MergeWindowCount++
+			summary.MergeWindowBlocks += len(files)
+			summary.MergeWindowKeys++
+		}
+		if options.BlockSampleLimit <= 0 || len(summary.CursorWindows) >= options.BlockSampleLimit {
+			continue
+		}
+		summary.CursorWindows = append(summary.CursorWindows, DecodePathCursorWindow{
+			Key:            key,
+			Files:          append([]string(nil), files...),
+			LocationBlocks: len(files),
+			DecodedBlocks:  len(files),
+			RequiresMerge:  len(files) > 1,
+		})
+	}
 }
 
 func appendMergesetFileSearchSamples(dst, src *DecodePathSummary, path string, sampleLimit int) {
@@ -96,6 +125,9 @@ func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Op
 	if len(summary.MissingKeys) > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("%d query item key(s) were not found in analyzed mergeset part(s)", len(summary.MissingKeys)))
 	}
+	if summary.DuplicateOutputValues > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("merge/dedup %d duplicate item candidate(s) across mergeset part(s)", summary.DuplicateOutputValues))
+	}
 	if summary.SavedDecodeBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("sorted item lookup skips %d mergeset block(s) across analyzed part(s)", summary.SavedDecodeBlocks))
 	}
@@ -103,4 +135,12 @@ func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Op
 		recommendations = append(recommendations, "all query item keys mapped to decoded mergeset block candidates")
 	}
 	return recommendations
+}
+
+func countMergesetMatchedItemFiles(matchedKeyFiles map[string][]string) int {
+	count := 0
+	for _, files := range matchedKeyFiles {
+		count += len(files)
+	}
+	return count
 }
