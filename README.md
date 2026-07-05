@@ -55,9 +55,10 @@ Initial Phase 5 storage analyzer surface:
 influx-cli storage analyze /path/to/shard --recursive
 influx-cli storage analyze /path/to/file.tsm --from 2026-07-05T00:00:00Z --to 2026-07-05T01:00:00Z
 influx-cli --format json storage analyze /path/to/file.tssp
+influx-cli --format json storage analyze /path/to/L0-00000001.tsi
 ```
 
-Use `--storage-format tsm|tssp` to override auto-detection when needed.
+Use `--storage-format tsm|tssp|tsi` to override auto-detection when needed.
 
 ## MVP Scope
 

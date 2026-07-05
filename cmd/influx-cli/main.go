@@ -205,7 +205,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	}
 	analyzeCommand := &cobra.Command{
 		Use:   "analyze <file-or-dir>...",
-		Short: "Inspect InfluxDB TSM and openGemini TSSP file metadata",
+		Short: "Inspect InfluxDB TSM/TSI and openGemini TSSP file metadata",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			queryRange, err := parseStorageRange(analyzeFlags.from, analyzeFlags.to)
@@ -262,7 +262,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, tssp")
+	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, tssp, tsi")
 	analyzeCommand.Flags().BoolVar(&analyzeFlags.recursive, "recursive", false, "walk directories recursively")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")

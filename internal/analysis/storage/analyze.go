@@ -127,6 +127,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeTSM(path, info, options)
 	case FormatTSSP:
 		return analyzeTSSP(path, info, options)
+	case FormatTSI:
+		return analyzeTSI(path, info, options)
 	default:
 		return FileReport{}, fmt.Errorf("unsupported storage format %q", format)
 	}
@@ -150,6 +152,9 @@ func detectFormat(path string) (Format, error) {
 	if n >= len(tsspMagic) && string(header[:len(tsspMagic)]) == tsspMagic {
 		return FormatTSSP, nil
 	}
+	if n >= len(tsiMagic) && string(header[:len(tsiMagic)]) == tsiMagic {
+		return FormatTSI, nil
+	}
 	if n < 5 {
 		return "", fmt.Errorf("file too small to detect storage format")
 	}
@@ -163,8 +168,10 @@ func isStorageCandidate(path string, format Format) bool {
 		return strings.HasSuffix(lower, ".tsm")
 	case FormatTSSP:
 		return strings.Contains(lower, ".tssp")
+	case FormatTSI:
+		return strings.HasSuffix(lower, ".tsi")
 	default:
-		return strings.HasSuffix(lower, ".tsm") || strings.Contains(lower, ".tssp")
+		return strings.HasSuffix(lower, ".tsm") || strings.Contains(lower, ".tssp") || strings.HasSuffix(lower, ".tsi")
 	}
 }
 

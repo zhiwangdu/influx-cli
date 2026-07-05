@@ -13,6 +13,7 @@ const (
 	FormatAuto Format = "auto"
 	FormatTSM  Format = "tsm"
 	FormatTSSP Format = "tssp"
+	FormatTSI  Format = "tsi"
 )
 
 type Options struct {
@@ -77,6 +78,7 @@ type FileReport struct {
 	QueryOverlapBlocks int               `json:"query_overlap_blocks,omitempty"`
 	Tombstones         TombstoneSummary  `json:"tombstones,omitempty"`
 	SeriesID           SeriesIDSummary   `json:"series_id,omitempty"`
+	Index              *IndexSummary     `json:"index,omitempty"`
 	Extra              map[string]string `json:"extra,omitempty"`
 	Notices            []string          `json:"notices,omitempty"`
 }
@@ -108,6 +110,32 @@ type TombstoneRangeReport struct {
 	MaxTime        int64  `json:"max_time"`
 	QueryOverlaps  bool   `json:"query_overlaps,omitempty"`
 	AffectedBlocks int    `json:"affected_blocks,omitempty"`
+}
+
+type IndexSummary struct {
+	Type                    string                   `json:"type,omitempty"`
+	MeasurementCount        int                      `json:"measurement_count,omitempty"`
+	DeletedMeasurementCount int                      `json:"deleted_measurement_count,omitempty"`
+	SeriesRefs              int64                    `json:"series_refs,omitempty"`
+	TagKeyCount             int                      `json:"tag_key_count,omitempty"`
+	DeletedTagKeyCount      int                      `json:"deleted_tag_key_count,omitempty"`
+	TagValueCount           int                      `json:"tag_value_count,omitempty"`
+	DeletedTagValueCount    int                      `json:"deleted_tag_value_count,omitempty"`
+	SeriesIDSetBytes        int64                    `json:"series_id_set_bytes,omitempty"`
+	TombstoneSeriesSetBytes int64                    `json:"tombstone_series_set_bytes,omitempty"`
+	SeriesSketchBytes       int64                    `json:"series_sketch_bytes,omitempty"`
+	TombstoneSketchBytes    int64                    `json:"tombstone_sketch_bytes,omitempty"`
+	MeasurementSamples      []IndexMeasurementReport `json:"measurement_samples,omitempty"`
+}
+
+type IndexMeasurementReport struct {
+	Name                 string `json:"name"`
+	Deleted              bool   `json:"deleted,omitempty"`
+	SeriesCount          uint64 `json:"series_count,omitempty"`
+	TagKeyCount          int    `json:"tag_key_count,omitempty"`
+	DeletedTagKeyCount   int    `json:"deleted_tag_key_count,omitempty"`
+	TagValueCount        int    `json:"tag_value_count,omitempty"`
+	DeletedTagValueCount int    `json:"deleted_tag_value_count,omitempty"`
 }
 
 type BlockReport struct {

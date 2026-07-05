@@ -181,8 +181,12 @@ func TestAnalyzeAutoDetectsStorageFormats(t *testing.T) {
 	if err := writeTestTSSP(tsspPath); err != nil {
 		t.Fatal(err)
 	}
+	tsiPath := filepath.Join(dir, "L0-00000001.tsi")
+	if err := writeTestTSI(tsiPath); err != nil {
+		t.Fatal(err)
+	}
 
-	report, err := Analyze(context.Background(), []string{tsmPath, tsspPath}, Options{
+	report, err := Analyze(context.Background(), []string{tsmPath, tsspPath, tsiPath}, Options{
 		Format:           FormatAuto,
 		KeySampleLimit:   1,
 		BlockSampleLimit: 1,
@@ -190,15 +194,15 @@ func TestAnalyzeAutoDetectsStorageFormats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(report.Files), 2; got != want {
+	if got, want := len(report.Files), 3; got != want {
 		t.Fatalf("file count = %d, want %d", got, want)
 	}
 	formats := map[Format]bool{}
 	for _, file := range report.Files {
 		formats[file.Format] = true
 	}
-	if !formats[FormatTSM] || !formats[FormatTSSP] {
-		t.Fatalf("formats = %v, want %s and %s", formats, FormatTSM, FormatTSSP)
+	if !formats[FormatTSM] || !formats[FormatTSSP] || !formats[FormatTSI] {
+		t.Fatalf("formats = %v, want %s, %s, and %s", formats, FormatTSM, FormatTSSP, FormatTSI)
 	}
 }
 
