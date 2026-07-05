@@ -99,10 +99,11 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["query_overlap_precision"] = "detached-chunk-meta"
 		}
 		populateTSSPDetachedChunkReports(&report, chunkMetas, options)
+		report.DecodePath = buildTSSPDetachedChunkDecodePathSummary(metaIndexes, chunkMetas, options)
 	} else {
 		populateTSSPDetachedMetaIndexReports(&report, metaIndexes, options)
+		report.DecodePath = buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes, options)
 	}
-	report.DecodePath = buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes, options)
 	return report, nil
 }
 
@@ -277,6 +278,125 @@ func populateTSSPDetachedChunkReports(report *FileReport, chunks []tsspChunkMeta
 			})
 		}
 	}
+}
+
+func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options) *DecodePathSummary {
+	if !options.QueryRange.Set {
+		return nil
+	}
+
+	summary := &DecodePathSummary{
+		Mode:                 tsspCursorMode("tssp-detached-location-cursor", options),
+		QueryRange:           options.QueryRange,
+		CursorSeekTime:       tsspCursorSeekTime(options),
+		LocationBlocksByType: map[string]int{},
+		DecodeBlocksByType:   map[string]int{},
+	}
+	idSet := queryMetaIndexIDSet(options.QueryMetaIndexIDs)
+	if len(idSet) > 0 {
+		summary.QueryMetaIndexIDs = append([]uint64(nil), options.QueryMetaIndexIDs...)
+		summary.KeyFilterApplied = true
+	}
+	populateTSSPDecodeMetaIndexMatches(summary, metaIndexes)
+
+	chunksByID := make(map[uint64]tsspChunkMeta, len(chunks))
+	for _, chunk := range chunks {
+		chunksByID[chunk.SID] = chunk
+	}
+
+	selectedMetas := []tsspMetaIndex{}
+	overlapMetas := []tsspMetaIndex{}
+	for _, meta := range tsspMetaIndexesForCursor(metaIndexes, options.CursorDescending) {
+		if !tsspQueryMetaIndexSelected(meta.ID, idSet) {
+			summary.SkippedByKeyBlocks++
+			continue
+		}
+		selectedMetas = append(selectedMetas, meta)
+		if options.QueryRange.Overlaps(meta.MinTime, meta.MaxTime) {
+			overlapMetas = append(overlapMetas, meta)
+			if summary.IteratorCostFiles == 0 {
+				summary.IteratorCostFiles = 1
+			}
+			summary.IteratorCostBlocks++
+			summary.IteratorCostBytes += int64(meta.Size)
+		}
+
+		chunk, ok := chunksByID[meta.ID]
+		if !ok {
+			continue
+		}
+		minTime, maxTime := chunk.minMaxTime()
+		segmentCount := len(chunk.TimeRanges)
+		outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange)
+		baselineBytes := tsspChunkSegmentBytes(chunk)
+		baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0)
+		optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples)
+
+		summary.LocationBlocks++
+		summary.LocationBlocksByType["detached-chunk-meta"]++
+		summary.BaselineDecodeBlocks++
+		summary.BaselineDecodeBytes += int64(baselineBytes)
+		summary.BaselineDecodeValues += segmentCount
+		summary.BaselineReadSegments += segmentCount
+		summary.BaselineReadAtCalls += baselineReadAtCalls
+		if outputSegments > 0 {
+			summary.OptimizedDecodeBlocks++
+			summary.FilteredDecodeBlocks++
+			summary.OptimizedDecodeBytes += int64(outputBytes)
+			summary.OptimizedDecodeValues += outputSegments
+			summary.OptimizedReadSegments += outputSegments
+			summary.OptimizedReadAtCalls += optimizedReadAtCalls
+			summary.DecodeBlocksByType["detached-chunk-meta"]++
+		} else if maxTime < options.QueryRange.Min {
+			summary.SkippedBeforeSeekBlocks++
+		} else {
+			summary.SkippedAfterRangeBlocks++
+		}
+		appendTSSPDetachedChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
+			baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, options.BlockSampleLimit)
+	}
+
+	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
+	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
+	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
+	summary.SavedReadSegments = summary.BaselineReadSegments - summary.OptimizedReadSegments
+	summary.BaselineCursorReadCalls = tsspDetachedChunkMetaBatchCount(len(selectedMetas))
+	summary.OptimizedCursorReadCalls = tsspDetachedChunkMetaBatchCount(len(overlapMetas))
+	summary.SavedReadAtCalls = summary.BaselineReadAtCalls - summary.OptimizedReadAtCalls
+	if summary.FilteredDecodeBlocks > 0 {
+		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
+	}
+	populateTSSPDetachedChunkMetaBatches(summary, selectedMetas, overlapMetas, options)
+	summary.Recommendations = tsspDetachedChunkDecodeRecommendations(summary)
+	return summary
+}
+
+func appendTSSPDetachedChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32,
+	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, sampleLimit int) {
+	if sampleLimit <= 0 || len(summary.Samples) >= sampleLimit {
+		return
+	}
+	reason := "outside_query_range"
+	decoded := outputSegments > 0
+	if decoded {
+		reason = "segment_overlap"
+	}
+	summary.Samples = append(summary.Samples, DecodePathBlockDecision{
+		Key:                   fmt.Sprintf("meta-index-id:%d", chunk.SID),
+		MetaIndexID:           chunk.SID,
+		MinTime:               minTime,
+		MaxTime:               maxTime,
+		Type:                  "detached-chunk-meta",
+		SizeBytes:             sizeBytes,
+		SegmentCount:          segmentCount,
+		OutputSegments:        outputSegments,
+		BaselineReadAtCalls:   baselineReadAtCalls,
+		OptimizedReadAtCalls:  optimizedReadAtCalls,
+		LocationCandidate:     true,
+		Decoded:               decoded,
+		Reason:                reason,
+		OptimizedReadAtRanges: readAtRanges,
+	})
 }
 
 func buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes []tsspMetaIndex, options Options) *DecodePathSummary {
@@ -490,6 +610,59 @@ func tsspDetachedMetaIndexRecommendations(summary *DecodePathSummary) []string {
 			summary.BaselineCursorReadCalls,
 			summary.OptimizedCursorReadCalls,
 		))
+	}
+	return recommendations
+}
+
+func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	recommendations := make([]string, 0, 6)
+	if len(summary.MissingMetaIndexIDs) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"%d query meta-index id(s) were not found in analyzed detached TSSP metadata",
+			len(summary.MissingMetaIndexIDs),
+		))
+	}
+	if summary.SkippedByKeyBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"skip %d detached TSSP chunk(s) outside the requested meta-index ID set",
+			summary.SkippedByKeyBlocks,
+		))
+	}
+	if summary.SavedDecodeBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"filter %d detached TSSP chunk candidate(s) outside the query range before data ReadAt",
+			summary.SavedDecodeBlocks,
+		))
+	}
+	if summary.SavedReadSegments > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"read %d overlapping detached TSSP segment(s) instead of %d candidate segment(s)",
+			summary.OptimizedReadSegments,
+			summary.BaselineReadSegments,
+		))
+	}
+	if summary.SavedReadAtCalls > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"issue %d detached TSSP data ReadAt call(s) instead of %d candidate column-segment ReadAt call(s)",
+			summary.OptimizedReadAtCalls,
+			summary.BaselineReadAtCalls,
+		))
+	}
+	if summary.BaselineCursorReadCalls > summary.OptimizedCursorReadCalls {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"reduce detached chunk metadata batch read(s) from %d to %d after query filtering",
+			summary.BaselineCursorReadCalls,
+			summary.OptimizedCursorReadCalls,
+		))
+	}
+	if len(recommendations) == 0 && summary.FilteredDecodeBlocks > 0 {
+		recommendations = append(recommendations, "query range maps directly to detached TSSP chunk segments")
+	}
+	if len(recommendations) == 0 {
+		recommendations = append(recommendations, "query range has no detached TSSP chunk segment candidates")
 	}
 	return recommendations
 }

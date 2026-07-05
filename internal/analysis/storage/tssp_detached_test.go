@@ -327,6 +327,79 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if !file.Blocks[1].QueryOverlaps {
 		t.Fatal("expected second detached chunk metadata block to overlap query")
 	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.Mode, "tssp-detached-location-cursor-ascending"; got != want {
+		t.Fatalf("decode mode = %q, want %q", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 2; got != want {
+		t.Fatalf("baseline blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
+		t.Fatalf("optimized blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineReadSegments, 2; got != want {
+		t.Fatalf("baseline read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadSegments, 1; got != want {
+		t.Fatalf("optimized read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineReadAtCalls, 4; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 2; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadAtCalls, 2; got != want {
+		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.LocationBlocksByType["detached-chunk-meta"], 2; got != want {
+		t.Fatalf("location detached chunk metadata blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DecodeBlocksByType["detached-chunk-meta"], 1; got != want {
+		t.Fatalf("decoded detached chunk metadata blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineCursorReadCalls, 1; got != want {
+		t.Fatalf("baseline cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorReadCalls, 1; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 1; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "detached_chunk_meta_batch_filtered"; got != want {
+		t.Fatalf("cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := len(decode.Samples), 2; got != want {
+		t.Fatalf("decode samples = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[1].Type, "detached-chunk-meta"; got != want {
+		t.Fatalf("second sample type = %q, want %q", got, want)
+	}
+	if got, want := decode.Samples[1].Reason, "segment_overlap"; got != want {
+		t.Fatalf("second sample reason = %q, want %q", got, want)
+	}
+	if got, want := len(decode.Samples[1].OptimizedReadAtRanges), 2; got != want {
+		t.Fatalf("second sample ReadAt ranges = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[1].OptimizedReadAtRanges[0].Column, "value"; got != want {
+		t.Fatalf("first ReadAt range column = %q, want %q", got, want)
+	}
+	if got, want := decode.Samples[1].OptimizedReadAtRanges[0].Offset, int64(2000); got != want {
+		t.Fatalf("first ReadAt range offset = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[1].OptimizedReadAtRanges[1].Column, "time"; got != want {
+		t.Fatalf("second ReadAt range column = %q, want %q", got, want)
+	}
+	if got, want := decode.Samples[1].OptimizedReadAtRanges[1].Offset, int64(2080); got != want {
+		t.Fatalf("second ReadAt range offset = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP data ReadAt") {
+		t.Fatalf("recommendations = %v, want detached data ReadAt recommendation", decode.Recommendations)
+	}
 }
 
 func TestAnalyzeTSSPDetachedMetaIndexBadChunkMetaSidecarNotice(t *testing.T) {
