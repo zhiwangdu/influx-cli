@@ -328,6 +328,151 @@ func TestAnalyzeTSMDecodePathQueryKeyFilter(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMDecodePathDescendingCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 0, maxTime: 5, timestamps: []int64{0, 5}, values: []int64{0, 5}},
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 30, timestamps: []int64{20, 10}, values: []int64{20, 30}},
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 40, maxTime: 50, timestamps: []int64{40, 10}, values: []int64{40, 50}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		CursorDescending: true,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("expected decode path summary")
+	}
+	if got, want := decode.Mode, "tsm-key-cursor-descending"; got != want {
+		t.Fatalf("mode = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorSeekTime, int64(30); got != want {
+		t.Fatalf("cursor seek time = %d, want %d", got, want)
+	}
+	if got, want := decode.LocationBlocks, 2; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.FilteredDecodeBlocks, 1; got != want {
+		t.Fatalf("filtered decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedAfterRangeBlocks, 2; got != want {
+		t.Fatalf("skipped after range blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[2].Reason, "after_cursor_seek"; got != want {
+		t.Fatalf("third sample reason = %q, want %q", got, want)
+	}
+	if got, want := decode.BaselineCursorOutputPoints, 2; got != want {
+		t.Fatalf("baseline cursor output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorOutputPoints, 2; got != want {
+		t.Fatalf("optimized cursor output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputMismatches, 0; got != want {
+		t.Fatalf("value output mismatches = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].MinTime, int64(20); got != want {
+		t.Fatalf("first cursor window min time = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[1].Reason, "outside_query_range"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
+	}
+}
+
+func TestTSMDescendingCursorNextDoesNotDuplicateCurrentLocation(t *testing.T) {
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locations := []tsmCursorReadLocation{
+		newTSMCursorReadLocation("", 0, tsmIndexEntry{
+			Key:             "cpu,host=a value",
+			Type:            tsmBlockInteger,
+			MinTime:         0,
+			MaxTime:         10,
+			Points:          []tsmPoint{{Timestamp: 0, Type: tsmBlockInteger, Value: "0"}, {Timestamp: 10, Type: tsmBlockInteger, Value: "10"}},
+			PointsAvailable: true,
+		}, nil, queryRange, true),
+		newTSMCursorReadLocation("", 1, tsmIndexEntry{
+			Key:             "cpu,host=a value",
+			Type:            tsmBlockInteger,
+			MinTime:         20,
+			MaxTime:         30,
+			Points:          []tsmPoint{{Timestamp: 20, Type: tsmBlockInteger, Value: "20"}, {Timestamp: 30, Type: tsmBlockInteger, Value: "30"}},
+			PointsAvailable: true,
+		}, nil, queryRange, true),
+	}
+	cursor := newTSMKeyCursor(locations, queryRange, true)
+	if got, want := len(cursor.current), 2; got != want {
+		t.Fatalf("initial current locations = %d, want %d", got, want)
+	}
+	if _, ok := cursor.readBlock(); !ok {
+		t.Fatal("expected first descending block")
+	}
+	cursor.next()
+	if got, want := len(cursor.current), 1; got != want {
+		t.Fatalf("next current locations = %d, want %d", got, want)
+	}
+	if got, want := cursor.current[0].entry.MinTime, int64(0); got != want {
+		t.Fatalf("next current min time = %d, want %d", got, want)
+	}
+}
+
+func TestTSMFileStoreCursorWindowsFollowDescendingOrder(t *testing.T) {
+	summary := &DecodePathSummary{}
+	populateTSMFileStoreCursorWindows(summary, map[string][]tsmFileStoreLocation{
+		"cpu,host=a value": {
+			{
+				path:    "000000001-000000001.tsm",
+				index:   0,
+				decoded: false,
+				entry: tsmIndexEntry{
+					Key:     "cpu,host=a value",
+					MinTime: 0,
+					MaxTime: 10,
+				},
+			},
+			{
+				path:    "000000002-000000001.tsm",
+				index:   1,
+				decoded: true,
+				entry: tsmIndexEntry{
+					Key:     "cpu,host=a value",
+					MinTime: 20,
+					MaxTime: 30,
+				},
+			},
+		},
+	}, 5, true)
+	if got, want := summary.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := summary.CursorWindows[0].MinTime, int64(20); got != want {
+		t.Fatalf("first cursor window min time = %d, want %d", got, want)
+	}
+	if got, want := summary.CursorWindows[0].Reason, "single_decode"; got != want {
+		t.Fatalf("first cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := summary.CursorWindows[1].Reason, "outside_query_range"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeTSMDecodePathMissingQueryKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
 	if err := writeTestTSM(path); err != nil {

@@ -67,9 +67,9 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	sort.Strings(keys)
 
 	summary := &DecodePathSummary{
-		Mode:                 "tsm-filestore-key-cursor-ascending",
+		Mode:                 tsmCursorMode("tsm-filestore-key-cursor", options),
 		QueryRange:           options.QueryRange,
-		CursorSeekTime:       options.QueryRange.Min,
+		CursorSeekTime:       tsmCursorSeekTime(options),
 		LocationBlocksByType: map[string]int{},
 		DecodeBlocksByType:   map[string]int{},
 	}
@@ -169,13 +169,13 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
-	baselineExecution := executeTSMFileStoreCursorOutputs(locationsByKey, options.QueryRange, false)
-	optimizedExecution := executeTSMFileStoreCursorOutputs(locationsByKey, options.QueryRange, true)
+	baselineExecution := executeTSMFileStoreCursorOutputs(locationsByKey, options.QueryRange, false, options.CursorDescending)
+	optimizedExecution := executeTSMFileStoreCursorOutputs(locationsByKey, options.QueryRange, true, options.CursorDescending)
 	summarizeTSMCursorOutput(summary, baselineExecution, optimizedExecution, options.BlockSampleLimit)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
-	populateTSMFileStoreCursorWindows(summary, locationsByKey, options.BlockSampleLimit)
+	populateTSMFileStoreCursorWindows(summary, locationsByKey, options.BlockSampleLimit, options.CursorDescending)
 	summary.Recommendations = tsmDecodeRecommendations(summary)
 	return summary, nil
 }
@@ -279,7 +279,8 @@ func tsmFileStoreCostOverlaps(minTime, maxTime, queryMin, queryMax int64) bool {
 func tsmFileStoreLocationsForKey(files []tsmFileStoreData, key string, options Options, summary *DecodePathSummary) []tsmFileStoreLocation {
 	locations := make([]tsmFileStoreLocation, 0)
 	for _, file := range files {
-		if file.maxTime < options.QueryRange.Min {
+		if (!options.CursorDescending && file.maxTime < options.QueryRange.Min) ||
+			(options.CursorDescending && file.minTime > options.QueryRange.Max) {
 			continue
 		}
 		for _, entry := range file.entries {
@@ -290,8 +291,12 @@ func tsmFileStoreLocationsForKey(files []tsmFileStoreData, key string, options O
 				summary.FullyTombstonedBlocks++
 				continue
 			}
-			if entry.MaxTime < options.QueryRange.Min {
+			if !options.CursorDescending && entry.MaxTime < options.QueryRange.Min {
 				summary.SkippedBeforeSeekBlocks++
+				continue
+			}
+			if options.CursorDescending && entry.MinTime > options.QueryRange.Max {
+				summary.SkippedAfterRangeBlocks++
 				continue
 			}
 			locations = append(locations, tsmFileStoreLocation{
@@ -305,7 +310,13 @@ func tsmFileStoreLocationsForKey(files []tsmFileStoreData, key string, options O
 	sort.SliceStable(locations, func(i, j int) bool {
 		a, b := locations[i], locations[j]
 		if rangesOverlap(a.entry.MinTime, a.entry.MaxTime, b.entry.MinTime, b.entry.MaxTime) {
-			return a.path < b.path
+			if a.path != b.path {
+				return a.path < b.path
+			}
+			return a.entry.MinTime < b.entry.MinTime
+		}
+		if options.CursorDescending {
+			return a.entry.MaxTime < b.entry.MaxTime
 		}
 		return a.entry.MinTime < b.entry.MinTime
 	})
@@ -315,7 +326,7 @@ func tsmFileStoreLocationsForKey(files []tsmFileStoreData, key string, options O
 	return locations
 }
 
-func populateTSMFileStoreCursorWindows(summary *DecodePathSummary, locationsByKey map[string][]tsmFileStoreLocation, sampleLimit int) {
+func populateTSMFileStoreCursorWindows(summary *DecodePathSummary, locationsByKey map[string][]tsmFileStoreLocation, sampleLimit int, descending bool) {
 	if len(locationsByKey) == 0 {
 		return
 	}
@@ -329,23 +340,33 @@ func populateTSMFileStoreCursorWindows(summary *DecodePathSummary, locationsByKe
 	for _, key := range keys {
 		locations := locationsByKey[key]
 		var window tsmFileStoreCursorWindowBuilder
-		for _, location := range locations {
-			if !window.started {
-				window.start(location)
-				continue
+		if descending {
+			for i := len(locations) - 1; i >= 0; i-- {
+				addTSMFileStoreCursorWindowLocation(summary, &window, locations[i], mergeKeys, sampleLimit, descending)
 			}
-			if location.entry.MinTime <= window.maxTime {
-				window.add(location)
-				continue
+		} else {
+			for _, location := range locations {
+				addTSMFileStoreCursorWindowLocation(summary, &window, location, mergeKeys, sampleLimit, descending)
 			}
-			finishTSMFileStoreCursorWindow(summary, &window, mergeKeys, sampleLimit)
-			window.start(location)
 		}
 		if window.started {
 			finishTSMFileStoreCursorWindow(summary, &window, mergeKeys, sampleLimit)
 		}
 	}
 	summary.MergeWindowKeys = len(mergeKeys)
+}
+
+func addTSMFileStoreCursorWindowLocation(summary *DecodePathSummary, window *tsmFileStoreCursorWindowBuilder, location tsmFileStoreLocation, mergeKeys map[string]struct{}, sampleLimit int, descending bool) {
+	if !window.started {
+		window.start(location)
+		return
+	}
+	if tsmCursorWindowOverlaps(window.minTime, window.maxTime, location.entry, descending) {
+		window.add(location)
+		return
+	}
+	finishTSMFileStoreCursorWindow(summary, window, mergeKeys, sampleLimit)
+	window.start(location)
 }
 
 type tsmFileStoreCursorWindowBuilder struct {

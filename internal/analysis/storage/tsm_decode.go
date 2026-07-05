@@ -17,9 +17,9 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                 "tsm-key-cursor-ascending",
+		Mode:                 tsmCursorMode("tsm-key-cursor", options),
 		QueryRange:           options.QueryRange,
-		CursorSeekTime:       options.QueryRange.Min,
+		CursorSeekTime:       tsmCursorSeekTime(options),
 		LocationBlocksByType: map[string]int{},
 		DecodeBlocksByType:   map[string]int{},
 	}
@@ -55,10 +55,14 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			locationCandidate = false
 			summary.FullyTombstonedBlocks++
 			reason = "fully_tombstoned"
-		case entry.MaxTime < options.QueryRange.Min:
+		case !options.CursorDescending && entry.MaxTime < options.QueryRange.Min:
 			locationCandidate = false
 			summary.SkippedBeforeSeekBlocks++
 			reason = "before_cursor_seek"
+		case options.CursorDescending && entry.MinTime > options.QueryRange.Max:
+			locationCandidate = false
+			summary.SkippedAfterRangeBlocks++
+			reason = "after_cursor_seek"
 		case !queryOverlaps:
 			summary.LocationBlocks++
 			summary.BaselineDecodeBytes += int64(entry.Size)
@@ -142,15 +146,29 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
-	baselineExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, false)
-	optimizedExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, true)
+	baselineExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, false, options.CursorDescending)
+	optimizedExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, true, options.CursorDescending)
 	summarizeTSMCursorOutput(summary, baselineExecution, optimizedExecution, options.BlockSampleLimit)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
-	populateTSMCursorWindows(summary, locationsByKey, options.BlockSampleLimit)
+	populateTSMCursorWindows(summary, locationsByKey, options.BlockSampleLimit, options.CursorDescending)
 	summary.Recommendations = tsmDecodeRecommendations(summary)
 	return summary
+}
+
+func tsmCursorMode(prefix string, options Options) string {
+	if options.CursorDescending {
+		return prefix + "-descending"
+	}
+	return prefix + "-ascending"
+}
+
+func tsmCursorSeekTime(options Options) int64 {
+	if options.CursorDescending {
+		return options.QueryRange.Max
+	}
+	return options.QueryRange.Min
 }
 
 func tsmOutputTimestamps(entry tsmIndexEntry, tombstones []tsmTombstoneEntry, queryRange TimeRange) []int64 {
@@ -295,7 +313,7 @@ func countTSMOutputTimestamps(outputByKey map[string]map[int64]struct{}) int {
 	return total
 }
 
-func populateTSMCursorWindows(summary *DecodePathSummary, locationsByKey map[string][]tsmCursorCandidate, sampleLimit int) {
+func populateTSMCursorWindows(summary *DecodePathSummary, locationsByKey map[string][]tsmCursorCandidate, sampleLimit int, descending bool) {
 	if len(locationsByKey) == 0 {
 		return
 	}
@@ -309,29 +327,43 @@ func populateTSMCursorWindows(summary *DecodePathSummary, locationsByKey map[str
 	for _, key := range keys {
 		locations := locationsByKey[key]
 		sort.SliceStable(locations, func(i, j int) bool {
-			if locations[i].entry.MinTime == locations[j].entry.MinTime {
-				return locations[i].entry.MaxTime < locations[j].entry.MaxTime
+			a, b := locations[i].entry, locations[j].entry
+			if rangesOverlap(a.MinTime, a.MaxTime, b.MinTime, b.MaxTime) {
+				return locations[i].index < locations[j].index
 			}
-			return locations[i].entry.MinTime < locations[j].entry.MinTime
+			if descending {
+				return a.MaxTime < b.MaxTime
+			}
+			return a.MinTime < b.MinTime
 		})
 		var window tsmCursorWindowBuilder
-		for _, location := range locations {
-			if !window.started {
-				window.start(key, location)
-				continue
+		if descending {
+			for i := len(locations) - 1; i >= 0; i-- {
+				addTSMCursorWindowLocation(summary, &window, key, locations[i], mergeKeys, sampleLimit, descending)
 			}
-			if location.entry.MinTime <= window.maxTime {
-				window.add(location)
-				continue
+		} else {
+			for _, location := range locations {
+				addTSMCursorWindowLocation(summary, &window, key, location, mergeKeys, sampleLimit, descending)
 			}
-			finishTSMCursorWindow(summary, &window, mergeKeys, sampleLimit)
-			window.start(key, location)
 		}
 		if window.started {
 			finishTSMCursorWindow(summary, &window, mergeKeys, sampleLimit)
 		}
 	}
 	summary.MergeWindowKeys = len(mergeKeys)
+}
+
+func addTSMCursorWindowLocation(summary *DecodePathSummary, window *tsmCursorWindowBuilder, key string, location tsmCursorCandidate, mergeKeys map[string]struct{}, sampleLimit int, descending bool) {
+	if !window.started {
+		window.start(key, location)
+		return
+	}
+	if tsmCursorWindowOverlaps(window.minTime, window.maxTime, location.entry, descending) {
+		window.add(location)
+		return
+	}
+	finishTSMCursorWindow(summary, window, mergeKeys, sampleLimit)
+	window.start(key, location)
 }
 
 type tsmCursorWindowBuilder struct {
@@ -369,6 +401,13 @@ func (w *tsmCursorWindowBuilder) add(location tsmCursorCandidate) {
 	if location.decoded {
 		w.decodedBlocks++
 	}
+}
+
+func tsmCursorWindowOverlaps(minTime, maxTime int64, entry tsmIndexEntry, descending bool) bool {
+	if descending {
+		return entry.MaxTime >= minTime
+	}
+	return entry.MinTime <= maxTime
 }
 
 func finishTSMCursorWindow(summary *DecodePathSummary, window *tsmCursorWindowBuilder, mergeKeys map[string]struct{}, sampleLimit int) {

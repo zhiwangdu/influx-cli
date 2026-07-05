@@ -105,6 +105,30 @@ func TestParseStorageSeriesIDsRejectsMalformedValues(t *testing.T) {
 	}
 }
 
+func TestParseStorageCursorDescending(t *testing.T) {
+	for _, value := range []string{"", "asc", "ascending"} {
+		got, err := parseStorageCursorDescending(value)
+		if err != nil {
+			t.Fatalf("%q error = %v", value, err)
+		}
+		if got {
+			t.Fatalf("%q descending = true, want false", value)
+		}
+	}
+	for _, value := range []string{"desc", "descending"} {
+		got, err := parseStorageCursorDescending(value)
+		if err != nil {
+			t.Fatalf("%q error = %v", value, err)
+		}
+		if !got {
+			t.Fatalf("%q descending = false, want true", value)
+		}
+	}
+	if _, err := parseStorageCursorDescending("sideways"); err == nil || !strings.Contains(err.Error(), "asc or desc") {
+		t.Fatalf("error = %v, want cursor order guidance", err)
+	}
+}
+
 func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--key", "cpu value", "missing.tsm"})

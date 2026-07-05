@@ -192,6 +192,7 @@ type storageAnalyzeFlags struct {
 	seriesIDs    []string
 	measurements []string
 	tags         []string
+	cursorOrder  string
 	sampleKeys   int
 	maxBlocks    int
 }
@@ -230,6 +231,10 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			cursorDescending, err := parseStorageCursorDescending(analyzeFlags.cursorOrder)
+			if err != nil {
+				return err
+			}
 			report, err := storage.Analyze(cmd.Context(), args, storage.Options{
 				Format:            storage.Format(strings.ToLower(analyzeFlags.format)),
 				Recursive:         analyzeFlags.recursive,
@@ -240,6 +245,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				QuerySeriesIDs:    seriesIDs,
 				QueryMeasurements: analyzeFlags.measurements,
 				QueryTags:         tagFilters,
+				CursorDescending:  cursorDescending,
 			})
 			if err != nil {
 				return fmt.Errorf("storage analyze: %w", err)
@@ -292,6 +298,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "openGemini TSSP series ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
+	analyzeCommand.Flags().StringVar(&analyzeFlags.cursorOrder, "cursor-order", "asc", "TSM cursor order for decode-path planning: asc or desc")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.sampleKeys, "sample-keys", analyzeFlags.sampleKeys, "maximum key or series ID samples per file")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.maxBlocks, "max-blocks", analyzeFlags.maxBlocks, "maximum block samples per file")
 
@@ -416,6 +423,17 @@ func parseStorageSeriesIDs(values []string) ([]uint64, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+func parseStorageCursorDescending(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "asc", "ascending":
+		return false, nil
+	case "desc", "descending":
+		return true, nil
+	default:
+		return false, fmt.Errorf("parse --cursor-order %q: use asc or desc", value)
+	}
 }
 
 func colorEnabled() bool {

@@ -59,7 +59,7 @@ influx-cli --format json storage analyze /path/to/file.tssp --from 10 --to 20 --
 influx-cli --format json storage analyze /path/to/L0-00000001.tsi --measurement cpu --tag host=a
 ```
 
-Use `--storage-format tsm|tssp|tsi` to override auto-detection when needed. Repeat `--key` to scope TSM decode-path planning to specific TSM index keys. Repeat `--series-id` to scope openGemini TSSP decode-path planning to specific series IDs. Repeat `--measurement` and `--tag key=value` to inspect TSI measurement/tag predicates.
+Use `--storage-format tsm|tssp|tsi` to override auto-detection when needed. Repeat `--key` to scope TSM decode-path planning to specific TSM index keys. Use `--cursor-order asc|desc` to model ascending or descending TSM cursor planning. Repeat `--series-id` to scope openGemini TSSP decode-path planning to specific series IDs. Repeat `--measurement` and `--tag key=value` to inspect TSI measurement/tag predicates.
 
 ## MVP Scope
 

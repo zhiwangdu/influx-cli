@@ -27,6 +27,7 @@ type Options struct {
 	QuerySeriesIDs    []uint64
 	QueryMeasurements []string
 	QueryTags         []TagFilter
+	CursorDescending  bool
 }
 
 type TimeRange struct {
