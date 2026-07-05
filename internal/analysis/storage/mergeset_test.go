@@ -2,11 +2,15 @@ package storage
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestAnalyzeMergesetPartMetadata(t *testing.T) {
@@ -21,8 +25,9 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	}
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format:         FormatAuto,
-		KeySampleLimit: 2,
+		Format:           FormatAuto,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +48,9 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got, want := file.BlocksByType["mergeset-block"], 2; got != want {
 		t.Fatalf("mergeset block count = %d, want %d", got, want)
 	}
+	if got, want := file.BlocksByType["mergeset-metaindex-row"], 1; got != want {
+		t.Fatalf("mergeset metaindex row count = %d, want %d", got, want)
+	}
 	if got, want := file.KeySamples, []string{"first:6161", "last:7a7a"}; !equalStrings(got, want) {
 		t.Fatalf("key samples = %v, want %v", got, want)
 	}
@@ -54,6 +62,27 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	}
 	if got, want := file.Extra["first_item_bytes"], "2"; got != want {
 		t.Fatalf("first item bytes = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_row_count"], "1"; got != want {
+		t.Fatalf("metaindex row count extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_block_headers"], "2"; got != want {
+		t.Fatalf("metaindex block headers extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_bytes"], "9"; got != want {
+		t.Fatalf("metaindex index bytes extra = %q, want %q", got, want)
+	}
+	if got, want := len(file.Blocks), 1; got != want {
+		t.Fatalf("block samples = %d, want %d", got, want)
+	}
+	if got, want := file.Blocks[0].Type, "mergeset-metaindex-row"; got != want {
+		t.Fatalf("block sample type = %q, want %q", got, want)
+	}
+	if got, want := file.Blocks[0].Key, "6161"; got != want {
+		t.Fatalf("block sample key = %q, want %q", got, want)
+	}
+	if got, want := file.Blocks[0].ValueCount, 2; got != want {
+		t.Fatalf("block sample value count = %d, want %d", got, want)
 	}
 	if file.SizeBytes == 0 {
 		t.Fatal("expected non-zero component size")
@@ -147,6 +176,41 @@ func TestAnalyzeMergesetItemsMismatchErrors(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetBadMetaindexNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "5_1_0000000000000001")
+	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
+		ItemsCount:  5,
+		BlocksCount: 1,
+		FirstItem:   "01",
+		LastItem:    "05",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partPath, mergesetMetaindexFile), []byte("not-zstd"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(report.Files), 1; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	file := report.Files[0]
+	if len(file.Notices) != 1 || !strings.Contains(file.Notices[0], "mergeset metaindex decode unavailable") {
+		t.Fatalf("notices = %v, want metaindex decode notice", file.Notices)
+	}
+	if _, ok := file.Extra["metaindex_row_count"]; ok {
+		t.Fatalf("unexpected metaindex row count extra after decode failure: %q", file.Extra["metaindex_row_count"])
+	}
+	if got := file.BlocksByType["mergeset-metaindex-row"]; got != 0 {
+		t.Fatalf("metaindex row block type count = %d, want 0", got)
+	}
+}
+
 func writeTestMergesetPart(path string, metadata mergesetPartMetadata) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
@@ -158,9 +222,32 @@ func writeTestMergesetPart(path string, metadata mergesetPartMetadata) error {
 	if err := os.WriteFile(filepath.Join(path, mergesetMetadataFile), data, 0o600); err != nil {
 		return err
 	}
+	indexData := []byte(mergesetIndexFile)
+	if err := os.WriteFile(filepath.Join(path, mergesetIndexFile), indexData, 0o600); err != nil {
+		return err
+	}
+	firstItem, err := decodeMergesetHexItem(metadata.FirstItem, "FirstItem")
+	if err != nil {
+		return err
+	}
+	if metadata.BlocksCount > uint64(^uint32(0)) {
+		return fmt.Errorf("test mergeset metadata BlocksCount too large: %d", metadata.BlocksCount)
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{
+		{
+			FirstItem:         firstItem,
+			BlockHeadersCount: uint32(metadata.BlocksCount),
+			IndexBlockOffset:  0,
+			IndexBlockSize:    uint32(len(indexData)),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetMetaindexFile), metaindex, 0o600); err != nil {
+		return err
+	}
 	for _, name := range []string{
-		mergesetMetaindexFile,
-		mergesetIndexFile,
 		mergesetItemsFile,
 		mergesetLensFile,
 	} {
@@ -169,4 +256,33 @@ func writeTestMergesetPart(path string, metadata mergesetPartMetadata) error {
 		}
 	}
 	return nil
+}
+
+func encodeTestMergesetMetaindexRows(rows []mergesetMetaindexRow) ([]byte, error) {
+	var data []byte
+	for _, row := range rows {
+		data = binary.AppendUvarint(data, uint64(len(row.FirstItem)))
+		data = append(data, row.FirstItem...)
+		data = appendTestBigEndianUint32(data, row.BlockHeadersCount)
+		data = appendTestBigEndianUint64(data, row.IndexBlockOffset)
+		data = appendTestBigEndianUint32(data, row.IndexBlockSize)
+	}
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	if err != nil {
+		return nil, err
+	}
+	defer encoder.Close()
+	return encoder.EncodeAll(data, nil), nil
+}
+
+func appendTestBigEndianUint32(dst []byte, value uint32) []byte {
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], value)
+	return append(dst, buf[:]...)
+}
+
+func appendTestBigEndianUint64(dst []byte, value uint64) []byte {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], value)
+	return append(dst, buf[:]...)
 }
