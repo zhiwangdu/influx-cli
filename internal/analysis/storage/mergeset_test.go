@@ -427,11 +427,38 @@ func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	if got, want := decode.CursorWindowCount, 1; got != want {
 		t.Fatalf("cursor window count = %d, want %d", got, want)
 	}
-	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+	if got, want := len(decode.CursorOutputSamples), 2; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
 	}
-	if got, want := decode.CursorOutputSamples[0].Key, "aa"; got != want {
-		t.Fatalf("cursor output sample key = %q, want %q", got, want)
+	if got, want := decode.CursorOutputSamples[0].Key, "0"; got != want {
+		t.Fatalf("first cursor output sample key = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].OptimizedValue, "aa"; got != want {
+		t.Fatalf("first cursor output sample value = %q, want %q", got, want)
+	}
+	if decode.CursorOutputSamples[0].Matches {
+		t.Fatal("expected first cursor output sample to be a non-exact table seek result")
+	}
+	if got, want := decode.CursorOutputSamples[1].Key, "aa"; got != want {
+		t.Fatalf("second cursor output sample key = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[1].OptimizedValue, "aa"; got != want {
+		t.Fatalf("second cursor output sample value = %q, want %q", got, want)
+	}
+	if !decode.CursorOutputSamples[1].Matches {
+		t.Fatal("expected second cursor output sample to match exactly")
+	}
+	if got, want := decode.TableSearchSeekCalls, 2; got != want {
+		t.Fatalf("table search seek calls = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
+		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchOutputValues, 2; got != want {
+		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchExactMisses, 1; got != want {
+		t.Fatalf("table search exact misses = %d, want %d", got, want)
 	}
 	if got, want := decode.Samples[0].Reason, "key_range_candidate"; got != want {
 		t.Fatalf("first sample reason = %q, want %q", got, want)
@@ -441,6 +468,66 @@ func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	}
 	if len(decode.Recommendations) == 0 {
 		t.Fatal("expected recommendations")
+	}
+}
+
+func TestAnalyzeMergesetQueryKeyBelowFirstItemSeeksFirstBlock(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "3_1_1847A3A45055EEF0")
+	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6164",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		QueryKeys:        []string{"0"},
+		KeySampleLimit:   2,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("expected decode path")
+	}
+	if got, want := decode.MatchedKeys, []string(nil); !equalStrings(got, want) {
+		t.Fatalf("matched keys = %v, want %v", got, want)
+	}
+	if got, want := decode.MissingKeys, []string{"0"}; !equalStrings(got, want) {
+		t.Fatalf("missing keys = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
+		t.Fatalf("optimized blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchSeekCalls, 1; got != want {
+		t.Fatalf("table search seek calls = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapCandidates, 1; got != want {
+		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchOutputValues, 1; got != want {
+		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchExactMisses, 1; got != want {
+		t.Fatalf("table search exact misses = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	sample := decode.CursorOutputSamples[0]
+	if got, want := sample.Key, "0"; got != want {
+		t.Fatalf("cursor output sample key = %q, want %q", got, want)
+	}
+	if got, want := sample.OptimizedValue, "aa"; got != want {
+		t.Fatalf("cursor output sample value = %q, want %q", got, want)
+	}
+	if sample.Matches {
+		t.Fatal("expected cursor output sample to be a non-exact table seek result")
 	}
 }
 
@@ -523,8 +610,41 @@ func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	if got, want := decode.CursorWindowCount, 2; got != want {
 		t.Fatalf("cursor window count = %d, want %d", got, want)
 	}
-	if got, want := len(decode.CursorOutputSamples), 2; got != want {
+	if got, want := len(decode.CursorOutputSamples), 3; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].Key, "0"; got != want {
+		t.Fatalf("first cursor output sample key = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].OptimizedValue, "aa"; got != want {
+		t.Fatalf("first cursor output sample value = %q, want %q", got, want)
+	}
+	if decode.CursorOutputSamples[0].Matches {
+		t.Fatal("expected first cursor output sample to be a non-exact table seek result")
+	}
+	if got, want := decode.CursorOutputSamples[1].Key, "aa"; got != want {
+		t.Fatalf("second cursor output sample key = %q, want %q", got, want)
+	}
+	if !decode.CursorOutputSamples[1].Matches {
+		t.Fatal("expected second cursor output sample to match exactly")
+	}
+	if got, want := decode.CursorOutputSamples[2].Key, "za"; got != want {
+		t.Fatalf("third cursor output sample key = %q, want %q", got, want)
+	}
+	if !decode.CursorOutputSamples[2].Matches {
+		t.Fatal("expected third cursor output sample to match exactly")
+	}
+	if got, want := decode.TableSearchSeekCalls, 6; got != want {
+		t.Fatalf("table search seek calls = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapCandidates, 5; got != want {
+		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchOutputValues, 3; got != want {
+		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchExactMisses, 1; got != want {
+		t.Fatalf("table search exact misses = %d, want %d", got, want)
 	}
 	if got, want := decode.Samples[0].Path, partPath2; got != want {
 		t.Fatalf("first sample path = %q, want %q", got, want)
@@ -603,6 +723,18 @@ func TestAnalyzeMergesetFileSetDuplicateKeyMergeWindow(t *testing.T) {
 	}
 	if got, want := decode.MergeWindowKeys, 1; got != want {
 		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchSeekCalls, 2; got != want {
+		t.Fatalf("table search seek calls = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
+		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchOutputValues, 1; got != want {
+		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchExactMisses, 0; got != want {
+		t.Fatalf("table search exact misses = %d, want %d", got, want)
 	}
 	if got, want := len(decode.CursorWindows), 1; got != want {
 		t.Fatalf("cursor windows = %d, want %d", got, want)

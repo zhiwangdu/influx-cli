@@ -648,7 +648,7 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d lens_offset=%d lens_size=%d: %v", i+1, header.LensBlockOffset, header.LensBlockSize, err))
 			continue
 		}
-		decoded, err := decodeMergesetBlockItems(header, itemsData, lensData, decoder, options.KeySampleLimit-len(summary.Samples), search.QuerySet)
+		decoded, err := decodeMergesetBlockItems(header, itemsData, lensData, decoder, options.KeySampleLimit-len(summary.Samples), search.QueryKeys)
 		if err != nil {
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d first_item=%s: %v", i+1, hex.EncodeToString(header.FirstItem), err))
 			continue
@@ -671,25 +671,30 @@ type mergesetDecodedBlockItems struct {
 	FirstItem   []byte
 	LastItem    []byte
 	Samples     [][]byte
-	QuerySet    map[string]struct{}
-	MatchedKeys map[string]struct{}
+	QueryKeys   []string
+	SeekResults map[string]mergesetSeekResult
 }
 
-func decodeMergesetBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, decoder *zstd.Decoder, sampleLimit int, querySet map[string]struct{}) (mergesetDecodedBlockItems, error) {
+type mergesetSeekResult struct {
+	Item    []byte
+	Matches bool
+}
+
+func decodeMergesetBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, decoder *zstd.Decoder, sampleLimit int, queryKeys []string) (mergesetDecodedBlockItems, error) {
 	if !bytes.HasPrefix(header.FirstItem, header.CommonPrefix) {
 		return mergesetDecodedBlockItems{}, fmt.Errorf("firstItem does not start with commonPrefix")
 	}
 	switch header.MarshalType {
 	case mergesetMarshalTypePlain:
-		return decodeMergesetPlainBlockItems(header, itemsData, lensData, sampleLimit, querySet)
+		return decodeMergesetPlainBlockItems(header, itemsData, lensData, sampleLimit, queryKeys)
 	case mergesetMarshalTypeZSTD:
-		return decodeMergesetZSTDBlockItems(header, itemsData, lensData, decoder, sampleLimit, querySet)
+		return decodeMergesetZSTDBlockItems(header, itemsData, lensData, decoder, sampleLimit, queryKeys)
 	default:
 		return mergesetDecodedBlockItems{}, fmt.Errorf("unknown marshalType=%d", header.MarshalType)
 	}
 }
 
-func decodeMergesetPlainBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, sampleLimit int, querySet map[string]struct{}) (mergesetDecodedBlockItems, error) {
+func decodeMergesetPlainBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, sampleLimit int, queryKeys []string) (mergesetDecodedBlockItems, error) {
 	itemsCount := int(header.ItemsCount)
 	expectedLensBytes := uint64(itemsCount-1) * 8
 	if uint64(len(lensData)) != expectedLensBytes {
@@ -703,7 +708,7 @@ func decodeMergesetPlainBlockItems(header mergesetBlockHeader, itemsData, lensDa
 		lensTail = lensTail[8:]
 	}
 
-	decoded := newMergesetDecodedBlockItems(header.FirstItem, sampleLimit, querySet)
+	decoded := newMergesetDecodedBlockItems(header.FirstItem, sampleLimit, queryKeys)
 	itemsTail := itemsData
 	totalBytes := len(header.FirstItem)
 	for i := 1; i < itemsCount; i++ {
@@ -730,7 +735,7 @@ func decodeMergesetPlainBlockItems(header mergesetBlockHeader, itemsData, lensDa
 	return decoded, nil
 }
 
-func decodeMergesetZSTDBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, decoder *zstd.Decoder, sampleLimit int, querySet map[string]struct{}) (mergesetDecodedBlockItems, error) {
+func decodeMergesetZSTDBlockItems(header mergesetBlockHeader, itemsData, lensData []byte, decoder *zstd.Decoder, sampleLimit int, queryKeys []string) (mergesetDecodedBlockItems, error) {
 	lensPayload, err := decoder.DecodeAll(lensData, nil)
 	if err != nil {
 		return mergesetDecodedBlockItems{}, fmt.Errorf("cannot decompress lensData: %w", err)
@@ -770,7 +775,7 @@ func decodeMergesetZSTDBlockItems(header mergesetBlockHeader, itemsData, lensDat
 		dataLen += len(header.CommonPrefix) + int(lengths[i+1])
 	}
 
-	decoded := newMergesetDecodedBlockItems(header.FirstItem, sampleLimit, querySet)
+	decoded := newMergesetDecodedBlockItems(header.FirstItem, sampleLimit, queryKeys)
 	itemsTail := itemsPayload
 	prevItemSuffix := header.FirstItem[len(header.CommonPrefix):]
 	for i := 1; i < int(header.ItemsCount); i++ {
@@ -804,15 +809,15 @@ func decodeMergesetZSTDBlockItems(header mergesetBlockHeader, itemsData, lensDat
 	return decoded, nil
 }
 
-func newMergesetDecodedBlockItems(firstItem []byte, sampleLimit int, querySet map[string]struct{}) mergesetDecodedBlockItems {
+func newMergesetDecodedBlockItems(firstItem []byte, sampleLimit int, queryKeys []string) mergesetDecodedBlockItems {
 	decoded := mergesetDecodedBlockItems{
 		Count:       1,
 		FirstItem:   append([]byte(nil), firstItem...),
 		LastItem:    append([]byte(nil), firstItem...),
-		QuerySet:    querySet,
-		MatchedKeys: map[string]struct{}{},
+		QueryKeys:   queryKeys,
+		SeekResults: map[string]mergesetSeekResult{},
 	}
-	decoded.observeQueryMatch(firstItem, querySet)
+	decoded.observeQuerySeek(firstItem)
 	if sampleLimit > 0 {
 		decoded.Samples = append(decoded.Samples, append([]byte(nil), firstItem...))
 	}
@@ -825,20 +830,29 @@ func (decoded *mergesetDecodedBlockItems) appendItem(item []byte, sampleLimit in
 	}
 	decoded.Count++
 	decoded.LastItem = append(decoded.LastItem[:0], item...)
-	decoded.observeQueryMatch(item, decoded.QuerySet)
+	decoded.observeQuerySeek(item)
 	if len(decoded.Samples) < sampleLimit {
 		decoded.Samples = append(decoded.Samples, append([]byte(nil), item...))
 	}
 	return nil
 }
 
-func (decoded *mergesetDecodedBlockItems) observeQueryMatch(item []byte, querySet map[string]struct{}) {
-	if len(querySet) == 0 {
+func (decoded *mergesetDecodedBlockItems) observeQuerySeek(item []byte) {
+	if len(decoded.QueryKeys) == 0 {
 		return
 	}
-	key := string(item)
-	if _, ok := querySet[key]; ok {
-		decoded.MatchedKeys[key] = struct{}{}
+	for _, key := range decoded.QueryKeys {
+		if _, ok := decoded.SeekResults[key]; ok {
+			continue
+		}
+		cmp := bytes.Compare(item, []byte(key))
+		if cmp < 0 {
+			continue
+		}
+		decoded.SeekResults[key] = mergesetSeekResult{
+			Item:    append([]byte(nil), item...),
+			Matches: cmp == 0,
+		}
 	}
 }
 
@@ -860,9 +874,9 @@ func parseMergesetVarUint64s(src []byte, count int) ([]uint64, []byte, error) {
 
 type mergesetSearchPlan struct {
 	QueryKeys       []string
-	QuerySet        map[string]struct{}
 	CandidateBlocks map[int]struct{}
 	MatchedKeys     map[string]struct{}
+	SeekResults     map[string]mergesetSeekResult
 	SampleLimit     int
 	DecodePath      *DecodePathSummary
 }
@@ -873,18 +887,21 @@ func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options, first
 		return plan
 	}
 	plan.QueryKeys = append([]string(nil), options.QueryKeys...)
-	plan.QuerySet = queryKeySet(options.QueryKeys)
 	plan.CandidateBlocks = map[int]struct{}{}
 	plan.MatchedKeys = map[string]struct{}{}
+	plan.SeekResults = map[string]mergesetSeekResult{}
 	plan.SampleLimit = options.BlockSampleLimit
 	for _, key := range options.QueryKeys {
 		queryItem := []byte(key)
-		if bytes.Compare(queryItem, firstItem) < 0 || bytes.Compare(queryItem, lastItem) > 0 {
+		if bytes.Compare(queryItem, lastItem) > 0 {
 			continue
 		}
-		idx := sort.Search(len(headers), func(i int) bool {
-			return bytes.Compare(headers[i].FirstItem, queryItem) > 0
-		}) - 1
+		idx := 0
+		if bytes.Compare(queryItem, firstItem) > 0 {
+			idx = sort.Search(len(headers), func(i int) bool {
+				return bytes.Compare(headers[i].FirstItem, queryItem) > 0
+			}) - 1
+		}
 		if idx >= 0 {
 			plan.CandidateBlocks[idx] = struct{}{}
 		}
@@ -944,15 +961,31 @@ func (p *mergesetSearchPlan) ObserveDecodedBlock(index int, decoded mergesetDeco
 		return
 	}
 	for _, key := range p.QueryKeys {
-		if _, ok := decoded.MatchedKeys[key]; !ok {
+		result, ok := decoded.SeekResults[key]
+		if !ok {
+			continue
+		}
+		if _, exists := p.SeekResults[key]; !exists {
+			p.SeekResults[key] = result
+		}
+		if !result.Matches {
+			if len(p.DecodePath.CursorOutputSamples) < p.SampleLimit {
+				p.DecodePath.CursorOutputSamples = append(p.DecodePath.CursorOutputSamples, DecodePathCursorOutput{
+					Key:            key,
+					Type:           "mergeset-item",
+					OptimizedValue: string(result.Item),
+					Matches:        false,
+				})
+			}
 			continue
 		}
 		p.MatchedKeys[key] = struct{}{}
 		if len(p.DecodePath.CursorOutputSamples) < p.SampleLimit {
 			p.DecodePath.CursorOutputSamples = append(p.DecodePath.CursorOutputSamples, DecodePathCursorOutput{
-				Key:     key,
-				Type:    "mergeset-item",
-				Matches: true,
+				Key:            key,
+				Type:           "mergeset-item",
+				OptimizedValue: string(result.Item),
+				Matches:        true,
 			})
 		}
 	}
@@ -976,6 +1009,11 @@ func (p *mergesetSearchPlan) Finish(options Options) {
 	summary.BaselineOutputValues = len(p.QueryKeys)
 	summary.OptimizedOutputValues = len(summary.MatchedKeys)
 	summary.CursorWindowCount = summary.LocationBlocks
+	summary.TableSearchSeekCalls = len(p.QueryKeys)
+	summary.TableSearchHeapCandidates = len(p.SeekResults)
+	summary.TableSearchOutputValues = len(p.SeekResults)
+	summary.TableSearchExactMisses = len(summary.MissingKeys)
+	summary.mergesetSeekResults = p.SeekResults
 	if summary.OptimizedDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.BaselineDecodeBlocks) / float64(summary.OptimizedDecodeBlocks)
 	}

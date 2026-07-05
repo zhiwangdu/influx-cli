@@ -1,6 +1,9 @@
 package storage
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+)
 
 func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *DecodePathSummary {
 	if len(options.QueryKeys) == 0 {
@@ -15,6 +18,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	}
 	matchedKeys := map[string]struct{}{}
 	matchedKeyFiles := map[string][]string{}
+	tableSeekResults := map[string]mergesetSeekResult{}
 	included := false
 	for _, file := range files {
 		if file.Format != FormatMergeset || file.DecodePath == nil {
@@ -25,6 +29,12 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 		for _, key := range file.DecodePath.MatchedKeys {
 			matchedKeys[key] = struct{}{}
 			matchedKeyFiles[key] = append(matchedKeyFiles[key], file.Path)
+		}
+		for key, result := range file.DecodePath.mergesetSeekResults {
+			current, ok := tableSeekResults[key]
+			if !ok || bytes.Compare(result.Item, current.Item) < 0 {
+				tableSeekResults[key] = result
+			}
 		}
 	}
 	if !included {
@@ -41,7 +51,10 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	summary.OptimizedOutputValues = countMergesetMatchedItemFiles(matchedKeyFiles)
 	summary.DeduplicatedOutputValues = len(summary.MatchedKeys)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
+	summary.TableSearchOutputValues = len(tableSeekResults)
+	summary.TableSearchExactMisses = len(summary.MissingKeys)
 	populateMergesetFileSetCursorWindows(summary, matchedKeyFiles, options)
+	populateMergesetFileSetCursorOutputSamples(summary, tableSeekResults, options)
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
@@ -62,6 +75,8 @@ func addMergesetFileSearchSummary(dst, src *DecodePathSummary, path string, samp
 	dst.LocationBlocks += src.LocationBlocks
 	dst.FilteredDecodeBlocks += src.FilteredDecodeBlocks
 	dst.SkippedByKeyBlocks += src.SkippedByKeyBlocks
+	dst.TableSearchSeekCalls += src.TableSearchSeekCalls
+	dst.TableSearchHeapCandidates += src.TableSearchHeapCandidates
 	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
 	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
 	appendMergesetFileSearchSamples(dst, src, path, sampleLimit)
@@ -92,6 +107,27 @@ func populateMergesetFileSetCursorWindows(summary *DecodePathSummary, matchedKey
 	}
 }
 
+func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tableSeekResults map[string]mergesetSeekResult, options Options) {
+	if options.BlockSampleLimit <= 0 {
+		return
+	}
+	for _, key := range options.QueryKeys {
+		if len(summary.CursorOutputSamples) >= options.BlockSampleLimit {
+			return
+		}
+		result, ok := tableSeekResults[key]
+		if !ok {
+			continue
+		}
+		summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
+			Key:            key,
+			Type:           "mergeset-table-search-item",
+			OptimizedValue: string(result.Item),
+			Matches:        result.Matches,
+		})
+	}
+}
+
 func appendMergesetFileSearchSamples(dst, src *DecodePathSummary, path string, sampleLimit int) {
 	if sampleLimit <= 0 {
 		return
@@ -104,12 +140,6 @@ func appendMergesetFileSearchSamples(dst, src *DecodePathSummary, path string, s
 			sample.Path = path
 		}
 		dst.Samples = append(dst.Samples, sample)
-	}
-	for _, sample := range src.CursorOutputSamples {
-		if len(dst.CursorOutputSamples) >= sampleLimit {
-			break
-		}
-		dst.CursorOutputSamples = append(dst.CursorOutputSamples, sample)
 	}
 }
 
@@ -127,6 +157,9 @@ func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Op
 	}
 	if summary.DuplicateOutputValues > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("merge/dedup %d duplicate item candidate(s) across mergeset part(s)", summary.DuplicateOutputValues))
+	}
+	if summary.TableSearchHeapCandidates > summary.TableSearchOutputValues {
+		recommendations = append(recommendations, fmt.Sprintf("table search heap compares %d part candidate item(s) for %d table output seek(s)", summary.TableSearchHeapCandidates, summary.TableSearchOutputValues))
 	}
 	if summary.SavedDecodeBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("sorted item lookup skips %d mergeset block(s) across analyzed part(s)", summary.SavedDecodeBlocks))

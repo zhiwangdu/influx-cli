@@ -533,7 +533,7 @@ InfluxDB WAL analyzer 覆盖 TSM1 WAL segment 的本地 entry 解码：entry typ
 
 openGemini TSSP analyzer 先覆盖 attached 文件 trailer/meta-index/chunk metadata，以及 detached `segment.idx` meta-index sidecar。detached sidecar 只做本地结构解析、CRC 校验和 query-range candidate filtering；完整 detached data/chunk reader 执行路径仍属于后续 Phase 5。
 
-openGemini mergeset analyzer 先覆盖 part directory metadata、metaindex row summary、index block-header summary、item payload summary 和 file-set item search/merge-dedup simulation：解析 `items_blocks_suffix` part 名、`metadata.json`、`metaindex.bin` zstd row、`index.bin` zstd block header、以及 `items.bin`/`lens.bin` plain/zstd item payload，校验 header range、decoded item count、first/last item 和排序。`--storage-format mergeset --key <item>` 可模拟 sorted block candidate lookup、exact item match、跨已分析 part 的 file-set 汇总，以及重复 item candidate 的 merge/dedup window。storage-engine-backed table cursor simulation 仍属于后续 Phase 5。
+openGemini mergeset analyzer 先覆盖 part directory metadata、metaindex row summary、index block-header summary、item payload summary、file-set item search/TableSearch seek/heap/merge-dedup simulation：解析 `items_blocks_suffix` part 名、`metadata.json`、`metaindex.bin` zstd row、`index.bin` zstd block header、以及 `items.bin`/`lens.bin` plain/zstd item payload，校验 header range、decoded item count、first/last item 和排序。`--storage-format mergeset --key <item>` 可模拟 sorted block candidate lookup、exact item match、跨已分析 part 的 file-set 汇总、TableSearch seek/heap candidate accounting，以及重复 item candidate 的 merge/dedup window。完整 storage-engine-backed table cursor execution 仍属于后续 Phase 5。
 
 ## 12. Plugin System
 

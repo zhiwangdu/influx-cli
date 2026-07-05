@@ -233,6 +233,10 @@ type DecodePathSummary struct {
 	OptimizedCursorOutputPoints  int                       `json:"optimized_cursor_output_points,omitempty"`
 	BaselineCursorReadCalls      int                       `json:"baseline_cursor_read_calls,omitempty"`
 	OptimizedCursorReadCalls     int                       `json:"optimized_cursor_read_calls,omitempty"`
+	TableSearchSeekCalls         int                       `json:"table_search_seek_calls,omitempty"`
+	TableSearchHeapCandidates    int                       `json:"table_search_heap_candidates,omitempty"`
+	TableSearchOutputValues      int                       `json:"table_search_output_values,omitempty"`
+	TableSearchExactMisses       int                       `json:"table_search_exact_misses,omitempty"`
 	BaselineReadAtCalls          int                       `json:"baseline_read_at_calls,omitempty"`
 	OptimizedReadAtCalls         int                       `json:"optimized_read_at_calls,omitempty"`
 	SavedReadAtCalls             int                       `json:"saved_read_at_calls,omitempty"`
@@ -257,6 +261,7 @@ type DecodePathSummary struct {
 	CursorWindows                []DecodePathCursorWindow  `json:"cursor_windows,omitempty"`
 	CursorOutputSamples          []DecodePathCursorOutput  `json:"cursor_output_samples,omitempty"`
 	Recommendations              []string                  `json:"recommendations,omitempty"`
+	mergesetSeekResults          map[string]mergesetSeekResult
 }
 
 type DecodePathBlockDecision struct {
