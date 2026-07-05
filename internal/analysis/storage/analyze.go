@@ -185,6 +185,10 @@ func expandPaths(ctx context.Context, paths []string, options Options) ([]string
 			files = append(files, path)
 			continue
 		}
+		if isStorageCandidate(path, options.Format) {
+			files = append(files, path)
+			continue
+		}
 
 		if options.Recursive {
 			err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
@@ -195,6 +199,10 @@ func expandPaths(ctx context.Context, paths []string, options Options) ([]string
 					return err
 				}
 				if d.IsDir() {
+					if p != path && isStorageCandidate(p, options.Format) {
+						files = append(files, p)
+						return filepath.SkipDir
+					}
 					return nil
 				}
 				if isStorageCandidate(p, options.Format) {
@@ -213,9 +221,6 @@ func expandPaths(ctx context.Context, paths []string, options Options) ([]string
 			return nil, err
 		}
 		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
 			p := filepath.Join(path, entry.Name())
 			if isStorageCandidate(p, options.Format) {
 				files = append(files, p)
@@ -252,6 +257,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeTSI(path, info, options)
 	case FormatTSILog:
 		return analyzeTSILog(path, info, options)
+	case FormatMergeset:
+		return analyzeMergesetPart(path, info, options)
 	default:
 		return FileReport{}, fmt.Errorf("unsupported storage format %q", format)
 	}
@@ -263,6 +270,9 @@ func detectFormat(path string) (Format, error) {
 	}
 	if isTSILogPath(path) {
 		return FormatTSILog, nil
+	}
+	if isMergesetPartPath(path) {
+		return FormatMergeset, nil
 	}
 
 	f, err := os.Open(path)
@@ -309,8 +319,10 @@ func isStorageCandidate(path string, format Format) bool {
 		return strings.HasSuffix(lower, ".tsi")
 	case FormatTSILog:
 		return isTSILogPath(path)
+	case FormatMergeset:
+		return isMergesetPartPath(path)
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path)
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isMergesetPartPath(path)
 	}
 }
 
