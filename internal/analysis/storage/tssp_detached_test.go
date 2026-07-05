@@ -277,6 +277,9 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
 		t.Fatal(err)
 	}
+	if err := writeTestTSSPDetachedData(filepath.Join(dir, tsspDetachedDataFileName), 2200); err != nil {
+		t.Fatal(err)
+	}
 	queryRange, err := NewTimeRange(210, 220)
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +299,15 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	}
 	if got, want := file.Extra["query_overlap_precision"], "detached-chunk-meta"; got != want {
 		t.Fatalf("query overlap precision = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_file_checked"], "true"; got != want {
+		t.Fatalf("data file checked = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_range_count"], "4"; got != want {
+		t.Fatalf("data range count = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_invalid_ranges"], "0"; got != want {
+		t.Fatalf("data invalid ranges = %q, want %q", got, want)
 	}
 	if got, want := file.BlockCount, 2; got != want {
 		t.Fatalf("block count = %d, want %d", got, want)
@@ -355,6 +367,9 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if got, want := decode.SavedReadAtCalls, 2; got != want {
 		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
 	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
 	if got, want := decode.LocationBlocksByType["detached-chunk-meta"], 2; got != want {
 		t.Fatalf("location detached chunk metadata blocks = %d, want %d", got, want)
 	}
@@ -382,6 +397,9 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if got, want := decode.Samples[1].Reason, "segment_overlap"; got != want {
 		t.Fatalf("second sample reason = %q, want %q", got, want)
 	}
+	if !decode.Samples[1].ValueOutputAvailable {
+		t.Fatal("expected second sample value output to be available")
+	}
 	if got, want := len(decode.Samples[1].OptimizedReadAtRanges), 2; got != want {
 		t.Fatalf("second sample ReadAt ranges = %d, want %d", got, want)
 	}
@@ -399,6 +417,60 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "detached TSSP data ReadAt") {
 		t.Fatalf("recommendations = %v, want detached data ReadAt recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPDetachedMetaIndexBadDataRangeNotice(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 10, minTime: 100, maxTime: 150, offset: 1000, size: 40},
+		{sid: 11, minTime: 200, maxTime: 260, offset: 2000, size: 80},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedData(filepath.Join(dir, tsspDetachedDataFileName), 2080); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(210, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_file_checked"], "true"; got != want {
+		t.Fatalf("data file checked = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_invalid_ranges"], "1"; got != want {
+		t.Fatalf("data invalid ranges = %q, want %q", got, want)
+	}
+	if !containsString(report.Notices, "invalid column segment range") {
+		t.Fatalf("notices = %v, want invalid data range notice", report.Notices)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 1; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[1].Reason, "segment_overlap_data_range_unavailable"; got != want {
+		t.Fatalf("second sample reason = %q, want %q", got, want)
+	}
+	if decode.Samples[1].ValueOutputAvailable {
+		t.Fatal("expected second sample value output to be unavailable")
 	}
 }
 
@@ -598,4 +670,14 @@ func writeTestTSSPDetachedChunkMeta(path string, chunks []testTSSPChunkSpec) ([]
 		})
 	}
 	return metaIndexes, os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPDetachedData(path string, size int) error {
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+	for buf.Len() < size {
+		buf.WriteByte(0)
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o600)
 }

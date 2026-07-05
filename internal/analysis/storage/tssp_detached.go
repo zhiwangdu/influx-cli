@@ -14,6 +14,7 @@ import (
 const (
 	tsspDetachedMetaIndexFileName   = "segment.idx"
 	tsspDetachedChunkMetaFileName   = "segment.meta"
+	tsspDetachedDataFileName        = "segment.bin"
 	tsspDetachedMetaIndexHeaderSize = tsspHeaderSize
 	// openGemini MetaIndex.marshalDetached stores id, minTime, maxTime,
 	// offset, and size; Count is only present in attached meta-index records.
@@ -95,11 +96,33 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 		report.Extra["chunk_meta_expanded"] = "true"
 		report.Extra["chunk_meta_file"] = tsspDetachedChunkMetaFileName
 		report.Extra["chunk_meta_decoded"] = fmt.Sprint(len(chunkMetas))
+		dataValidation, checked, err := validateTSSPDetachedDataFile(filepath.Dir(path), chunkMetas)
+		report.Extra["data_file_checked"] = fmt.Sprint(checked)
+		if checked {
+			report.Extra["data_file"] = tsspDetachedDataFileName
+			if dataValidation != nil {
+				report.Extra["data_file_size"] = fmt.Sprint(dataValidation.FileSize)
+			}
+		}
+		if err != nil {
+			report.Notices = append(report.Notices, fmt.Sprintf("detached data file validation unavailable: %v", err))
+			dataValidation = nil
+		} else if dataValidation != nil {
+			report.Extra["data_range_count"] = fmt.Sprint(dataValidation.RangeCount)
+			report.Extra["data_invalid_ranges"] = fmt.Sprint(dataValidation.InvalidRanges)
+			if dataValidation.InvalidRanges > 0 || dataValidation.InvalidChunks > 0 {
+				report.Notices = append(report.Notices, fmt.Sprintf(
+					"detached data file has %d invalid chunk range(s) and %d invalid column segment range(s)",
+					dataValidation.InvalidChunks,
+					dataValidation.InvalidRanges,
+				))
+			}
+		}
 		if options.QueryRange.Set {
 			report.Extra["query_overlap_precision"] = "detached-chunk-meta"
 		}
 		populateTSSPDetachedChunkReports(&report, chunkMetas, options)
-		report.DecodePath = buildTSSPDetachedChunkDecodePathSummary(metaIndexes, chunkMetas, options)
+		report.DecodePath = buildTSSPDetachedChunkDecodePathSummary(metaIndexes, chunkMetas, options, dataValidation)
 	} else {
 		populateTSSPDetachedMetaIndexReports(&report, metaIndexes, options)
 		report.DecodePath = buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes, options)
@@ -280,7 +303,79 @@ func populateTSSPDetachedChunkReports(report *FileReport, chunks []tsspChunkMeta
 	}
 }
 
-func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options) *DecodePathSummary {
+type tsspDetachedDataValidation struct {
+	Checked       bool
+	FileSize      int64
+	RangeCount    int
+	InvalidChunks int
+	InvalidRanges int
+	chunkValid    map[uint64]bool
+}
+
+func validateTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta) (*tsspDetachedDataValidation, bool, error) {
+	path := filepath.Join(dir, tsspDetachedDataFileName)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, true, err
+	}
+	validation := &tsspDetachedDataValidation{
+		Checked:    true,
+		FileSize:   info.Size(),
+		chunkValid: make(map[uint64]bool, len(chunks)),
+	}
+	if info.Size() < tsspHeaderSize {
+		return validation, true, fmt.Errorf("file too small for detached TSSP data header")
+	}
+	header := make([]byte, tsspHeaderSize)
+	if _, err := io.ReadFull(f, header); err != nil {
+		return validation, true, err
+	}
+	if string(header[:len(tsspMagic)]) != tsspMagic {
+		return validation, true, fmt.Errorf("invalid detached TSSP data magic")
+	}
+	for _, chunk := range chunks {
+		valid := true
+		if !tsspRangeInFile(chunk.Offset, int64(chunk.Size), info.Size()) {
+			validation.InvalidChunks++
+			valid = false
+		}
+		for _, column := range chunk.Columns {
+			for _, segment := range column.Segments {
+				validation.RangeCount++
+				if !tsspRangeInFile(segment.Offset, int64(segment.Size), info.Size()) {
+					validation.InvalidRanges++
+					valid = false
+				}
+			}
+		}
+		validation.chunkValid[chunk.SID] = valid
+	}
+	return validation, true, nil
+}
+
+func tsspRangeInFile(offset, size, fileSize int64) bool {
+	if offset < tsspHeaderSize || size < 0 || offset > fileSize {
+		return false
+	}
+	return size <= fileSize-offset
+}
+
+func (v *tsspDetachedDataValidation) chunkDataAvailable(chunk tsspChunkMeta) bool {
+	if v == nil || !v.Checked {
+		return false
+	}
+	return v.chunkValid[chunk.SID]
+}
+
+func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkMeta, options Options, dataValidation *tsspDetachedDataValidation) *DecodePathSummary {
 	if !options.QueryRange.Set {
 		return nil
 	}
@@ -331,6 +426,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		baselineBytes := tsspChunkSegmentBytes(chunk)
 		baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0)
 		optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples)
+		valueOutputAvailable := false
 
 		summary.LocationBlocks++
 		summary.LocationBlocksByType["detached-chunk-meta"]++
@@ -347,13 +443,19 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 			summary.OptimizedReadSegments += outputSegments
 			summary.OptimizedReadAtCalls += optimizedReadAtCalls
 			summary.DecodeBlocksByType["detached-chunk-meta"]++
+			if dataValidation != nil && dataValidation.Checked {
+				valueOutputAvailable = dataValidation.chunkDataAvailable(chunk)
+				if !valueOutputAvailable {
+					summary.ValueOutputUnavailableBlocks++
+				}
+			}
 		} else if maxTime < options.QueryRange.Min {
 			summary.SkippedBeforeSeekBlocks++
 		} else {
 			summary.SkippedAfterRangeBlocks++
 		}
 		appendTSSPDetachedChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
-			baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, options.BlockSampleLimit)
+			baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, dataValidation != nil && dataValidation.Checked, valueOutputAvailable, options.BlockSampleLimit)
 	}
 
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -372,7 +474,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 }
 
 func appendTSSPDetachedChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32,
-	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, sampleLimit int) {
+	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, sampleLimit int) {
 	if sampleLimit <= 0 || len(summary.Samples) >= sampleLimit {
 		return
 	}
@@ -380,6 +482,9 @@ func appendTSSPDetachedChunkDecodeSample(summary *DecodePathSummary, chunk tsspC
 	decoded := outputSegments > 0
 	if decoded {
 		reason = "segment_overlap"
+		if valueOutputChecked && !valueOutputAvailable {
+			reason = "segment_overlap_data_range_unavailable"
+		}
 	}
 	summary.Samples = append(summary.Samples, DecodePathBlockDecision{
 		Key:                   fmt.Sprintf("meta-index-id:%d", chunk.SID),
@@ -390,6 +495,7 @@ func appendTSSPDetachedChunkDecodeSample(summary *DecodePathSummary, chunk tsspC
 		SizeBytes:             sizeBytes,
 		SegmentCount:          segmentCount,
 		OutputSegments:        outputSegments,
+		ValueOutputAvailable:  valueOutputChecked && valueOutputAvailable,
 		BaselineReadAtCalls:   baselineReadAtCalls,
 		OptimizedReadAtCalls:  optimizedReadAtCalls,
 		LocationCandidate:     true,

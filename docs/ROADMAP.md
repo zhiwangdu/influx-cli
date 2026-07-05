@@ -22,7 +22,7 @@
 | `internal/render` | table 和 sparkline renderer |
 | `internal/app`、`internal/repl` | session、statusline、meta command 和 REPL loop |
 | `internal/history` | REPL query history 本地持久化和检索 |
-| `internal/analysis/storage` | Phase 5 初始 storage file analyzer：TSM/WAL/TSSP/TSI/mergeset 文件元数据、key/series 样例、block/meta-index/entry 统计、TSI index/log series-id set cardinality、TSM tombstone range/impact、TSM/WAL decode path estimate、TSSP chunk metadata、detached TSSP meta-index sidecar/chunk metadata batch planning/`segment.meta` expansion/data ReadAt planning、mergeset metaindex/index block-header/item payload summary、file-set item search、TableSearch seek/heap simulation 和 duplicate item merge/dedup summary、query range overlap |
+| `internal/analysis/storage` | Phase 5 初始 storage file analyzer：TSM/WAL/TSSP/TSI/mergeset 文件元数据、key/series 样例、block/meta-index/entry 统计、TSI index/log series-id set cardinality、TSM tombstone range/impact、TSM/WAL decode path estimate、TSSP chunk metadata、detached TSSP meta-index sidecar/chunk metadata batch planning/`segment.meta` expansion/data ReadAt planning/`segment.bin` range validation、mergeset metaindex/index block-header/item payload summary、file-set item search、TableSearch seek/heap simulation 和 duplicate item merge/dedup summary、query range overlap |
 | `docs/PRODUCT_DESIGN.md` | 产品设计书 |
 | `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
@@ -35,7 +35,7 @@ Phase 5 已开始一个窄切面的本地文件分析命令：
 influx-cli storage analyze <file-or-dir>...
 ```
 
-当前覆盖 InfluxDB TSM attached file metadata、WAL write/delete/delete-range entry metadata、tombstone range/impact summary、基于 query range/key 的 TSM/WAL decode path estimate、per-file 和 FileStore-level ascending/descending cursor window/merge window simulation、优化前后 block/entry/byte/value decode path estimate、decoded timestamp output/dedup estimate、TSM value output comparison、local TSM KeyCursor-style execution stats/output samples、TSM FileStore.Cost-style file/block/byte estimate、TSI index file measurement/tag summary、TSI log entry summary、live/tombstone series-id set cardinality 和 measurement/tag predicate inspection，以及 openGemini attached TSSP trailer/meta-index metadata、none/snappy/LZ4/self-compressed chunk metadata、per-file 和 file-set series-id filtered segment-level decode path estimate、TSSP ContainsValue/MetaIndex-style candidate cost estimate、ascending/descending TSSP LocationCursor-style segment window samples、TSSP ReadAt call estimate、sampled optimized column-segment read ranges、detached `segment.idx` meta-index CRC validation、query-range candidate filtering、detached chunk metadata batch planning、可选 sibling `segment.meta` expansion、detached segment-level data ReadAt planning 和 mergeset part metadata/metaindex/index block-header/item payload summary、file-set item search simulation、TableSearch seek/heap simulation、duplicate item merge/dedup summary。完整 storage-engine-backed cursor execution 仍属于后续 Phase 5 工作。
+当前覆盖 InfluxDB TSM attached file metadata、WAL write/delete/delete-range entry metadata、tombstone range/impact summary、基于 query range/key 的 TSM/WAL decode path estimate、per-file 和 FileStore-level ascending/descending cursor window/merge window simulation、优化前后 block/entry/byte/value decode path estimate、decoded timestamp output/dedup estimate、TSM value output comparison、local TSM KeyCursor-style execution stats/output samples、TSM FileStore.Cost-style file/block/byte estimate、TSI index file measurement/tag summary、TSI log entry summary、live/tombstone series-id set cardinality 和 measurement/tag predicate inspection，以及 openGemini attached TSSP trailer/meta-index metadata、none/snappy/LZ4/self-compressed chunk metadata、per-file 和 file-set series-id filtered segment-level decode path estimate、TSSP ContainsValue/MetaIndex-style candidate cost estimate、ascending/descending TSSP LocationCursor-style segment window samples、TSSP ReadAt call estimate、sampled optimized column-segment read ranges、detached `segment.idx` meta-index CRC validation、query-range candidate filtering、detached chunk metadata batch planning、可选 sibling `segment.meta` expansion、detached segment-level data ReadAt planning、可选 sibling `segment.bin` header/range validation 和 mergeset part metadata/metaindex/index block-header/item payload summary、file-set item search simulation、TableSearch seek/heap simulation、duplicate item merge/dedup summary。完整 storage-engine-backed cursor execution 仍属于后续 Phase 5 工作。
 
 ## 3. Phase 0: CLI MVP Foundation
 
@@ -319,7 +319,7 @@ influx-cli ingest out-of-order --ratio 0.1
 | 类型 | 说明 |
 | --- | --- |
 | tssp | openGemini 文件元数据 |
-| tssp-metaindex | openGemini detached `segment.idx` meta-index sidecar、chunk metadata batch planning、sibling `segment.meta` expansion 和 segment-level data ReadAt planning |
+| tssp-metaindex | openGemini detached `segment.idx` meta-index sidecar、chunk metadata batch planning、sibling `segment.meta` expansion、segment-level data ReadAt planning 和 sibling `segment.bin` range validation |
 | mergeset | 已有 part metadata、metaindex row、index block-header、item payload summary、file-set item search simulation、TableSearch seek/heap simulation 和 duplicate item merge/dedup summary；后续补充完整 storage-engine-backed table cursor execution |
 | meta/store/sql topology | 集群拓扑和节点状态 |
 
