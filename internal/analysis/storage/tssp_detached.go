@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -699,6 +701,8 @@ func decodeTSSPIntegerFullValues(encoded []byte, rows int) ([]string, bool) {
 		return decodeTSSPIntegerFullConstDeltaValues(encoded[1:], rows)
 	case 2:
 		return decodeTSSPIntegerFullSimple8bValues(encoded[1:], rows)
+	case 3:
+		return decodeTSSPIntegerFullZSTDValues(encoded[1:], rows)
 	case 4:
 		return decodeTSSPIntegerFullUncompressedValues(encoded, rows)
 	default:
@@ -778,6 +782,34 @@ func decodeTSSPIntegerFullSimple8bValues(encoded []byte, rows int) ([]string, bo
 	for i, delta := range deltas {
 		value += decodeGeminiZigZagUint64(delta)
 		values[i+1] = strconv.FormatInt(value, 10)
+	}
+	return values, true
+}
+
+func decodeTSSPIntegerFullZSTDValues(encoded []byte, rows int) ([]string, bool) {
+	if rows < 0 || len(encoded) < 8 {
+		return nil, false
+	}
+	sourceLen := binary.BigEndian.Uint32(encoded[:4])
+	compressedLen := binary.BigEndian.Uint32(encoded[4:8])
+	encoded = encoded[8:]
+	if sourceLen%8 != 0 || uint64(sourceLen/8) != uint64(rows) || uint64(compressedLen) > uint64(len(encoded)) {
+		return nil, false
+	}
+	sourceLenInt := int(sourceLen)
+	compressedLenInt := int(compressedLen)
+	decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return nil, false
+	}
+	defer decoder.Close()
+	raw, err := decoder.DecodeAll(encoded[:compressedLenInt], make([]byte, 0, sourceLenInt))
+	if err != nil || len(raw) != sourceLenInt {
+		return nil, false
+	}
+	values := make([]string, 0, rows)
+	for offset := 0; offset < len(raw); offset += 8 {
+		values = append(values, strconv.FormatInt(int64(binary.LittleEndian.Uint64(raw[offset:offset+8])), 10))
 	}
 	return values, true
 }

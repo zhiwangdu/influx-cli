@@ -644,6 +644,39 @@ func TestInspectTSSPDataBlockPayloadIntegerFullSimple8b(t *testing.T) {
 	}
 }
 
+func TestInspectTSSPDataBlockPayloadIntegerFullZSTD(t *testing.T) {
+	raw := testTSSPIntegerRawBytes([]int64{10, 15, 22})
+	compressed, err := testTSSPZSTDCompress(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload bytes.Buffer
+	payload.WriteByte(32) // openGemini encoding.BlockIntegerFull.
+	writeUint32(&payload, 3)
+	payload.WriteByte(48) // openGemini encoding intCompressZSTD << 4.
+	writeUint32(&payload, uint32(len(raw)))
+	writeUint32(&payload, uint32(len(compressed)))
+	payload.Write(compressed)
+
+	info, ok, reason := inspectTSSPDataBlockPayload(payload.Bytes())
+	if !ok {
+		t.Fatalf("inspect TSSP data block payload failed: %s", reason)
+	}
+	if got, want := info.Type, "integer-full"; got != want {
+		t.Fatalf("type = %q, want %q", got, want)
+	}
+	if got, want := info.Rows, 3; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	if !info.RowsKnown || !info.ValueKnown || info.ValueNull {
+		t.Fatalf("known/null flags rows=%v value=%v null=%v, want true/true/false", info.RowsKnown, info.ValueKnown, info.ValueNull)
+	}
+	if got, want := info.Values, []string{"10", "15", "22"}; !equalStrings(got, want) {
+		t.Fatalf("values = %v, want %v", got, want)
+	}
+}
+
 func TestInspectTSSPDataBlockPayloadBooleanFullBitpack(t *testing.T) {
 	var payload bytes.Buffer
 	payload.WriteByte(33) // openGemini encoding.BlockBooleanFull.
