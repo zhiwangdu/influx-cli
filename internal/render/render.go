@@ -3,16 +3,16 @@ package render
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
+	renderformat "github.com/zhiwangdu/influx-cli/internal/format"
 	"github.com/zhiwangdu/influx-cli/internal/result"
 )
 
 const (
-	FormatAuto      = "auto"
-	FormatTable     = "table"
-	FormatSparkline = "sparkline"
-	FormatJSON      = "json"
+	FormatAuto      = renderformat.Auto
+	FormatTable     = renderformat.Table
+	FormatSparkline = renderformat.Sparkline
+	FormatJSON      = renderformat.JSON
 )
 
 type Options struct {
@@ -52,14 +52,5 @@ func Render(res result.Result, options Options) (string, string, error) {
 }
 
 func NormalizeFormat(format string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(format))
-	if normalized == "" {
-		return FormatTable, nil
-	}
-	switch normalized {
-	case FormatAuto, FormatTable, FormatSparkline, FormatJSON:
-		return normalized, nil
-	default:
-		return "", fmt.Errorf("unknown render format %q", format)
-	}
+	return renderformat.Normalize(format)
 }

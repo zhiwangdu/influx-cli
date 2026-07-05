@@ -53,7 +53,7 @@ func runWithReader(ctx context.Context, executor *app.Executor, reader lineReade
 	var buffer statementBuffer
 	for {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil
 		}
 		prompt := executor.Session.Prompt()
 		if buffer.Active() {
@@ -119,6 +119,9 @@ func runWithReader(ctx context.Context, executor *app.Executor, reader lineReade
 
 		res, err := executor.Execute(ctx, statement)
 		if err != nil {
+			if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				return nil
+			}
 			fmt.Fprintln(out, "error:", err)
 			fmt.Fprintln(out, render.RenderStatusLine(executor.Session.StatusLine(), options.Render))
 			continue

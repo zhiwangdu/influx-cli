@@ -220,6 +220,60 @@ func TestRunDoesNotExecutePendingQueryAtEOF(t *testing.T) {
 	}
 }
 
+func TestRunReturnsNilWhenContextIsCanceledBeforeRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		&fakeAdapter{},
+	)
+
+	if err := Run(ctx, executor, strings.NewReader(":q\n"), &bytes.Buffer{}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunReturnsNilWhenContextIsCanceledDuringQuery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	fake := &fakeAdapter{
+		queryHook: cancel,
+	}
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		fake,
+	)
+	input := strings.NewReader("SELECT mean(value) FROM cpu\n")
+	var out bytes.Buffer
+
+	if err := Run(ctx, executor, input, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "context canceled") {
+		t.Fatalf("unexpected context canceled output:\n%s", out.String())
+	}
+}
+
+func TestRunReturnsNilWhenContextDeadlineExpiresDuringQuery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	fake := &fakeAdapter{
+		waitForContextDone: true,
+	}
+	executor := app.NewExecutor(
+		app.NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"}),
+		fake,
+	)
+	input := strings.NewReader("SELECT mean(value) FROM cpu\n")
+	var out bytes.Buffer
+
+	if err := Run(ctx, executor, input, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "context deadline exceeded") {
+		t.Fatalf("unexpected context deadline output:\n%s", out.String())
+	}
+}
+
 func TestRunSearchesHistoryByFilter(t *testing.T) {
 	store := history.NewStore(filepath.Join(t.TempDir(), "history.jsonl"), history.Options{})
 	if err := store.Append(history.Entry{Query: "SELECT mean(value) FROM cpu"}); err != nil {
@@ -431,8 +485,10 @@ func TestRunWarnsWhenLineHistoryLoadFails(t *testing.T) {
 }
 
 type fakeAdapter struct {
-	queries  []query.Query
-	queryErr error
+	queries            []query.Query
+	queryHook          func()
+	waitForContextDone bool
+	queryErr           error
 }
 
 func (*fakeAdapter) Name() string {
@@ -445,6 +501,15 @@ func (*fakeAdapter) Ping(ctx context.Context) error {
 
 func (f *fakeAdapter) Query(ctx context.Context, q query.Query) (result.Result, error) {
 	f.queries = append(f.queries, q)
+	if f.queryHook != nil {
+		f.queryHook()
+	}
+	if f.waitForContextDone {
+		<-ctx.Done()
+	}
+	if err := ctx.Err(); err != nil {
+		return result.Result{}, err
+	}
 	if f.queryErr != nil {
 		return result.Result{}, f.queryErr
 	}

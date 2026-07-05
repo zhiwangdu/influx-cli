@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhiwangdu/influx-cli/internal/render"
+	"github.com/zhiwangdu/influx-cli/internal/format"
 	"gopkg.in/yaml.v3"
 )
 
@@ -150,7 +150,7 @@ func (e Effective) Validate() error {
 	if e.Render == "" {
 		return errors.New("render format is required")
 	}
-	if _, err := render.NormalizeFormat(e.Render); err != nil {
+	if _, err := format.Normalize(e.Render); err != nil {
 		return err
 	}
 	return nil
