@@ -42,6 +42,7 @@ type tsspTrailer struct {
 	BloomK             uint64
 	TimeStoreFlag      uint8
 	ChunkMetaCompress  uint8
+	ChunkMetaHeader    []string
 	MeasurementName    string
 }
 
@@ -158,6 +159,7 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			"bloom_size":          fmt.Sprint(trailer.BloomSize),
 			"id_time_size":        fmt.Sprint(trailer.IDTimeSize),
 			"chunk_meta_compress": fmt.Sprint(trailer.ChunkMetaCompress),
+			"chunk_meta_header":   fmt.Sprint(len(trailer.ChunkMetaHeader)),
 			"chunk_meta_expanded": "false",
 			"time_store":          fmt.Sprint(trailer.TimeStoreFlag),
 		},
@@ -174,8 +176,8 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 
 	chunkMetas, expanded := []tsspChunkMeta(nil), false
 	switch trailer.ChunkMetaCompress {
-	case tsspChunkMetaCompressNone, tsspChunkMetaCompressSnappy, tsspChunkMetaCompressLZ4:
-		chunks, err := readTSSPChunkMetas(f, metaIndexes, trailerOffset, trailer.ChunkMetaCompress)
+	case tsspChunkMetaCompressNone, tsspChunkMetaCompressSnappy, tsspChunkMetaCompressLZ4, tsspChunkMetaCompressSelf:
+		chunks, err := readTSSPChunkMetas(f, metaIndexes, trailerOffset, trailer)
 		if err != nil {
 			report.Notices = append(report.Notices, fmt.Sprintf("chunk metadata expansion unavailable: %v", err))
 		} else {
@@ -189,8 +191,6 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 				report.Extra["query_overlap_precision"] = "chunk-meta"
 			}
 		}
-	case tsspChunkMetaCompressSelf:
-		report.Notices = append(report.Notices, "self-compressed chunk metadata requires openGemini adaptive chunk-meta codec; falling back to meta-index granularity")
 	default:
 		report.Notices = append(report.Notices, fmt.Sprintf("unsupported chunk metadata compression mode %d; falling back to meta-index granularity", trailer.ChunkMetaCompress))
 	}
@@ -250,12 +250,13 @@ func parseTSSPTrailer(b []byte) (tsspTrailer, error) {
 	}
 	actualExtraLen := extraLen
 	if extraLen >= 8 {
-		flags := binary.LittleEndian.Uint64(b[offset : offset+8])
+		extra := b[offset : offset+extraLen]
+		flags := binary.LittleEndian.Uint64(extra[:8])
 		trailer.TimeStoreFlag = uint8(flags & 0xff)
 		trailer.ChunkMetaCompress = uint8((flags >> 8) & 0xff)
 		// openGemini writes an 8-byte declared length for ExtraData, then stores
 		// the actual ExtraData byte length in the upper 32 bits of the flags word.
-		if size := int(flags >> 32); size > actualExtraLen {
+		if size := int(flags >> 32); size > 0 {
 			actualExtraLen = size
 		}
 	} else if extraLen == 1 {
@@ -266,6 +267,13 @@ func parseTSSPTrailer(b []byte) (tsspTrailer, error) {
 	}
 	if len(b)-offset < actualExtraLen {
 		return trailer, fmt.Errorf("short TSSP expanded extra data")
+	}
+	if actualExtraLen >= 8 {
+		header, err := parseTSSPChunkMetaHeader(b[offset : offset+actualExtraLen])
+		if err != nil {
+			return trailer, err
+		}
+		trailer.ChunkMetaHeader = header
 	}
 	offset += actualExtraLen
 
@@ -279,6 +287,32 @@ func parseTSSPTrailer(b []byte) (tsspTrailer, error) {
 	}
 	trailer.MeasurementName = string(b[offset : offset+nameLen])
 	return trailer, nil
+}
+
+func parseTSSPChunkMetaHeader(extra []byte) ([]string, error) {
+	if len(extra) < 10 {
+		return nil, nil
+	}
+	offset := 8
+	// openGemini reserves this value for the number of header strings, but the
+	// reader decodes strings until the extra-data payload ends.
+	_ = binary.BigEndian.Uint16(extra[offset : offset+2])
+	offset += 2
+
+	values := []string(nil)
+	for offset < len(extra) {
+		if len(extra)-offset < 2 {
+			return nil, fmt.Errorf("short TSSP chunk metadata header string length")
+		}
+		nameLen := int(binary.BigEndian.Uint16(extra[offset : offset+2]))
+		offset += 2
+		if len(extra)-offset < nameLen {
+			return nil, fmt.Errorf("short TSSP chunk metadata header string")
+		}
+		values = append(values, string(extra[offset:offset+nameLen]))
+		offset += nameLen
+	}
+	return values, nil
 }
 
 func readTSSPMetaIndexes(f *os.File, offset, size int64) ([]tsspMetaIndex, error) {
@@ -307,10 +341,10 @@ func readTSSPMetaIndexes(f *os.File, offset, size int64) ([]tsspMetaIndex, error
 	return items, nil
 }
 
-func readTSSPChunkMetas(f *os.File, items []tsspMetaIndex, trailerOffset int64, compressMode uint8) ([]tsspChunkMeta, error) {
+func readTSSPChunkMetas(f *os.File, items []tsspMetaIndex, trailerOffset int64, trailer tsspTrailer) ([]tsspChunkMeta, error) {
 	chunks := make([]tsspChunkMeta, 0, sumTSSPChunkMetaCount(items))
 	for idx, item := range items {
-		metas, err := readTSSPChunkMetaBlock(f, item, trailerOffset, compressMode)
+		metas, err := readTSSPChunkMetaBlock(f, item, trailerOffset, trailer)
 		if err != nil {
 			return nil, fmt.Errorf("meta-index %d sid %d: %w", idx, item.ID, err)
 		}
@@ -319,7 +353,7 @@ func readTSSPChunkMetas(f *os.File, items []tsspMetaIndex, trailerOffset int64, 
 	return chunks, nil
 }
 
-func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64, compressMode uint8) ([]tsspChunkMeta, error) {
+func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64, trailer tsspTrailer) ([]tsspChunkMeta, error) {
 	if item.Count == 0 {
 		return nil, nil
 	}
@@ -334,7 +368,7 @@ func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64,
 	if _, err := f.ReadAt(buf, item.Offset); err != nil {
 		return nil, err
 	}
-	buf, err := decompressTSSPChunkMetaBlock(buf, compressMode)
+	buf, err := decompressTSSPChunkMetaBlock(buf, trailer.ChunkMetaCompress)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +386,7 @@ func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64,
 		if start >= end || int(end) > len(data) {
 			return nil, fmt.Errorf("invalid chunk metadata offset window start=%d end=%d", start, end)
 		}
-		chunk, err := parseTSSPChunkMetaBlock(data[start:end])
+		chunk, err := parseTSSPChunkMetaBlockForMode(data[start:end], trailer.ChunkMetaCompress, trailer.ChunkMetaHeader)
 		if err != nil {
 			return nil, fmt.Errorf("chunk %d: %w", i, err)
 		}
@@ -363,7 +397,7 @@ func readTSSPChunkMetaBlock(f *os.File, item tsspMetaIndex, trailerOffset int64,
 
 func decompressTSSPChunkMetaBlock(src []byte, mode uint8) ([]byte, error) {
 	switch mode {
-	case tsspChunkMetaCompressNone:
+	case tsspChunkMetaCompressNone, tsspChunkMetaCompressSelf:
 		return src, nil
 	case tsspChunkMetaCompressSnappy:
 		return snappy.Decode(nil, src)
@@ -385,8 +419,6 @@ func decompressTSSPChunkMetaBlock(src []byte, mode uint8) ([]byte, error) {
 			return nil, fmt.Errorf("LZ4 chunk metadata length mismatch got=%d want=%d", n, originalLen)
 		}
 		return dst, nil
-	case tsspChunkMetaCompressSelf:
-		return nil, fmt.Errorf("self-compressed chunk metadata is not supported")
 	default:
 		return nil, fmt.Errorf("unsupported chunk metadata compression mode %d", mode)
 	}
@@ -418,6 +450,13 @@ func splitTSSPChunkMetaData(src []byte, itemCount uint32) ([]byte, []uint32, err
 		}
 	}
 	return data, offsets, nil
+}
+
+func parseTSSPChunkMetaBlockForMode(block []byte, mode uint8, header []string) (tsspChunkMeta, error) {
+	if mode == tsspChunkMetaCompressSelf {
+		return parseTSSPSelfCompressedChunkMetaBlock(block, header)
+	}
+	return parseTSSPChunkMetaBlock(block)
 }
 
 func parseTSSPChunkMetaBlock(block []byte) (tsspChunkMeta, error) {
@@ -475,6 +514,144 @@ func parseTSSPChunkMetaBlock(block []byte) (tsspChunkMeta, error) {
 	// openGemini ignores the unmarshal remainder; match that tolerance for
 	// padding or future extension bytes after the known column metadata.
 	return chunk, nil
+}
+
+func parseTSSPSelfCompressedChunkMetaBlock(block []byte, header []string) (tsspChunkMeta, error) {
+	var chunk tsspChunkMeta
+	if len(header) == 0 {
+		return chunk, fmt.Errorf("self-compressed chunk metadata missing header dictionary")
+	}
+	if len(block) < 8 {
+		return chunk, fmt.Errorf("short self-compressed chunk metadata header")
+	}
+	chunk.SID = binary.BigEndian.Uint64(block[:8])
+	rest := block[8:]
+
+	var ok bool
+	var value uint64
+	if value, rest, ok = readTSSPUvarint(rest); !ok {
+		return chunk, fmt.Errorf("invalid self-compressed chunk data offset")
+	}
+	chunk.Offset = int64(value)
+	if value, rest, ok = readTSSPUvarint(rest); !ok {
+		return chunk, fmt.Errorf("invalid self-compressed chunk data size")
+	}
+	chunk.Size = uint32(value)
+	if value, rest, ok = readTSSPUvarint(rest); !ok {
+		return chunk, fmt.Errorf("invalid self-compressed chunk column count")
+	}
+	chunk.ColumnCount = uint32(value)
+	if value, rest, ok = readTSSPUvarint(rest); !ok {
+		return chunk, fmt.Errorf("invalid self-compressed chunk segment count")
+	}
+	chunk.SegmentCount = uint32(value)
+
+	if chunk.SegmentCount == 0 {
+		return chunk, fmt.Errorf("chunk metadata has zero segments")
+	}
+	if chunk.ColumnCount == 0 {
+		return chunk, fmt.Errorf("chunk metadata has zero columns")
+	}
+	if int64(chunk.SegmentCount) > int64(len(rest)) {
+		return chunk, fmt.Errorf("short self-compressed chunk time ranges")
+	}
+	chunk.TimeRanges = make([]tsspTimeRange, int(chunk.SegmentCount))
+	timeTargets := make([]*int64, 0, int(chunk.SegmentCount)*2)
+	for i := range chunk.TimeRanges {
+		timeTargets = append(timeTargets, &chunk.TimeRanges[i].Min, &chunk.TimeRanges[i].Max)
+	}
+	rest, ok = decodeTSSPInt64sWithScale(rest, timeTargets...)
+	if !ok {
+		return chunk, fmt.Errorf("invalid self-compressed chunk time ranges")
+	}
+
+	minColumnBytes := int64(1+1+1+8) + int64(chunk.SegmentCount)*4
+	if int64(chunk.ColumnCount) > int64(len(rest))/minColumnBytes {
+		return chunk, fmt.Errorf("short self-compressed chunk columns")
+	}
+	chunk.Columns = make([]tsspColumnMeta, int(chunk.ColumnCount))
+	for i := range chunk.Columns {
+		column, remaining, err := parseTSSPSelfCompressedColumnMeta(rest, chunk.SegmentCount, header)
+		if err != nil {
+			return chunk, fmt.Errorf("column %d: %w", i, err)
+		}
+		chunk.Columns[i] = column
+		rest = remaining
+	}
+	return chunk, nil
+}
+
+func parseTSSPSelfCompressedColumnMeta(src []byte, segmentCount uint32, header []string) (tsspColumnMeta, []byte, error) {
+	var column tsspColumnMeta
+	nameIndex, src, ok := readTSSPUvarint(src)
+	if !ok {
+		return column, src, fmt.Errorf("invalid column name index")
+	}
+	if nameIndex >= uint64(len(header)) {
+		return column, src, fmt.Errorf("column name index %d out of range %d", nameIndex, len(header))
+	}
+	column.Name = header[nameIndex]
+
+	minBytes := 1 + 1 + 8 + int(segmentCount)*4
+	if len(src) < minBytes {
+		return column, src, fmt.Errorf("short column metadata")
+	}
+	column.Type = src[0]
+	preAggLen := int(src[1])
+	src = src[2:]
+	if len(src) < preAggLen+8+int(segmentCount)*4 {
+		return column, src, fmt.Errorf("short column pre-aggregation data")
+	}
+	column.PreAggBytes = preAggLen
+	src = src[preAggLen:]
+
+	offset := int64(binary.BigEndian.Uint64(src[:8]))
+	src = src[8:]
+	column.Segments = make([]tsspSegment, int(segmentCount))
+	for i := range column.Segments {
+		size := binary.BigEndian.Uint32(src[:4])
+		src = src[4:]
+		column.Segments[i] = tsspSegment{
+			Offset: offset,
+			Size:   size,
+		}
+		offset += int64(size)
+	}
+	return column, src, nil
+}
+
+func readTSSPUvarint(src []byte) (uint64, []byte, bool) {
+	value, n := binary.Uvarint(src)
+	if n <= 0 {
+		return 0, src, false
+	}
+	return value, src[n:], true
+}
+
+var tsspInt64Scales = [4]int64{1, 1e3, 1e6, 1e9}
+
+func decodeTSSPInt64sWithScale(src []byte, dst ...*int64) ([]byte, bool) {
+	if len(src) < 1 {
+		return src, false
+	}
+	scaleIndex := int(src[0])
+	if scaleIndex < 0 || scaleIndex >= len(tsspInt64Scales) {
+		return src, false
+	}
+	scale := tsspInt64Scales[scaleIndex]
+	offset := 1
+	for i, target := range dst {
+		value, n := binary.Uvarint(src[offset:])
+		if n <= 0 {
+			return src, false
+		}
+		offset += n
+		*target = int64(value) * scale
+		if i > 0 {
+			*target += *dst[i-1]
+		}
+	}
+	return src[offset:], true
 }
 
 func parseTSSPColumnMeta(src []byte, segmentCount uint32) (tsspColumnMeta, []byte, error) {

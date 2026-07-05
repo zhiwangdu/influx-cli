@@ -142,7 +142,7 @@ func TestAnalyzeTSSPLZ4ChunkMetadata(t *testing.T) {
 	}
 }
 
-func TestAnalyzeTSSPSelfCompressedChunkMetadataFallsBackToMetaIndex(t *testing.T) {
+func TestAnalyzeTSSPSelfCompressedChunkMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSPWithCompression(path, tsspChunkMetaCompressSelf); err != nil {
 		t.Fatal(err)
@@ -162,14 +162,26 @@ func TestAnalyzeTSSPSelfCompressedChunkMetadataFallsBackToMetaIndex(t *testing.T
 		t.Fatal(err)
 	}
 	file := report.Files[0]
-	if got, want := file.QueryOverlapBlocks, 3; got != want {
+	if got, want := file.QueryOverlapBlocks, 1; got != want {
 		t.Fatalf("query overlap blocks = %d, want %d", got, want)
 	}
-	if got, want := file.Blocks[0].Type, "meta-index"; got != want {
+	if got, want := file.Blocks[0].Type, "chunk-meta"; got != want {
 		t.Fatalf("first block type = %q, want %q", got, want)
 	}
-	if got, want := file.Extra["query_overlap_precision"], "meta-index"; got != want {
+	if got, want := file.Blocks[0].ColumnCount, 2; got != want {
+		t.Fatalf("first block column count = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["query_overlap_precision"], "chunk-meta"; got != want {
 		t.Fatalf("query overlap precision = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["chunk_meta_header"], "2"; got != want {
+		t.Fatalf("chunk meta header count = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["chunk_meta_compress_supported"], "true"; got != want {
+		t.Fatalf("chunk meta compression support = %q, want %q", got, want)
+	}
+	if len(file.Notices) != 0 {
+		t.Fatalf("notices = %v, want none", file.Notices)
 	}
 }
 
@@ -196,6 +208,43 @@ func TestParseTSSPChunkMetaBlockAllowsTrailingBytes(t *testing.T) {
 	}
 }
 
+func TestParseTSSPSelfCompressedChunkMetaBlockMultiSegment(t *testing.T) {
+	header := []string{"value", "time"}
+	var buf bytes.Buffer
+	writeUint64(&buf, 11)
+	buf.Write(binary.AppendUvarint(nil, 1024))
+	buf.Write(binary.AppendUvarint(nil, 96))
+	buf.Write(binary.AppendUvarint(nil, 2))
+	buf.Write(binary.AppendUvarint(nil, 2))
+	buf.Write(encodeTestTSSPInt64sWithScale(100, 120, 150, 180))
+	writeTestTSSPSelfColumnMetaSegments(&buf, header, "value", 1, 1024, 40, 56)
+	writeTestTSSPSelfColumnMetaSegments(&buf, header, "time", 0, 1120, 16, 16)
+
+	chunk, err := parseTSSPSelfCompressedChunkMetaBlock(buf.Bytes(), header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := chunk.SID, uint64(11); got != want {
+		t.Fatalf("sid = %d, want %d", got, want)
+	}
+	if got, want := len(chunk.TimeRanges), 2; got != want {
+		t.Fatalf("time range count = %d, want %d", got, want)
+	}
+	if got, want := chunk.TimeRanges[1].Min, int64(150); got != want {
+		t.Fatalf("second time range min = %d, want %d", got, want)
+	}
+	valueColumn := chunk.Columns[0]
+	if got, want := len(valueColumn.Segments), 2; got != want {
+		t.Fatalf("value segment count = %d, want %d", got, want)
+	}
+	if got, want := valueColumn.Segments[1].Offset, int64(1064); got != want {
+		t.Fatalf("second segment offset = %d, want %d", got, want)
+	}
+	if got, want := valueColumn.Segments[1].Size, uint32(56); got != want {
+		t.Fatalf("second segment size = %d, want %d", got, want)
+	}
+}
+
 func TestSplitTSSPChunkMetaDataRejectsNonIncreasingOffsets(t *testing.T) {
 	data := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 	var offsets bytes.Buffer
@@ -214,7 +263,7 @@ func TestDecompressTSSPChunkMetaBlockRoundTrip(t *testing.T) {
 		testTSSPChunkSpec{sid: 7, minTime: 150, maxTime: 180, offset: 1104, size: 80},
 	)
 
-	for _, mode := range []uint8{tsspChunkMetaCompressNone, tsspChunkMetaCompressSnappy, tsspChunkMetaCompressLZ4} {
+	for _, mode := range []uint8{tsspChunkMetaCompressNone, tsspChunkMetaCompressSnappy, tsspChunkMetaCompressLZ4, tsspChunkMetaCompressSelf} {
 		encoded, err := compressTestTSSPChunkMetaPayload(payload, mode)
 		if err != nil {
 			t.Fatal(err)
@@ -246,9 +295,6 @@ func TestDecompressTSSPChunkMetaBlockRejectsMalformedInputs(t *testing.T) {
 	if _, err := decompressTSSPChunkMetaBlock(encoded, tsspChunkMetaCompressLZ4); err == nil {
 		t.Fatal("expected LZ4 length mismatch error")
 	}
-	if _, err := decompressTSSPChunkMetaBlock(payload, tsspChunkMetaCompressSelf); err == nil {
-		t.Fatal("expected self-compressed mode error")
-	}
 	if _, err := decompressTSSPChunkMetaBlock(payload, 99); err == nil {
 		t.Fatal("expected unsupported mode error")
 	}
@@ -263,15 +309,27 @@ func writeTestTSSPWithCompression(path string, chunkMetaCompress uint8) error {
 	buf.WriteString(tsspMagic)
 	writeUint64(&buf, 2)
 
-	payload7 := testTSSPChunkMetaPayload(
-		testTSSPChunkSpec{sid: 7, minTime: 100, maxTime: 120, offset: 1024, size: 80},
-		testTSSPChunkSpec{sid: 7, minTime: 150, maxTime: 180, offset: 1104, size: 80},
-		testTSSPChunkSpec{sid: 7, minTime: 190, maxTime: 200, offset: 1184, size: 80},
-	)
-	payload9 := testTSSPChunkMetaPayload(
-		testTSSPChunkSpec{sid: 9, minTime: 300, maxTime: 330, offset: 1264, size: 96},
-		testTSSPChunkSpec{sid: 9, minTime: 340, maxTime: 400, offset: 1360, size: 96},
-	)
+	chunks7 := []testTSSPChunkSpec{
+		{sid: 7, minTime: 100, maxTime: 120, offset: 1024, size: 80},
+		{sid: 7, minTime: 150, maxTime: 180, offset: 1104, size: 80},
+		{sid: 7, minTime: 190, maxTime: 200, offset: 1184, size: 80},
+	}
+	chunks9 := []testTSSPChunkSpec{
+		{sid: 9, minTime: 300, maxTime: 330, offset: 1264, size: 96},
+		{sid: 9, minTime: 340, maxTime: 400, offset: 1360, size: 96},
+	}
+
+	chunkMetaHeader := []string(nil)
+	var payload7, payload9 []byte
+	if chunkMetaCompress == tsspChunkMetaCompressSelf {
+		chunkMetaHeader = []string{"value", "time"}
+		payload7 = testTSSPSelfChunkMetaPayload(chunkMetaHeader, chunks7...)
+		payload9 = testTSSPSelfChunkMetaPayload(chunkMetaHeader, chunks9...)
+	} else {
+		payload7 = testTSSPChunkMetaPayload(chunks7...)
+		payload9 = testTSSPChunkMetaPayload(chunks9...)
+	}
+
 	var err error
 	payload7, err = compressTestTSSPChunkMetaPayload(payload7, chunkMetaCompress)
 	if err != nil {
@@ -319,6 +377,7 @@ func writeTestTSSPWithCompression(path string, chunkMetaCompress uint8) error {
 		MaxTime:            400,
 		MetaIndexItemCount: 2,
 		ChunkMetaCompress:  chunkMetaCompress,
+		ChunkMetaHeader:    chunkMetaHeader,
 		MeasurementName:    "cpu",
 	})
 	writeGeminiInt64(&buf, trailerOffset)
@@ -368,6 +427,17 @@ func testTSSPChunkMetaPayload(chunks ...testTSSPChunkSpec) []byte {
 	return data.Bytes()
 }
 
+func testTSSPSelfChunkMetaPayload(header []string, chunks ...testTSSPChunkSpec) []byte {
+	var data bytes.Buffer
+	var offsets bytes.Buffer
+	for _, chunk := range chunks {
+		writeUint32(&offsets, uint32(data.Len()))
+		writeTestTSSPSelfChunkMeta(&data, header, chunk)
+	}
+	data.Write(offsets.Bytes())
+	return data.Bytes()
+}
+
 func writeTestTSSPChunkMeta(buf *bytes.Buffer, chunk testTSSPChunkSpec) {
 	writeUint64(buf, chunk.sid)
 	writeGeminiInt64(buf, chunk.offset)
@@ -380,6 +450,17 @@ func writeTestTSSPChunkMeta(buf *bytes.Buffer, chunk testTSSPChunkSpec) {
 	writeTestTSSPColumnMeta(buf, "time", 0, chunk.offset+int64(chunk.size), 16)
 }
 
+func writeTestTSSPSelfChunkMeta(buf *bytes.Buffer, header []string, chunk testTSSPChunkSpec) {
+	writeUint64(buf, chunk.sid)
+	buf.Write(binary.AppendUvarint(nil, uint64(chunk.offset)))
+	buf.Write(binary.AppendUvarint(nil, uint64(chunk.size)))
+	buf.Write(binary.AppendUvarint(nil, 2))
+	buf.Write(binary.AppendUvarint(nil, 1))
+	buf.Write(encodeTestTSSPInt64sWithScale(chunk.minTime, chunk.maxTime))
+	writeTestTSSPSelfColumnMeta(buf, header, "value", 1, chunk.offset, chunk.size)
+	writeTestTSSPSelfColumnMeta(buf, header, "time", 0, chunk.offset+int64(chunk.size), 16)
+}
+
 func writeTestTSSPColumnMeta(buf *bytes.Buffer, name string, typ byte, offset int64, size uint32) {
 	writeUint16(buf, uint16(len(name)))
 	buf.WriteString(name)
@@ -387,6 +468,55 @@ func writeTestTSSPColumnMeta(buf *bytes.Buffer, name string, typ byte, offset in
 	writeUint16(buf, 0)
 	writeGeminiInt64(buf, offset)
 	writeUint32(buf, size)
+}
+
+func writeTestTSSPSelfColumnMeta(buf *bytes.Buffer, header []string, name string, typ byte, offset int64, size uint32) {
+	writeTestTSSPSelfColumnMetaSegments(buf, header, name, typ, offset, size)
+}
+
+func writeTestTSSPSelfColumnMetaSegments(buf *bytes.Buffer, header []string, name string, typ byte, offset int64, sizes ...uint32) {
+	buf.Write(binary.AppendUvarint(nil, uint64(testTSSPHeaderIndex(header, name))))
+	buf.WriteByte(typ)
+	buf.WriteByte(0)
+	writeUint64(buf, uint64(offset))
+	for _, size := range sizes {
+		writeUint32(buf, size)
+	}
+}
+
+func testTSSPHeaderIndex(header []string, name string) int {
+	for i, value := range header {
+		if value == name {
+			return i
+		}
+	}
+	return len(header)
+}
+
+func encodeTestTSSPInt64sWithScale(values ...int64) []byte {
+	scaleIndex := 3
+	for _, value := range values {
+		for i := len(tsspInt64Scales) - 1; i >= 0; i-- {
+			if value%tsspInt64Scales[i] == 0 {
+				if i < scaleIndex {
+					scaleIndex = i
+				}
+				break
+			}
+		}
+	}
+	scale := tsspInt64Scales[scaleIndex]
+	dst := []byte{byte(scaleIndex)}
+	var previous int64
+	for i, value := range values {
+		delta := value
+		if i > 0 {
+			delta -= previous
+		}
+		dst = binary.AppendUvarint(dst, uint64(delta/scale))
+		previous = value
+	}
+	return dst
 }
 
 func writeTestTSSPMetaIndex(buf *bytes.Buffer, item tsspMetaIndex) {
@@ -413,7 +543,22 @@ func writeTestTSSPTrailer(buf *bytes.Buffer, trailer tsspTrailer) {
 	writeGeminiInt64(buf, trailer.MetaIndexItemCount)
 	writeUint64(buf, trailer.BloomM)
 	writeUint64(buf, trailer.BloomK)
-	if trailer.TimeStoreFlag != 0 || trailer.ChunkMetaCompress != 0 {
+	if len(trailer.ChunkMetaHeader) > 0 {
+		writeUint16(buf, 8)
+		var extra bytes.Buffer
+		writeLittleUint64(&extra, 0)
+		writeUint16(&extra, uint16(len(trailer.ChunkMetaHeader)))
+		for _, value := range trailer.ChunkMetaHeader {
+			writeUint16(&extra, uint16(len(value)))
+			extra.WriteString(value)
+		}
+		extraBytes := extra.Bytes()
+		flags := uint64(trailer.TimeStoreFlag) |
+			uint64(trailer.ChunkMetaCompress)<<8 |
+			uint64(uint32(len(extraBytes)))<<32
+		binary.LittleEndian.PutUint64(extraBytes[:8], flags)
+		buf.Write(extraBytes)
+	} else if trailer.TimeStoreFlag != 0 || trailer.ChunkMetaCompress != 0 {
 		writeUint16(buf, 2)
 		buf.WriteByte(trailer.TimeStoreFlag)
 		buf.WriteByte(trailer.ChunkMetaCompress)
@@ -427,6 +572,12 @@ func writeTestTSSPTrailer(buf *bytes.Buffer, trailer tsspTrailer) {
 func writeGeminiInt64(buf *bytes.Buffer, value int64) {
 	encoded := uint64((value << 1) ^ (value >> 63))
 	writeUint64(buf, encoded)
+}
+
+func writeLittleUint64(buf *bytes.Buffer, value uint64) {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], value)
+	buf.Write(b[:])
 }
 
 func writeUint64(buf *bytes.Buffer, value uint64) {
