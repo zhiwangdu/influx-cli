@@ -42,6 +42,30 @@ func TestCompleteMetaCommandsIncludesLocalReplCommands(t *testing.T) {
 	}
 }
 
+func TestCompleteSchemaMetaCommandsUseMeasurements(t *testing.T) {
+	executor := newTestExecutor()
+
+	for _, line := range []string{":schema c", ":fields c", ":tags c"} {
+		completion, err := executor.Complete(context.Background(), line, len(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if completion.Prefix != "c" || !reflect.DeepEqual(completion.Candidates, []string{"cpu"}) {
+			t.Fatalf("%s completion = %#v", line, completion)
+		}
+	}
+
+	for _, line := range []string{":schema ", ":fields ", ":tags "} {
+		completion, err := executor.Complete(context.Background(), line, len(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if completion.Prefix != "" || !reflect.DeepEqual(completion.Candidates, []string{"cpu", "disk", "mem"}) {
+			t.Fatalf("%s completion = %#v", line, completion)
+		}
+	}
+}
+
 func TestCompleteMeasurementFieldAndTagCandidates(t *testing.T) {
 	fake := newFakeAdapter()
 	executor := NewExecutor(NewSession(config.Effective{

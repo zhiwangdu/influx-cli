@@ -91,7 +91,7 @@ func (e *Executor) completeMeta(ctx context.Context, before, token string) (Comp
 			candidates = append(candidates, policy.Name)
 		}
 		return completionFor(token, candidates), nil
-	case ":schema":
+	case ":schema", ":fields", ":tags":
 		if len(fields) > 2 {
 			return Completion{Prefix: token}, nil
 		}
@@ -308,7 +308,7 @@ func completionFor(prefix string, candidates []string) Completion {
 func metaCommands() []string {
 	return []string{
 		":use", ":db", ":rp", ":rps", ":dbs", ":measurements", ":msts",
-		":schema", ":refresh", ":format", ":fmt", ":history", ":hist",
+		":fields", ":tags", ":schema", ":refresh", ":format", ":fmt", ":history", ":hist",
 		":cancel", ":clear", ":status", ":help", ":q",
 	}
 }

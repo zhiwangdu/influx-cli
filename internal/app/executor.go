@@ -116,9 +116,9 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 	case ":measurements", ":msts":
 		q := query.New("SHOW MEASUREMENTS", e.Session.Database, e.Session.RP, e.Session.Precision)
 		return e.Adapter.Query(ctx, q)
-	case ":schema":
+	case ":schema", ":fields", ":tags":
 		if len(fields) != 2 {
-			return result.Result{}, fmt.Errorf("usage: :schema <measurement>")
+			return result.Result{}, fmt.Errorf("usage: %s <measurement>", command)
 		}
 		snapshot, err := e.Adapter.GetSchema(ctx, schema.Scope{
 			Database:        e.Session.Database,
@@ -128,7 +128,14 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 		if err != nil {
 			return result.Result{}, err
 		}
-		return result.SchemaResult(snapshot), nil
+		switch command {
+		case ":fields":
+			return fieldsResult(snapshot), nil
+		case ":tags":
+			return tagsResult(snapshot), nil
+		default:
+			return result.SchemaResult(snapshot), nil
+		}
 	case ":refresh":
 		if len(fields) != 2 || strings.ToLower(fields[1]) != "schema" {
 			return result.Result{}, fmt.Errorf("usage: :refresh schema")
@@ -165,6 +172,26 @@ func contextResult(database, retentionPolicy string) result.Result {
 	table := result.NewTable([]string{"key", "value"})
 	table.AddRow("database", database)
 	table.AddRow("retention_policy", retentionPolicy)
+	return result.FromTable(table)
+}
+
+func fieldsResult(snapshot schema.Snapshot) result.Result {
+	table := result.NewTable([]string{"measurement", "field", "type"})
+	for _, measurement := range snapshot.Measurements {
+		for _, field := range measurement.Fields {
+			table.AddRow(measurement.Name, field.Name, field.Type)
+		}
+	}
+	return result.FromTable(table)
+}
+
+func tagsResult(snapshot schema.Snapshot) result.Result {
+	table := result.NewTable([]string{"measurement", "tag"})
+	for _, measurement := range snapshot.Measurements {
+		for _, tag := range measurement.Tags {
+			table.AddRow(measurement.Name, tag.Name)
+		}
+	}
 	return result.FromTable(table)
 }
 
@@ -227,6 +254,8 @@ func helpResult() result.Result {
 	table.AddRow(":dbs", "show databases")
 	table.AddRow(":measurements", "show measurements in current database")
 	table.AddRow(":msts", "alias for :measurements")
+	table.AddRow(":fields <measurement>", "show field keys for a measurement")
+	table.AddRow(":tags <measurement>", "show tag keys for a measurement")
 	table.AddRow(":schema <measurement>", "show field and tag keys for a measurement")
 	table.AddRow(":refresh schema", "clear autocomplete schema cache")
 	table.AddRow(":format [format]", "show or set REPL render format: auto, table, sparkline, json")

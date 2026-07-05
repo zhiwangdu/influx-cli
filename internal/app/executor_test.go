@@ -148,6 +148,57 @@ func TestExecutorMeasurementsAliasUsesSameQuery(t *testing.T) {
 	}
 }
 
+func TestExecutorFieldsAndTagsCommandsUseMeasurementSchema(t *testing.T) {
+	fake := newFakeAdapter()
+	session := NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	})
+	executor := NewExecutor(session, fake)
+
+	fields, err := executor.Execute(context.Background(), ":fields cpu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fields.Table.Columns, []string{"measurement", "field", "type"}; !equalStringSlices(got, want) {
+		t.Fatalf("field columns = %#v, want %#v", got, want)
+	}
+	if got, want := fields.Table.RowCount(), 2; got != want {
+		t.Fatalf("field rows = %d, want %d", got, want)
+	}
+	if fields.Table.Rows[0][0] != "cpu" || fields.Table.Rows[0][1] != "usage_idle" || fields.Table.Rows[0][2] != "float" {
+		t.Fatalf("unexpected field row: %#v", fields.Table.Rows[0])
+	}
+
+	tags, err := executor.Execute(context.Background(), ":tags cpu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tags.Table.Columns, []string{"measurement", "tag"}; !equalStringSlices(got, want) {
+		t.Fatalf("tag columns = %#v, want %#v", got, want)
+	}
+	if got, want := tags.Table.RowCount(), 2; got != want {
+		t.Fatalf("tag rows = %d, want %d", got, want)
+	}
+	if tags.Table.Rows[0][0] != "cpu" || tags.Table.Rows[0][1] != "host" {
+		t.Fatalf("unexpected tag row: %#v", tags.Table.Rows[0])
+	}
+	if fake.getSchemaCalls != 2 {
+		t.Fatalf("getSchemaCalls = %d, want 2", fake.getSchemaCalls)
+	}
+}
+
+func TestExecutorFieldsAndTagsRejectInvalidMeasurementArity(t *testing.T) {
+	executor := newTestExecutor()
+	for _, command := range []string{":fields", ":fields cpu extra", ":tags", ":tags cpu extra"} {
+		if _, err := executor.Execute(context.Background(), command); err == nil {
+			t.Fatalf("%s succeeded with invalid measurement arity", command)
+		}
+	}
+}
+
 func newTestExecutor() *Executor {
 	session := NewSession(config.Effective{Adapter: "fake", Precision: "rfc3339"})
 	return NewExecutor(session, newFakeAdapter())
@@ -233,4 +284,16 @@ func assertRow(t *testing.T, row []any, database, retentionPolicy string, isDefa
 	if row[2] == "" || row[3] == "" || row[4] == "" {
 		t.Fatalf("row missing retention policy details: %#v", row)
 	}
+}
+
+func equalStringSlices(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
