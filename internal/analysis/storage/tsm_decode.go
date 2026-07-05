@@ -1,6 +1,15 @@
 package storage
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
+
+type tsmCursorCandidate struct {
+	entry   tsmIndexEntry
+	index   int
+	decoded bool
+}
 
 func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombstoneEntry, options Options) *DecodePathSummary {
 	if !options.QueryRange.Set {
@@ -21,8 +30,8 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	}
 
 	matchedKeys := map[string]struct{}{}
-	overlapByKey := map[string]int{}
-	for _, entry := range entries {
+	locationsByKey := map[string][]tsmCursorCandidate{}
+	for i, entry := range entries {
 		typeName := tsmBlockTypeName(entry.Type)
 		selectedKey := tsmQueryKeySelected(entry.Key, keySet)
 		if len(keySet) > 0 && selectedKey {
@@ -51,13 +60,21 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 			summary.LocationBlocksByType[typeName]++
 			summary.SkippedAfterRangeBlocks++
 			reason = "outside_query_range"
+			locationsByKey[entry.Key] = append(locationsByKey[entry.Key], tsmCursorCandidate{
+				entry: entry,
+				index: i,
+			})
 		default:
 			summary.LocationBlocks++
 			summary.FilteredDecodeBlocks++
 			summary.LocationBlocksByType[typeName]++
 			summary.DecodeBlocksByType[typeName]++
 			decoded = true
-			overlapByKey[entry.Key]++
+			locationsByKey[entry.Key] = append(locationsByKey[entry.Key], tsmCursorCandidate{
+				entry:   entry,
+				index:   i,
+				decoded: true,
+			})
 		}
 
 		if len(summary.Samples) < options.BlockSampleLimit {
@@ -88,14 +105,116 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
-	for _, n := range overlapByKey {
-		if n > 1 {
-			summary.MergeWindowKeys++
-			summary.MergeWindowBlocks += n
-		}
-	}
+	populateTSMCursorWindows(summary, locationsByKey, options.BlockSampleLimit)
 	summary.Recommendations = tsmDecodeRecommendations(summary)
 	return summary
+}
+
+func populateTSMCursorWindows(summary *DecodePathSummary, locationsByKey map[string][]tsmCursorCandidate, sampleLimit int) {
+	if len(locationsByKey) == 0 {
+		return
+	}
+	mergeKeys := map[string]struct{}{}
+	keys := make([]string, 0, len(locationsByKey))
+	for key := range locationsByKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		locations := locationsByKey[key]
+		sort.SliceStable(locations, func(i, j int) bool {
+			if locations[i].entry.MinTime == locations[j].entry.MinTime {
+				return locations[i].entry.MaxTime < locations[j].entry.MaxTime
+			}
+			return locations[i].entry.MinTime < locations[j].entry.MinTime
+		})
+		var window tsmCursorWindowBuilder
+		for _, location := range locations {
+			if !window.started {
+				window.start(key, location)
+				continue
+			}
+			if location.entry.MinTime <= window.maxTime {
+				window.add(location)
+				continue
+			}
+			finishTSMCursorWindow(summary, &window, mergeKeys, sampleLimit)
+			window.start(key, location)
+		}
+		if window.started {
+			finishTSMCursorWindow(summary, &window, mergeKeys, sampleLimit)
+		}
+	}
+	summary.MergeWindowKeys = len(mergeKeys)
+}
+
+type tsmCursorWindowBuilder struct {
+	started         bool
+	key             string
+	minTime         int64
+	maxTime         int64
+	locationBlocks  int
+	decodedBlocks   int
+	firstBlockIndex int
+}
+
+func (w *tsmCursorWindowBuilder) start(key string, location tsmCursorCandidate) {
+	*w = tsmCursorWindowBuilder{
+		started:         true,
+		key:             key,
+		minTime:         location.entry.MinTime,
+		maxTime:         location.entry.MaxTime,
+		locationBlocks:  1,
+		firstBlockIndex: location.index,
+	}
+	if location.decoded {
+		w.decodedBlocks = 1
+	}
+}
+
+func (w *tsmCursorWindowBuilder) add(location tsmCursorCandidate) {
+	if location.entry.MinTime < w.minTime {
+		w.minTime = location.entry.MinTime
+	}
+	if location.entry.MaxTime > w.maxTime {
+		w.maxTime = location.entry.MaxTime
+	}
+	w.locationBlocks++
+	if location.decoded {
+		w.decodedBlocks++
+	}
+}
+
+func finishTSMCursorWindow(summary *DecodePathSummary, window *tsmCursorWindowBuilder, mergeKeys map[string]struct{}, sampleLimit int) {
+	summary.CursorWindowCount++
+	requiresMerge := window.decodedBlocks > 1
+	if requiresMerge {
+		summary.MergeWindowCount++
+		summary.MergeWindowBlocks += window.decodedBlocks
+		mergeKeys[window.key] = struct{}{}
+	}
+	if sampleLimit <= 0 || len(summary.CursorWindows) >= sampleLimit {
+		return
+	}
+	reason := "single_decode"
+	switch {
+	case window.decodedBlocks == 0:
+		reason = "outside_query_range"
+	case requiresMerge:
+		reason = "merge_overlap"
+	}
+	summary.CursorWindows = append(summary.CursorWindows, DecodePathCursorWindow{
+		Key:             window.key,
+		MinTime:         window.minTime,
+		MaxTime:         window.maxTime,
+		LocationBlocks:  window.locationBlocks,
+		DecodedBlocks:   window.decodedBlocks,
+		SavedBlocks:     window.locationBlocks - window.decodedBlocks,
+		RequiresMerge:   requiresMerge,
+		Reason:          reason,
+		FirstBlockIndex: window.firstBlockIndex,
+	})
 }
 
 func tsmQueryKeySelected(key string, keySet map[string]struct{}) bool {

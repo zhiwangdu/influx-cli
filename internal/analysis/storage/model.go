@@ -200,12 +200,15 @@ type DecodePathSummary struct {
 	SkippedBeforeSeekBlocks int                       `json:"skipped_before_seek_blocks,omitempty"`
 	SkippedAfterRangeBlocks int                       `json:"skipped_after_range_blocks,omitempty"`
 	FullyTombstonedBlocks   int                       `json:"fully_tombstoned_blocks,omitempty"`
+	CursorWindowCount       int                       `json:"cursor_window_count,omitempty"`
+	MergeWindowCount        int                       `json:"merge_window_count,omitempty"`
 	MergeWindowBlocks       int                       `json:"merge_window_blocks,omitempty"`
 	MergeWindowKeys         int                       `json:"merge_window_keys,omitempty"`
 	Amplification           float64                   `json:"amplification,omitempty"`
 	LocationBlocksByType    map[string]int            `json:"location_blocks_by_type,omitempty"`
 	DecodeBlocksByType      map[string]int            `json:"decode_blocks_by_type,omitempty"`
 	Samples                 []DecodePathBlockDecision `json:"samples,omitempty"`
+	CursorWindows           []DecodePathCursorWindow  `json:"cursor_windows,omitempty"`
 	Recommendations         []string                  `json:"recommendations,omitempty"`
 }
 
@@ -217,6 +220,18 @@ type DecodePathBlockDecision struct {
 	LocationCandidate bool   `json:"location_candidate,omitempty"`
 	Decoded           bool   `json:"decoded,omitempty"`
 	Reason            string `json:"reason,omitempty"`
+}
+
+type DecodePathCursorWindow struct {
+	Key             string `json:"key"`
+	MinTime         int64  `json:"min_time"`
+	MaxTime         int64  `json:"max_time"`
+	LocationBlocks  int    `json:"location_blocks"`
+	DecodedBlocks   int    `json:"decoded_blocks"`
+	SavedBlocks     int    `json:"saved_blocks,omitempty"`
+	RequiresMerge   bool   `json:"requires_merge,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	FirstBlockIndex int    `json:"first_block_index,omitempty"`
 }
 
 type BlockReport struct {

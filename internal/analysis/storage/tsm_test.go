@@ -85,6 +85,18 @@ func TestAnalyzeTSMMetadata(t *testing.T) {
 	if got, want := file.DecodePath.SavedDecodeBlocks, 1; got != want {
 		t.Fatalf("saved decode blocks = %d, want %d", got, want)
 	}
+	if got, want := file.DecodePath.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(file.DecodePath.CursorWindows), 2; got != want {
+		t.Fatalf("cursor window samples = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.CursorWindows[0].DecodedBlocks, 1; got != want {
+		t.Fatalf("first cursor window decoded blocks = %d, want %d", got, want)
+	}
+	if got, want := file.DecodePath.CursorWindows[1].Reason, "outside_query_range"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
+	}
 	if got, want := file.DecodePath.SkippedAfterRangeBlocks, 1; got != want {
 		t.Fatalf("skipped after range blocks = %d, want %d", got, want)
 	}
@@ -195,8 +207,20 @@ func TestAnalyzeTSMDecodePathMergeAndTombstone(t *testing.T) {
 	if got, want := decode.MergeWindowKeys, 1; got != want {
 		t.Fatalf("merge window keys = %d, want %d", got, want)
 	}
+	if got, want := decode.MergeWindowCount, 1; got != want {
+		t.Fatalf("merge window count = %d, want %d", got, want)
+	}
 	if got, want := decode.MergeWindowBlocks, 2; got != want {
 		t.Fatalf("merge window blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "merge_overlap"; got != want {
+		t.Fatalf("cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[0].DecodedBlocks, 2; got != want {
+		t.Fatalf("cursor window decoded blocks = %d, want %d", got, want)
 	}
 	if got, want := decode.DecodeBlocksByType["float"], 2; got != want {
 		t.Fatalf("float decode blocks = %d, want %d", got, want)
@@ -262,6 +286,12 @@ func TestAnalyzeTSMDecodePathQueryKeyFilter(t *testing.T) {
 	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
 		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].RequiresMerge, true; got != want {
+		t.Fatalf("cursor window requires merge = %t, want %t", got, want)
+	}
 	if got, want := decode.SkippedByKeyBlocks, 1; got != want {
 		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
 	}
@@ -306,6 +336,46 @@ func TestAnalyzeTSMDecodePathMissingQueryKey(t *testing.T) {
 	}
 	if got, want := decode.MissingKeys, []string{"disk value"}; !equalStrings(got, want) {
 		t.Fatalf("missing keys = %v, want %v", got, want)
+	}
+}
+
+func TestAnalyzeTSMDecodePathDoesNotMergeNonOverlappingBlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 20, timestamps: []int64{10, 20}},
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 30, maxTime: 40, timestamps: []int64{30, 40}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(10, 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if got, want := decode.FilteredDecodeBlocks, 2; got != want {
+		t.Fatalf("filtered decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowCount, 0; got != want {
+		t.Fatalf("merge window count = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowKeys, 0; got != want {
+		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	if decode.CursorWindows[0].RequiresMerge || decode.CursorWindows[1].RequiresMerge {
+		t.Fatalf("cursor windows = %+v, want no merge", decode.CursorWindows)
 	}
 }
 
