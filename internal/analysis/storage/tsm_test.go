@@ -379,6 +379,79 @@ func TestAnalyzeTSMDecodePathDoesNotMergeNonOverlappingBlocks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMFileStoreDecodePathAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path1, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 10, maxTime: 30, timestamps: []int64{10, 20, 30}},
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 100, maxTime: 120, timestamps: []int64{100, 110, 120}},
+		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 40, timestamps: []int64{20, 30, 40}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path2 := filepath.Join(dir, "000000002-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path2, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockFloat, minTime: 20, maxTime: 40, timestamps: []int64{20, 30, 40}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(25, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		QueryKeys:        []string{"cpu,host=a value"},
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level decode path summary")
+	}
+	if got, want := decode.Mode, "tsm-filestore-key-cursor-ascending"; got != want {
+		t.Fatalf("mode = %q, want %q", got, want)
+	}
+	if got, want := decode.LocationBlocks, 3; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.FilteredDecodeBlocks, 2; got != want {
+		t.Fatalf("filtered decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBlocks, 1; got != want {
+		t.Fatalf("saved decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedByKeyBlocks, 1; got != want {
+		t.Fatalf("skipped by key blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowCount, 1; got != want {
+		t.Fatalf("merge window count = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowBlocks, 2; got != want {
+		t.Fatalf("merge window blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "merge_overlap"; got != want {
+		t.Fatalf("first cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Files, []string{path1, path2}; !equalStrings(got, want) {
+		t.Fatalf("first cursor window files = %v, want %v", got, want)
+	}
+	if got, want := decode.CursorWindows[1].Reason, "outside_query_range"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.Samples[0].Path, path1; got != want {
+		t.Fatalf("first sample path = %q, want %q", got, want)
+	}
+}
+
 func TestReadTSMTombstoneV4MultiStream(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "000000001-000000001.tombstone")
 	if err := writeTestTSMTombstoneV4(path,

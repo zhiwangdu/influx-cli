@@ -53,9 +53,10 @@ func (r TimeRange) Overlaps(min, max int64) bool {
 }
 
 type Report struct {
-	Files   []FileReport `json:"files"`
-	Summary Summary      `json:"summary"`
-	Notices []string     `json:"notices,omitempty"`
+	Files      []FileReport       `json:"files"`
+	Summary    Summary            `json:"summary"`
+	DecodePath *DecodePathSummary `json:"decode_path,omitempty"`
+	Notices    []string           `json:"notices,omitempty"`
 }
 
 type Summary struct {
@@ -213,6 +214,7 @@ type DecodePathSummary struct {
 }
 
 type DecodePathBlockDecision struct {
+	Path              string `json:"path,omitempty"`
 	Key               string `json:"key,omitempty"`
 	MinTime           int64  `json:"min_time"`
 	MaxTime           int64  `json:"max_time"`
@@ -223,15 +225,16 @@ type DecodePathBlockDecision struct {
 }
 
 type DecodePathCursorWindow struct {
-	Key             string `json:"key"`
-	MinTime         int64  `json:"min_time"`
-	MaxTime         int64  `json:"max_time"`
-	LocationBlocks  int    `json:"location_blocks"`
-	DecodedBlocks   int    `json:"decoded_blocks"`
-	SavedBlocks     int    `json:"saved_blocks,omitempty"`
-	RequiresMerge   bool   `json:"requires_merge,omitempty"`
-	Reason          string `json:"reason,omitempty"`
-	FirstBlockIndex int    `json:"first_block_index,omitempty"`
+	Key             string   `json:"key"`
+	Files           []string `json:"files,omitempty"`
+	MinTime         int64    `json:"min_time"`
+	MaxTime         int64    `json:"max_time"`
+	LocationBlocks  int      `json:"location_blocks"`
+	DecodedBlocks   int      `json:"decoded_blocks"`
+	SavedBlocks     int      `json:"saved_blocks,omitempty"`
+	RequiresMerge   bool     `json:"requires_merge,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	FirstBlockIndex int      `json:"first_block_index,omitempty"`
 }
 
 type BlockReport struct {

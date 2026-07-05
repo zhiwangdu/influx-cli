@@ -52,6 +52,14 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 		}
 		accumulateSummary(&report.Summary, fileReport, options.QueryRange)
 	}
+	if options.QueryRange.Set {
+		decodePath, err := buildTSMFileStoreDecodePathSummary(report.Files, options)
+		if err != nil {
+			report.Notices = append(report.Notices, fmt.Sprintf("tsm filestore decode path unavailable: %v", err))
+		} else {
+			report.DecodePath = decodePath
+		}
+	}
 	report.Summary.FileCount = len(report.Files)
 	return report, nil
 }

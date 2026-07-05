@@ -56,22 +56,7 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 		return FileReport{}, fmt.Errorf("unsupported TSM version %d", header[4])
 	}
 
-	footer := make([]byte, tsmFooterSize)
-	if _, err := f.ReadAt(footer, info.Size()-tsmFooterSize); err != nil {
-		return FileReport{}, err
-	}
-	indexOffset := int64(binary.BigEndian.Uint64(footer))
-	if indexOffset < tsmHeaderSize || indexOffset >= info.Size()-tsmFooterSize {
-		return FileReport{}, fmt.Errorf("invalid TSM index offset %d", indexOffset)
-	}
-
-	indexSize := info.Size() - tsmFooterSize - indexOffset
-	indexBytes := make([]byte, indexSize)
-	if _, err := f.ReadAt(indexBytes, indexOffset); err != nil {
-		return FileReport{}, err
-	}
-
-	keys, entries, err := parseTSMIndex(indexBytes)
+	indexOffset, indexSize, keys, entries, err := readTSMIndex(f, info.Size())
 	if err != nil {
 		return FileReport{}, err
 	}
@@ -144,6 +129,29 @@ func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, err
 	report.Tombstones = tombstones
 	report.DecodePath = buildTSMDecodePathSummary(entries, tombstoneEntries, options)
 	return report, nil
+}
+
+func readTSMIndex(f *os.File, size int64) (int64, int64, []string, []tsmIndexEntry, error) {
+	footer := make([]byte, tsmFooterSize)
+	if _, err := f.ReadAt(footer, size-tsmFooterSize); err != nil {
+		return 0, 0, nil, nil, err
+	}
+	indexOffset := int64(binary.BigEndian.Uint64(footer))
+	if indexOffset < tsmHeaderSize || indexOffset >= size-tsmFooterSize {
+		return 0, 0, nil, nil, fmt.Errorf("invalid TSM index offset %d", indexOffset)
+	}
+
+	indexSize := size - tsmFooterSize - indexOffset
+	indexBytes := make([]byte, indexSize)
+	if _, err := f.ReadAt(indexBytes, indexOffset); err != nil {
+		return 0, 0, nil, nil, err
+	}
+
+	keys, entries, err := parseTSMIndex(indexBytes)
+	if err != nil {
+		return 0, 0, nil, nil, err
+	}
+	return indexOffset, indexSize, keys, entries, nil
 }
 
 func parseTSMIndex(b []byte) ([]string, []tsmIndexEntry, error) {
