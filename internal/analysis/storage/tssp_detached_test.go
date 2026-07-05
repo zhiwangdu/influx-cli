@@ -95,6 +95,30 @@ func TestAnalyzeTSSPDetachedMetaIndex(t *testing.T) {
 	if got, want := decode.SavedReadAtCalls, 2; got != want {
 		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
 	}
+	if got, want := decode.BaselineCursorReadCalls, 1; got != want {
+		t.Fatalf("baseline cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorReadCalls, 1; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 1; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].LocationBlocks, 3; got != want {
+		t.Fatalf("cursor window location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].DecodedBlocks, 1; got != want {
+		t.Fatalf("cursor window decoded blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].SavedBlocks, 2; got != want {
+		t.Fatalf("cursor window saved blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "detached_chunk_meta_batch_filtered"; got != want {
+		t.Fatalf("cursor window reason = %q, want %q", got, want)
+	}
 	if got, want := len(decode.Samples), 3; got != want {
 		t.Fatalf("sample count = %d, want %d", got, want)
 	}
@@ -162,6 +186,81 @@ func TestAnalyzeTSSPDetachedMetaIndexDescendingAndIDFilter(t *testing.T) {
 	}
 	if !equalUint64s(decode.MatchedMetaIndexIDs, []uint64{11}) {
 		t.Fatalf("matched ids = %v, want [11]", decode.MatchedMetaIndexIDs)
+	}
+}
+
+func TestAnalyzeTSSPDetachedMetaIndexChunkMetaReadBatches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), tsspDetachedMetaIndexFileName)
+	items := make([]tsspMetaIndex, 17)
+	for i := range items {
+		id := uint64(i + 1)
+		minTime := int64(i * 100)
+		items[i] = tsspMetaIndex{
+			ID:      id,
+			MinTime: minTime,
+			MaxTime: minTime + 10,
+			Offset:  int64(64 + i*40),
+			Size:    40,
+		}
+	}
+	if err := writeTestTSSPDetachedMetaIndex(path, items); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(1600, 1610)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.BaselineReadAtCalls, 17; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 1; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineCursorReadCalls, 2; got != want {
+		t.Fatalf("baseline cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorReadCalls, 1; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 2; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].LocationBlocks, 16; got != want {
+		t.Fatalf("first cursor window location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].DecodedBlocks, 0; got != want {
+		t.Fatalf("first cursor window decoded blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "outside_query_range"; got != want {
+		t.Fatalf("first cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[1].LocationBlocks, 1; got != want {
+		t.Fatalf("second cursor window location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[1].DecodedBlocks, 1; got != want {
+		t.Fatalf("second cursor window decoded blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[1].Reason, "detached_chunk_meta_batch_overlap"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
+	}
+	if !containsString(decode.Recommendations, "batch read") {
+		t.Fatalf("recommendations = %v, want batch read recommendation", decode.Recommendations)
 	}
 }
 

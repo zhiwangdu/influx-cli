@@ -17,6 +17,7 @@ const (
 	// offset, and size; Count is only present in attached meta-index records.
 	tsspDetachedMetaIndexItemSize   = 8 + 8 + 8 + 8 + 4
 	tsspDetachedMetaIndexRecordSize = 4 + tsspDetachedMetaIndexItemSize
+	tsspDetachedChunkMetaReadNum    = 16 // openGemini immutable.ChunkMetaReadNum
 )
 
 func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options) (FileReport, error) {
@@ -180,11 +181,14 @@ func buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes []tsspMetaIndex, op
 	}
 	populateTSSPDecodeMetaIndexMatches(summary, metaIndexes)
 
+	selectedMetas := []tsspMetaIndex{}
+	overlapMetas := []tsspMetaIndex{}
 	for _, meta := range tsspMetaIndexesForCursor(metaIndexes, options.CursorDescending) {
 		if !tsspQueryMetaIndexSelected(meta.ID, idSet) {
 			summary.SkippedByKeyBlocks++
 			continue
 		}
+		selectedMetas = append(selectedMetas, meta)
 
 		summary.LocationBlocks++
 		summary.LocationBlocksByType["detached-meta-index"]++
@@ -194,6 +198,7 @@ func buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes []tsspMetaIndex, op
 
 		overlaps := options.QueryRange.Overlaps(meta.MinTime, meta.MaxTime)
 		if overlaps {
+			overlapMetas = append(overlapMetas, meta)
 			if summary.IteratorCostFiles == 0 {
 				summary.IteratorCostFiles = 1
 			}
@@ -218,9 +223,64 @@ func buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes []tsspMetaIndex, op
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
-	summary.CursorWindowCount = summary.LocationBlocks
+	populateTSSPDetachedChunkMetaBatches(summary, selectedMetas, overlapMetas, options)
 	summary.Recommendations = tsspDetachedMetaIndexRecommendations(summary)
 	return summary
+}
+
+func populateTSSPDetachedChunkMetaBatches(summary *DecodePathSummary, selected, overlapping []tsspMetaIndex, options Options) {
+	summary.BaselineCursorReadCalls = tsspDetachedChunkMetaBatchCount(len(selected))
+	summary.OptimizedCursorReadCalls = tsspDetachedChunkMetaBatchCount(len(overlapping))
+	summary.CursorWindowCount = summary.BaselineCursorReadCalls
+	if options.BlockSampleLimit <= 0 {
+		return
+	}
+	overlapIDs := map[uint64]struct{}{}
+	for _, meta := range overlapping {
+		overlapIDs[meta.ID] = struct{}{}
+	}
+	for start := 0; start < len(selected) && len(summary.CursorWindows) < options.BlockSampleLimit; start += tsspDetachedChunkMetaReadNum {
+		end := start + tsspDetachedChunkMetaReadNum
+		if end > len(selected) {
+			end = len(selected)
+		}
+		batch := selected[start:end]
+		decoded := 0
+		minTime, maxTime := batch[0].MinTime, batch[0].MaxTime
+		for _, meta := range batch {
+			if meta.MinTime < minTime {
+				minTime = meta.MinTime
+			}
+			if meta.MaxTime > maxTime {
+				maxTime = meta.MaxTime
+			}
+			if _, ok := overlapIDs[meta.ID]; ok {
+				decoded++
+			}
+		}
+		reason := "detached_chunk_meta_batch_overlap"
+		if decoded == 0 {
+			reason = "outside_query_range"
+		} else if decoded < len(batch) {
+			reason = "detached_chunk_meta_batch_filtered"
+		}
+		summary.CursorWindows = append(summary.CursorWindows, DecodePathCursorWindow{
+			MinTime:         minTime,
+			MaxTime:         maxTime,
+			LocationBlocks:  len(batch),
+			DecodedBlocks:   decoded,
+			SavedBlocks:     len(batch) - decoded,
+			Reason:          reason,
+			FirstBlockIndex: start,
+		})
+	}
+}
+
+func tsspDetachedChunkMetaBatchCount(records int) int {
+	if records <= 0 {
+		return 0
+	}
+	return (records + tsspDetachedChunkMetaReadNum - 1) / tsspDetachedChunkMetaReadNum
 }
 
 func appendTSSPDetachedMetaIndexDecodeSample(summary *DecodePathSummary, meta tsspMetaIndex, overlaps bool, sampleLimit int) {
@@ -288,7 +348,7 @@ func tsspDetachedMetaIndexRecommendations(summary *DecodePathSummary) []string {
 	if summary == nil {
 		return nil
 	}
-	recommendations := make([]string, 0, 3)
+	recommendations := make([]string, 0, 4)
 	if summary.SkippedByKeyBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"skip %d detached TSSP meta-index record(s) outside the requested ID set",
@@ -305,6 +365,13 @@ func tsspDetachedMetaIndexRecommendations(summary *DecodePathSummary) []string {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"avoid %d detached chunk metadata ReadAt call(s) after meta-index filtering",
 			summary.SavedReadAtCalls,
+		))
+	}
+	if summary.BaselineCursorReadCalls > summary.OptimizedCursorReadCalls {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"reduce detached chunk metadata batch read(s) from %d to %d after query filtering",
+			summary.BaselineCursorReadCalls,
+			summary.OptimizedCursorReadCalls,
 		))
 	}
 	return recommendations
