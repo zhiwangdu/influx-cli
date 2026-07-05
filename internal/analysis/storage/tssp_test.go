@@ -116,6 +116,21 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	if got, want := len(decode.Samples), 3; got != want {
 		t.Fatalf("decode samples = %d, want %d", got, want)
 	}
+	if got, want := decode.CursorWindowCount, 3; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 3; got != want {
+		t.Fatalf("cursor window samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[1].Reason, "segment_overlap"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[1].DecodedBlocks, 1; got != want {
+		t.Fatalf("second cursor window decoded blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[1].SavedBlocks, 0; got != want {
+		t.Fatalf("second cursor window saved blocks = %d, want %d", got, want)
+	}
 	if got, want := decode.Samples[1].OutputSegments, 1; got != want {
 		t.Fatalf("second decode sample output segments = %d, want %d", got, want)
 	}
@@ -396,9 +411,17 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 	if got, want := len(decode.Samples), 5; got != want {
 		t.Fatalf("decode samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorWindows), 5; got != want {
+		t.Fatalf("cursor window samples = %d, want %d", got, want)
+	}
 	for _, sample := range decode.Samples {
 		if sample.Path == "" {
 			t.Fatalf("decode sample missing path: %+v", sample)
+		}
+	}
+	for _, window := range decode.CursorWindows {
+		if len(window.Files) == 0 {
+			t.Fatalf("cursor window missing file: %+v", window)
 		}
 	}
 }

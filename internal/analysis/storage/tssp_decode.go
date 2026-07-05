@@ -77,6 +77,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 				summary.SkippedAfterRangeBlocks++
 			}
 			appendTSSPChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes, options.BlockSampleLimit)
+			appendTSSPChunkCursorWindow(summary, chunk, minTime, maxTime, segmentCount, outputSegments, options.BlockSampleLimit)
 		}
 	}
 
@@ -186,6 +187,9 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 		if len(dst.CursorWindows) >= sampleLimit {
 			break
 		}
+		if len(window.Files) == 0 {
+			window.Files = []string{path}
+		}
 		dst.CursorWindows = append(dst.CursorWindows, window)
 	}
 }
@@ -247,6 +251,27 @@ func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta
 		LocationCandidate: true,
 		Decoded:           decoded,
 		Reason:            reason,
+	})
+}
+
+func appendTSSPChunkCursorWindow(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sampleLimit int) {
+	if sampleLimit <= 0 || len(summary.CursorWindows) >= sampleLimit {
+		return
+	}
+	reason := "outside_query_range"
+	if outputSegments > 0 {
+		reason = "segment_overlap"
+	}
+	summary.CursorWindows = append(summary.CursorWindows, DecodePathCursorWindow{
+		Key:             fmt.Sprintf("sid:%d", chunk.SID),
+		MinTime:         minTime,
+		MaxTime:         maxTime,
+		LocationBlocks:  segmentCount,
+		DecodedBlocks:   outputSegments,
+		SavedBlocks:     segmentCount - outputSegments,
+		RequiresMerge:   false,
+		Reason:          reason,
+		FirstBlockIndex: len(summary.CursorWindows),
 	})
 }
 
