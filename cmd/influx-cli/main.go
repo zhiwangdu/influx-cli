@@ -184,13 +184,15 @@ func newConfigCommand(flags *globalFlags) *cobra.Command {
 }
 
 type storageAnalyzeFlags struct {
-	format     string
-	recursive  bool
-	from       string
-	to         string
-	keys       []string
-	sampleKeys int
-	maxBlocks  int
+	format       string
+	recursive    bool
+	from         string
+	to           string
+	keys         []string
+	measurements []string
+	tags         []string
+	sampleKeys   int
+	maxBlocks    int
 }
 
 func newStorageCommand(flags *globalFlags) *cobra.Command {
@@ -216,13 +218,19 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if hasNonEmptyValues(analyzeFlags.keys) && !queryRange.Set {
 				return fmt.Errorf("--key requires --from and --to because decode-path planning needs a query range")
 			}
+			tagFilters, err := parseStorageTagFilters(analyzeFlags.tags)
+			if err != nil {
+				return err
+			}
 			report, err := storage.Analyze(cmd.Context(), args, storage.Options{
-				Format:           storage.Format(strings.ToLower(analyzeFlags.format)),
-				Recursive:        analyzeFlags.recursive,
-				KeySampleLimit:   analyzeFlags.sampleKeys,
-				BlockSampleLimit: analyzeFlags.maxBlocks,
-				QueryRange:       queryRange,
-				QueryKeys:        analyzeFlags.keys,
+				Format:            storage.Format(strings.ToLower(analyzeFlags.format)),
+				Recursive:         analyzeFlags.recursive,
+				KeySampleLimit:    analyzeFlags.sampleKeys,
+				BlockSampleLimit:  analyzeFlags.maxBlocks,
+				QueryRange:        queryRange,
+				QueryKeys:         analyzeFlags.keys,
+				QueryMeasurements: analyzeFlags.measurements,
+				QueryTags:         tagFilters,
 			})
 			if err != nil {
 				return fmt.Errorf("storage analyze: %w", err)
@@ -272,6 +280,8 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.keys, "key", nil, "TSM index key to include in query decode-path planning; repeat for multiple keys")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.sampleKeys, "sample-keys", analyzeFlags.sampleKeys, "maximum key or series ID samples per file")
 	analyzeCommand.Flags().IntVar(&analyzeFlags.maxBlocks, "max-blocks", analyzeFlags.maxBlocks, "maximum block samples per file")
 
@@ -351,6 +361,32 @@ func parseStorageTime(value string) (int64, error) {
 		return parsed.UnixNano(), nil
 	}
 	return 0, fmt.Errorf("use RFC3339/RFC3339Nano or unix nanoseconds")
+}
+
+func parseStorageTagFilters(values []string) ([]storage.TagFilter, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	filters := make([]storage.TagFilter, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key, tagValue, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			return nil, fmt.Errorf("parse --tag %q: use key=value", value)
+		}
+		filter := storage.TagFilter{
+			Key:   strings.TrimSpace(key),
+			Value: strings.TrimSpace(tagValue),
+		}
+		if filter.Key == "" {
+			return nil, fmt.Errorf("parse --tag %q: key cannot be empty", value)
+		}
+		filters = append(filters, filter)
+	}
+	return filters, nil
 }
 
 func colorEnabled() bool {

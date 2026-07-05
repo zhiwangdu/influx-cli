@@ -73,6 +73,12 @@ type tsiTagBlockSummary struct {
 	DeletedTagValueCount int
 }
 
+type tsiTagBlockInspection struct {
+	Summary        tsiTagBlockSummary
+	Tags           []IndexQueryTagReport
+	MatchedFilters map[string]TagFilter
+}
+
 type tsiTagKeyElem struct {
 	Flag             byte
 	Key              string
@@ -202,6 +208,7 @@ func summarizeTSIMeasurements(fileData, block []byte, options Options) (IndexSum
 	data = data[tsiMeasurementFillSize:]
 
 	keySamples := make([]string, 0, options.KeySampleLimit)
+	query := newTSIIndexQueryBuilder(options)
 	for len(data) > 0 {
 		elem, err := parseTSIMeasurementElem(data)
 		if err != nil {
@@ -218,14 +225,19 @@ func summarizeTSIMeasurements(fileData, block []byte, options Options) (IndexSum
 			keySamples = append(keySamples, elem.Name)
 		}
 
-		tagSummary, err := summarizeTSITagBlock(fileData, elem.TagBlock)
+		inspectDetails := query != nil && query.measurementSelected(elem.Name)
+		tagInspect, err := inspectTSITagBlock(fileData, elem.TagBlock, queryTagFilters(query), inspectDetails, options.BlockSampleLimit)
 		if err != nil {
 			return summary, keySamples, fmt.Errorf("measurement %q tag block: %w", elem.Name, err)
 		}
+		tagSummary := tagInspect.Summary
 		summary.TagKeyCount += tagSummary.TagKeyCount
 		summary.DeletedTagKeyCount += tagSummary.DeletedTagKeyCount
 		summary.TagValueCount += tagSummary.TagValueCount
 		summary.DeletedTagValueCount += tagSummary.DeletedTagValueCount
+		if query != nil {
+			query.observeMeasurement(elem, tagInspect, options)
+		}
 		if len(summary.MeasurementSamples) < options.KeySampleLimit {
 			summary.MeasurementSamples = append(summary.MeasurementSamples, IndexMeasurementReport{
 				Name:                 elem.Name,
@@ -238,7 +250,111 @@ func summarizeTSIMeasurements(fileData, block []byte, options Options) (IndexSum
 			})
 		}
 	}
+	if query != nil {
+		summary.Query = query.finish()
+	}
 	return summary, keySamples, nil
+}
+
+type tsiIndexQueryBuilder struct {
+	summary             IndexQuerySummary
+	measurementSet      map[string]struct{}
+	matchedMeasurements map[string]struct{}
+	matchedTags         map[string]TagFilter
+}
+
+func newTSIIndexQueryBuilder(options Options) *tsiIndexQueryBuilder {
+	if len(options.QueryMeasurements) == 0 && len(options.QueryTags) == 0 {
+		return nil
+	}
+	builder := &tsiIndexQueryBuilder{
+		summary: IndexQuerySummary{
+			MeasurementFilterApplied: len(options.QueryMeasurements) > 0,
+			TagFilterApplied:         len(options.QueryTags) > 0,
+			QueryMeasurements:        append([]string(nil), options.QueryMeasurements...),
+			QueryTags:                append([]TagFilter(nil), options.QueryTags...),
+		},
+		measurementSet:      queryKeySet(options.QueryMeasurements),
+		matchedMeasurements: map[string]struct{}{},
+		matchedTags:         map[string]TagFilter{},
+	}
+	return builder
+}
+
+func queryTagFilters(builder *tsiIndexQueryBuilder) []TagFilter {
+	if builder == nil {
+		return nil
+	}
+	return builder.summary.QueryTags
+}
+
+func (b *tsiIndexQueryBuilder) measurementSelected(name string) bool {
+	if b == nil || len(b.measurementSet) == 0 {
+		return true
+	}
+	_, ok := b.measurementSet[name]
+	return ok
+}
+
+func (b *tsiIndexQueryBuilder) observeMeasurement(elem tsiMeasurementElem, tags tsiTagBlockInspection, options Options) {
+	if b == nil || !b.measurementSelected(elem.Name) {
+		return
+	}
+	if len(b.measurementSet) > 0 {
+		b.matchedMeasurements[elem.Name] = struct{}{}
+	}
+
+	for id, filter := range tags.MatchedFilters {
+		b.matchedTags[id] = filter
+	}
+	if elem.Flag&tsiMeasurementTombstoneFlag != 0 || !b.allTagsMatched(tags) {
+		return
+	}
+
+	b.summary.CandidateMeasurements++
+	b.summary.SeriesRefs += int64(elem.SeriesCount)
+	b.summary.TagKeyCount += tags.Summary.TagKeyCount
+	b.summary.TagValueCount += tags.Summary.TagValueCount
+	if len(b.summary.MeasurementSamples) < options.KeySampleLimit {
+		b.summary.MeasurementSamples = append(b.summary.MeasurementSamples, IndexQueryMeasurementReport{
+			Name:        elem.Name,
+			SeriesCount: elem.SeriesCount,
+			Tags:        tags.Tags,
+		})
+	}
+}
+
+func (b *tsiIndexQueryBuilder) allTagsMatched(tags tsiTagBlockInspection) bool {
+	for _, filter := range b.summary.QueryTags {
+		if _, ok := tags.MatchedFilters[tagFilterID(filter.Key, filter.Value)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *tsiIndexQueryBuilder) finish() *IndexQuerySummary {
+	if b == nil {
+		return nil
+	}
+	if len(b.measurementSet) > 0 {
+		for _, measurement := range b.summary.QueryMeasurements {
+			if _, ok := b.matchedMeasurements[measurement]; ok {
+				b.summary.MatchedMeasurements = append(b.summary.MatchedMeasurements, measurement)
+			} else {
+				b.summary.MissingMeasurements = append(b.summary.MissingMeasurements, measurement)
+			}
+		}
+	}
+	for _, filter := range b.summary.QueryTags {
+		id := tagFilterID(filter.Key, filter.Value)
+		if matched, ok := b.matchedTags[id]; ok {
+			b.summary.MatchedTags = append(b.summary.MatchedTags, matched)
+		} else {
+			b.summary.MissingTags = append(b.summary.MissingTags, filter)
+		}
+	}
+	return &b.summary
 }
 
 func parseTSIMeasurementBlockTrailer(data []byte) (tsiMeasurementBlockTrailer, error) {
@@ -313,52 +429,105 @@ func parseTSIMeasurementElem(data []byte) (tsiMeasurementElem, error) {
 }
 
 func summarizeTSITagBlock(fileData []byte, rng tsiRange) (tsiTagBlockSummary, error) {
-	var summary tsiTagBlockSummary
+	inspection, err := inspectTSITagBlock(fileData, rng, nil, false, 0)
+	return inspection.Summary, err
+}
+
+func inspectTSITagBlock(fileData []byte, rng tsiRange, filters []TagFilter, includeDetails bool, sampleLimit int) (tsiTagBlockInspection, error) {
+	var inspection tsiTagBlockInspection
 	if rng.Size == 0 {
-		return summary, nil
+		return inspection, nil
 	}
 	block, err := sliceTSIRange(fileData, rng, "tag block")
 	if err != nil {
-		return summary, err
+		return inspection, err
 	}
 	trailer, err := parseTSITagBlockTrailer(block)
 	if err != nil {
-		return summary, err
+		return inspection, err
 	}
 	if trailer.Size != int64(len(block)) {
-		return summary, fmt.Errorf("tag block size mismatch: trailer=%d actual=%d", trailer.Size, len(block))
+		return inspection, fmt.Errorf("tag block size mismatch: trailer=%d actual=%d", trailer.Size, len(block))
 	}
 	keyData, err := sliceTSIRange(block, trailer.KeyData, "tag key data")
 	if err != nil {
-		return summary, err
+		return inspection, err
 	}
+	filterSet := tagFilterSet(filters)
 	for len(keyData) > 0 {
 		key, err := parseTSITagKeyElem(keyData, block)
 		if err != nil {
-			return summary, err
+			return inspection, err
 		}
 		keyData = keyData[key.EncodedByteCount:]
-		summary.TagKeyCount++
+		inspection.Summary.TagKeyCount++
 		if key.Flag&tsiTagKeyTombstoneFlag != 0 {
-			summary.DeletedTagKeyCount++
+			inspection.Summary.DeletedTagKeyCount++
 		}
 		values, err := sliceTSIRange(block, key.Values, "tag value data")
 		if err != nil {
-			return summary, err
+			return inspection, err
+		}
+		tagReport := IndexQueryTagReport{
+			Key:     key.Key,
+			Deleted: key.Flag&tsiTagKeyTombstoneFlag != 0,
 		}
 		for len(values) > 0 {
 			value, err := parseTSITagValueElem(values)
 			if err != nil {
-				return summary, err
+				return inspection, err
 			}
 			values = values[value.EncodedByteCount:]
-			summary.TagValueCount++
+			inspection.Summary.TagValueCount++
 			if value.Flag&tsiTagValueTombstoneFlag != 0 {
-				summary.DeletedTagValueCount++
+				inspection.Summary.DeletedTagValueCount++
 			}
+
+			id := tagFilterID(key.Key, value.Value)
+			live := key.Flag&tsiTagKeyTombstoneFlag == 0 && value.Flag&tsiTagValueTombstoneFlag == 0
+			if filter, ok := filterSet[id]; live && ok {
+				if inspection.MatchedFilters == nil {
+					inspection.MatchedFilters = map[string]TagFilter{}
+				}
+				inspection.MatchedFilters[id] = filter
+			}
+			if !includeDetails || sampleLimit <= 0 {
+				continue
+			}
+			if len(filterSet) > 0 {
+				if _, ok := filterSet[id]; !ok {
+					continue
+				}
+			}
+			if len(tagReport.Values) >= sampleLimit {
+				continue
+			}
+			tagReport.Values = append(tagReport.Values, IndexQueryTagValueReport{
+				Value:       value.Value,
+				Deleted:     value.Flag&tsiTagValueTombstoneFlag != 0,
+				SeriesCount: value.SeriesCount,
+			})
+		}
+		if includeDetails && sampleLimit > 0 && len(inspection.Tags) < sampleLimit && (len(filterSet) == 0 || len(tagReport.Values) > 0) {
+			inspection.Tags = append(inspection.Tags, tagReport)
 		}
 	}
-	return summary, nil
+	return inspection, nil
+}
+
+func tagFilterSet(filters []TagFilter) map[string]TagFilter {
+	if len(filters) == 0 {
+		return nil
+	}
+	set := make(map[string]TagFilter, len(filters))
+	for _, filter := range filters {
+		set[tagFilterID(filter.Key, filter.Value)] = filter
+	}
+	return set
+}
+
+func tagFilterID(key, value string) string {
+	return key + "\x00" + value
 }
 
 func parseTSITagBlockTrailer(data []byte) (tsiTagBlockTrailer, error) {

@@ -61,6 +61,31 @@ func TestParseStorageTimeRejectsUnknownFormat(t *testing.T) {
 	}
 }
 
+func TestParseStorageTagFilters(t *testing.T) {
+	got, err := parseStorageTagFilters([]string{" host = a ", "", "region=us-west"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("tag filters = %d, want 2", len(got))
+	}
+	if got[0].Key != "host" || got[0].Value != "a" {
+		t.Fatalf("first tag filter = %+v, want host=a", got[0])
+	}
+	if got[1].Key != "region" || got[1].Value != "us-west" {
+		t.Fatalf("second tag filter = %+v, want region=us-west", got[1])
+	}
+}
+
+func TestParseStorageTagFiltersRejectsMalformedValues(t *testing.T) {
+	if _, err := parseStorageTagFilters([]string{"host"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want key=value guidance", err)
+	}
+	if _, err := parseStorageTagFilters([]string{"=a"}); err == nil || !strings.Contains(err.Error(), "key cannot be empty") {
+		t.Fatalf("error = %v, want empty key guidance", err)
+	}
+}
+
 func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--key", "cpu value", "missing.tsm"})

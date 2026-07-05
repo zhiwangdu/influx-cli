@@ -71,6 +71,94 @@ func TestAnalyzeTSIMetadata(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSIQueryFilters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSI(path); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:            FormatTSI,
+		QueryMeasurements: []string{"mem", "cpu", "cpu", " "},
+		QueryTags: []TagFilter{
+			{Key: " host ", Value: " a "},
+			{Key: "host", Value: "a"},
+		},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected TSI query summary")
+	}
+	if !query.MeasurementFilterApplied || !query.TagFilterApplied {
+		t.Fatalf("query flags = measurement:%t tag:%t, want both true", query.MeasurementFilterApplied, query.TagFilterApplied)
+	}
+	if got, want := query.QueryMeasurements, []string{"cpu", "mem"}; !equalStrings(got, want) {
+		t.Fatalf("query measurements = %v, want %v", got, want)
+	}
+	if got, want := query.QueryTags, []TagFilter{{Key: "host", Value: "a"}}; !equalTagFilters(got, want) {
+		t.Fatalf("query tags = %+v, want %+v", got, want)
+	}
+	if got, want := query.MatchedMeasurements, []string{"cpu", "mem"}; !equalStrings(got, want) {
+		t.Fatalf("matched measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 2; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(3); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if got, want := len(query.MeasurementSamples), 2; got != want {
+		t.Fatalf("query measurement samples = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].Name, "cpu"; got != want {
+		t.Fatalf("first query sample = %q, want %q", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].Tags[0].Key, "host"; got != want {
+		t.Fatalf("first query tag key = %q, want %q", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].Tags[0].Values[0].Value, "a"; got != want {
+		t.Fatalf("first query tag value = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSIQueryFiltersIgnoreDeletedTagValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSI(path); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSI,
+		QueryTags:        []TagFilter{{Key: "host", Value: "b"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected TSI query summary")
+	}
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.MissingTags, []TagFilter{{Key: "host", Value: "b"}}; !equalTagFilters(got, want) {
+		t.Fatalf("missing tags = %+v, want %+v", got, want)
+	}
+	if len(query.MatchedTags) != 0 {
+		t.Fatalf("matched tags = %+v, want none", query.MatchedTags)
+	}
+}
+
 func writeTestTSI(path string) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsiMagic)
@@ -281,4 +369,16 @@ func writeTestTSITagTrailer(buf *bytes.Buffer, trailer tsiTagBlockTrailer) {
 func writeTestTSIRange(buf *bytes.Buffer, rng tsiRange) {
 	writeUint64(buf, uint64(rng.Offset))
 	writeUint64(buf, uint64(rng.Size))
+}
+
+func equalTagFilters(a, b []TagFilter) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

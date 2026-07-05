@@ -25,6 +25,8 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 		return Report{}, fmt.Errorf("block sample limit cannot be negative")
 	}
 	options.QueryKeys = normalizeQueryKeys(options.QueryKeys)
+	options.QueryMeasurements = normalizeQueryKeys(options.QueryMeasurements)
+	options.QueryTags = normalizeTagFilters(options.QueryTags)
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query key filter requires query range")
 	}
@@ -84,6 +86,36 @@ func queryKeySet(keys []string) map[string]struct{} {
 		set[key] = struct{}{}
 	}
 	return set
+}
+
+func normalizeTagFilters(values []TagFilter) []TagFilter {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	filters := make([]TagFilter, 0, len(values))
+	for _, value := range values {
+		filter := TagFilter{
+			Key:   strings.TrimSpace(value.Key),
+			Value: strings.TrimSpace(value.Value),
+		}
+		if filter.Key == "" {
+			continue
+		}
+		id := filter.Key + "\x00" + filter.Value
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		filters = append(filters, filter)
+	}
+	sort.Slice(filters, func(i, j int) bool {
+		if filters[i].Key == filters[j].Key {
+			return filters[i].Value < filters[j].Value
+		}
+		return filters[i].Key < filters[j].Key
+	})
+	return filters
 }
 
 func expandPaths(ctx context.Context, paths []string, options Options) ([]string, error) {

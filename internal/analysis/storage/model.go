@@ -17,18 +17,25 @@ const (
 )
 
 type Options struct {
-	Format           Format
-	Recursive        bool
-	KeySampleLimit   int
-	BlockSampleLimit int
-	QueryRange       TimeRange
-	QueryKeys        []string
+	Format            Format
+	Recursive         bool
+	KeySampleLimit    int
+	BlockSampleLimit  int
+	QueryRange        TimeRange
+	QueryKeys         []string
+	QueryMeasurements []string
+	QueryTags         []TagFilter
 }
 
 type TimeRange struct {
 	Min int64 `json:"min"`
 	Max int64 `json:"max"`
 	Set bool  `json:"set"`
+}
+
+type TagFilter struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 func NewTimeRange(min, max int64) (TimeRange, error) {
@@ -128,6 +135,7 @@ type IndexSummary struct {
 	SeriesSketchBytes       int64                    `json:"series_sketch_bytes,omitempty"`
 	TombstoneSketchBytes    int64                    `json:"tombstone_sketch_bytes,omitempty"`
 	MeasurementSamples      []IndexMeasurementReport `json:"measurement_samples,omitempty"`
+	Query                   *IndexQuerySummary       `json:"query,omitempty"`
 }
 
 type IndexMeasurementReport struct {
@@ -138,6 +146,41 @@ type IndexMeasurementReport struct {
 	DeletedTagKeyCount   int    `json:"deleted_tag_key_count,omitempty"`
 	TagValueCount        int    `json:"tag_value_count,omitempty"`
 	DeletedTagValueCount int    `json:"deleted_tag_value_count,omitempty"`
+}
+
+type IndexQuerySummary struct {
+	MeasurementFilterApplied bool                          `json:"measurement_filter_applied,omitempty"`
+	TagFilterApplied         bool                          `json:"tag_filter_applied,omitempty"`
+	QueryMeasurements        []string                      `json:"query_measurements,omitempty"`
+	QueryTags                []TagFilter                   `json:"query_tags,omitempty"`
+	MatchedMeasurements      []string                      `json:"matched_measurements,omitempty"`
+	MissingMeasurements      []string                      `json:"missing_measurements,omitempty"`
+	MatchedTags              []TagFilter                   `json:"matched_tags,omitempty"`
+	MissingTags              []TagFilter                   `json:"missing_tags,omitempty"`
+	CandidateMeasurements    int                           `json:"candidate_measurements,omitempty"`
+	SeriesRefs               int64                         `json:"series_refs,omitempty"`
+	TagKeyCount              int                           `json:"tag_key_count,omitempty"`
+	TagValueCount            int                           `json:"tag_value_count,omitempty"`
+	MeasurementSamples       []IndexQueryMeasurementReport `json:"measurement_samples,omitempty"`
+}
+
+type IndexQueryMeasurementReport struct {
+	Name        string                `json:"name"`
+	Deleted     bool                  `json:"deleted,omitempty"`
+	SeriesCount uint64                `json:"series_count,omitempty"`
+	Tags        []IndexQueryTagReport `json:"tags,omitempty"`
+}
+
+type IndexQueryTagReport struct {
+	Key     string                     `json:"key"`
+	Deleted bool                       `json:"deleted,omitempty"`
+	Values  []IndexQueryTagValueReport `json:"values,omitempty"`
+}
+
+type IndexQueryTagValueReport struct {
+	Value       string `json:"value"`
+	Deleted     bool   `json:"deleted,omitempty"`
+	SeriesCount uint64 `json:"series_count,omitempty"`
 }
 
 type DecodePathSummary struct {
