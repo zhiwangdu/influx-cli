@@ -73,7 +73,11 @@ When implementation starts:
 
 For every coding implementation:
 
+- Before each review round, first probe that `claude` is responsive. For example:
+  `claude -p "Health check: reply with exactly OK and no other text." --no-session-persistence --permission-mode dontAsk --output-format text`
+- Treat the probe as successful only when it exits successfully and its output is exactly `OK` after trimming surrounding whitespace; otherwise treat `claude` as unavailable for that review round. Use a short probe timeout, such as 60 seconds, so a hung probe does not consume the review budget.
 - Run the local `claude` command for iterative code review before committing.
+- Treat one review round as one `claude` review command, and allow up to 30 minutes for each review command before treating it as timed out. Enforce this with the command runner's timeout or polling budget, or with an equivalent shell timeout mechanism where available.
 - Review Claude's findings yourself, then apply appropriate fixes.
 - Repeat the review/fix loop as needed, but stop after at most 5 review rounds for a single implementation to avoid non-converging review loops.
 - If `claude` is unavailable or cannot complete, state that in the final response and proceed with the best available verification.
