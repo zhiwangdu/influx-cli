@@ -276,6 +276,12 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
 		t.Fatalf("table search heap candidates = %d, want %d", got, want)
 	}
+	if got, want := decode.TableSearchHeapInserts, 5; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 5; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
+	}
 	if got, want := decode.TableSearchOutputValues, 5; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
 	}
@@ -356,6 +362,43 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetFileSetTableScanSingleStreamHeapAccounting(t *testing.T) {
+	dir := t.TempDir()
+	partPath := filepath.Join(dir, "3_1_1847A3A45055EEF0")
+	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6164",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := decode.TableSearchHeapCandidates, 1; got != want {
+		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapInserts, 3; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 3; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchOutputValues, 3; got != want {
+		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+}
+
 func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 	dir := t.TempDir()
 	partPath1 := filepath.Join(dir, "3_1_1847A3A45055EEF0")
@@ -390,6 +433,12 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 	}
 	if got, want := decode.TableSearchOutputValues, 6; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapInserts, 6; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 6; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
 	}
 	if got, want := decode.DeduplicatedOutputValues, 4; got != want {
 		t.Fatalf("deduplicated output values = %d, want %d", got, want)
@@ -657,6 +706,12 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateWindowSamplingDisabled(t *testi
 	if got, want := decode.MergeWindowKeys, 2; got != want {
 		t.Fatalf("merge window keys = %d, want %d", got, want)
 	}
+	if got, want := decode.TableSearchHeapInserts, 4; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 4; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
+	}
 	if got := len(decode.CursorWindows); got != 0 {
 		t.Fatalf("cursor windows = %d, want 0", got)
 	}
@@ -709,6 +764,12 @@ func TestAnalyzeMergesetFileSetTableScanDescendingDuplicateHeapOutput(t *testing
 	}
 	if got, want := decode.MergeWindowKeys, 2; got != want {
 		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapInserts, 6; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 6; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
 	}
 	wantValues := []string{"ae", "ad"}
 	for i, want := range wantValues {

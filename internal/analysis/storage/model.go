@@ -352,6 +352,8 @@ type DecodePathSummary struct {
 	OptimizedCursorReadCalls     int                       `json:"optimized_cursor_read_calls,omitempty"`
 	TableSearchSeekCalls         int                       `json:"table_search_seek_calls,omitempty"`
 	TableSearchHeapCandidates    int                       `json:"table_search_heap_candidates,omitempty"`
+	TableSearchHeapInserts       int                       `json:"table_search_heap_inserts,omitempty"`
+	TableSearchHeapPops          int                       `json:"table_search_heap_pops,omitempty"`
 	TableSearchOutputValues      int                       `json:"table_search_output_values,omitempty"`
 	TableSearchExactMisses       int                       `json:"table_search_exact_misses,omitempty"`
 	BaselineReadAtCalls          int                       `json:"baseline_read_at_calls,omitempty"`
@@ -571,6 +573,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.IteratorCostFiles > 0 || summary.IteratorCostBlocks > 0 || summary.IteratorCostBytes > 0 {
 		parts = append(parts, fmt.Sprintf("iterator_cost files=%d blocks=%d bytes=%d", summary.IteratorCostFiles, summary.IteratorCostBlocks, summary.IteratorCostBytes))
+	}
+	if summary.TableSearchHeapInserts > 0 || summary.TableSearchHeapPops > 0 {
+		parts = append(parts, fmt.Sprintf("table_search_heap inserts=%d pops=%d", summary.TableSearchHeapInserts, summary.TableSearchHeapPops))
 	}
 	if summary.ValueOutputMismatches > 0 {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))

@@ -128,6 +128,8 @@ func addMergesetFileSearchSummary(dst, src *DecodePathSummary, path string, samp
 	dst.SkippedByKeyBlocks += src.SkippedByKeyBlocks
 	dst.TableSearchSeekCalls += src.TableSearchSeekCalls
 	dst.TableSearchHeapCandidates += src.TableSearchHeapCandidates
+	dst.TableSearchHeapInserts += src.TableSearchHeapInserts
+	dst.TableSearchHeapPops += src.TableSearchHeapPops
 	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
 	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
 	appendMergesetFileSearchSamples(dst, src, path, sampleLimit)
@@ -145,6 +147,8 @@ func addMergesetFileScanSummary(dst, src *DecodePathSummary, path string, sample
 	dst.LocationBlocks += src.LocationBlocks
 	dst.FilteredDecodeBlocks += src.FilteredDecodeBlocks
 	dst.CursorWindowCount += src.CursorWindowCount
+	dst.TableSearchHeapInserts += src.TableSearchHeapInserts
+	dst.TableSearchHeapPops += src.TableSearchHeapPops
 	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
 	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
 	appendMergesetFileSearchSamples(dst, src, path, sampleLimit)
@@ -332,6 +336,10 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 	for i := range streams {
 		cursorHeap.streams = append(cursorHeap.streams, &streams[i])
 	}
+	// Inserts count items placed into the local heap, including the initial streams
+	// bulk-loaded before heap.Init and subsequent re-insertions after advance.
+	heapInserts := len(cursorHeap.streams)
+	heapPops := 0
 	heap.Init(&cursorHeap)
 
 	total := 0
@@ -389,6 +397,7 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 	for cursorHeap.Len() > 0 {
 		stream := heap.Pop(&cursorHeap).(*mergesetFileSetScanStream)
 		item := stream.current()
+		heapPops++
 		total++
 		if previous == nil || !bytes.Equal(previous, item) {
 			finishGroup()
@@ -415,9 +424,12 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 		}
 		if stream.advance(options.CursorDescending) {
 			heap.Push(&cursorHeap, stream)
+			heapInserts++
 		}
 	}
 	finishGroup()
+	summary.TableSearchHeapInserts = heapInserts
+	summary.TableSearchHeapPops = heapPops
 	summary.TableSearchOutputValues = total
 	summary.DeduplicatedOutputValues = unique
 	summary.DuplicateOutputValues = duplicates
