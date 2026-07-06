@@ -69,7 +69,20 @@ type mergesetItemPayloadSummary struct {
 	FirstItem     []byte
 	LastItem      []byte
 	Samples       [][]byte
+	FieldIndex    mergesetFieldIndexSummary
 	DecodePath    *DecodePathSummary
+}
+
+type mergesetFieldIndexSummary struct {
+	Detected                bool
+	MeasurementFieldKeys    map[string]string
+	TSIDToFieldValueCount   int
+	FieldToPIDCount         int
+	InvalidItems            int
+	MeasurementSamples      []string
+	FieldValueSamples       []string
+	FieldToPIDSamples       []string
+	DuplicateMeasurementKey int
 }
 
 type mergesetBlockHeader struct {
@@ -674,6 +687,7 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 			summary.FirstItem = append(summary.FirstItem[:0], decoded.FirstItem...)
 		}
 		summary.LastItem = append(summary.LastItem[:0], decoded.LastItem...)
+		observeMergesetFieldIndexItems(&summary.FieldIndex, decoded.Items, options.BlockSampleLimit)
 		if payloadSampleLimit > len(decoded.Samples) {
 			payloadSampleLimit = len(decoded.Samples)
 		}
@@ -1217,6 +1231,7 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 		}
 		report.Extra["item_payload_samples_hex"] = strings.Join(samples, ",")
 	}
+	addMergesetFieldIndexSummary(report, summary.FieldIndex)
 	if summary.ItemsDecoded != metadataItemsCount {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded item payload count=%d differs from metadata items_count=%d", summary.ItemsDecoded, metadataItemsCount))
 	}
@@ -1225,6 +1240,163 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 	}
 	if !bytes.Equal(summary.LastItem, metadataLastItem) {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded last item=%s differs from metadata last_item=%s", hex.EncodeToString(summary.LastItem), hex.EncodeToString(metadataLastItem)))
+	}
+}
+
+const (
+	opengeminiTSINSPrefixTSIDToField byte = 4
+	opengeminiTSINSFieldToPID        byte = 5
+	opengeminiTSINSMstToFieldKey     byte = 6
+	opengeminiTSINSSeparator         byte = 2
+	opengeminiTSIDToFieldItemSize         = 10
+)
+
+type mergesetFieldIndexItem struct {
+	Type        string
+	Measurement string
+	Field       string
+	TSID        uint64
+	FieldValue  string
+	PID         uint64
+}
+
+func observeMergesetFieldIndexItems(summary *mergesetFieldIndexSummary, items [][]byte, sampleLimit int) {
+	if summary.MeasurementFieldKeys == nil {
+		summary.MeasurementFieldKeys = map[string]string{}
+	}
+	for _, item := range items {
+		parsed, err := parseMergesetFieldIndexItem(item)
+		if err != nil {
+			if isMergesetFieldIndexPrefix(item) {
+				summary.Detected = true
+				summary.InvalidItems++
+			}
+			continue
+		}
+		summary.Detected = true
+		switch parsed.Type {
+		case "measurement-field-key":
+			if existing, ok := summary.MeasurementFieldKeys[parsed.Measurement]; ok && existing != parsed.Field {
+				summary.DuplicateMeasurementKey++
+			}
+			summary.MeasurementFieldKeys[parsed.Measurement] = parsed.Field
+			if sampleLimit > 0 && len(summary.MeasurementSamples) < sampleLimit {
+				summary.MeasurementSamples = append(summary.MeasurementSamples, parsed.Measurement+":"+parsed.Field)
+			}
+		case "tsid-field-value":
+			summary.TSIDToFieldValueCount++
+			if sampleLimit > 0 && len(summary.FieldValueSamples) < sampleLimit {
+				summary.FieldValueSamples = append(summary.FieldValueSamples, fmt.Sprintf("%d:%s", parsed.TSID, parsed.FieldValue))
+			}
+		case "field-pid":
+			summary.FieldToPIDCount++
+			if sampleLimit > 0 && len(summary.FieldToPIDSamples) < sampleLimit {
+				summary.FieldToPIDSamples = append(summary.FieldToPIDSamples, fmt.Sprintf("%d:%s->%d", parsed.TSID, parsed.FieldValue, parsed.PID))
+			}
+		}
+	}
+}
+
+func parseMergesetFieldIndexItem(item []byte) (mergesetFieldIndexItem, error) {
+	var parsed mergesetFieldIndexItem
+	if len(item) == 0 {
+		return parsed, fmt.Errorf("empty field index item")
+	}
+	switch item[0] {
+	case opengeminiTSINSMstToFieldKey:
+		if len(item) < 3 {
+			return parsed, fmt.Errorf("short measurement field-key item")
+		}
+		tail := item[1:]
+		measurementLen := int(binary.BigEndian.Uint16(tail[:2]))
+		tail = tail[2:]
+		if len(tail) < measurementLen+2 {
+			return parsed, fmt.Errorf("short measurement field-key payload")
+		}
+		parsed.Measurement = string(tail[:measurementLen])
+		tail = tail[measurementLen:]
+		fieldLen := int(binary.BigEndian.Uint16(tail[:2]))
+		tail = tail[2:]
+		if len(tail) != fieldLen {
+			return parsed, fmt.Errorf("field-key length=%d leaves %d bytes", fieldLen, len(tail))
+		}
+		parsed.Type = "measurement-field-key"
+		parsed.Field = string(tail)
+		return parsed, nil
+	case opengeminiTSINSFieldToPID:
+		if len(item) < 18 {
+			return parsed, fmt.Errorf("short field-to-pid item")
+		}
+		parsed.Type = "field-pid"
+		parsed.TSID = binary.BigEndian.Uint64(item[1:9])
+		tail := item[9:]
+		sep := len(tail) - 9
+		if sep < 0 || tail[sep] != opengeminiTSINSSeparator {
+			return parsed, fmt.Errorf("field-to-pid item missing separator")
+		}
+		pidBytes := tail[sep+1:]
+		parsed.FieldValue = string(tail[:sep])
+		parsed.PID = binary.BigEndian.Uint64(pidBytes)
+		return parsed, nil
+	case opengeminiTSINSPrefixTSIDToField:
+		if len(item) < opengeminiTSIDToFieldItemSize {
+			return parsed, fmt.Errorf("short tsid-to-field item")
+		}
+		parsed.Type = "tsid-field-value"
+		parsed.TSID = binary.BigEndian.Uint64(item[1:9])
+		tail := item[9:]
+		fieldLen := int(tail[0])
+		tail = tail[1:]
+		if len(tail) != fieldLen {
+			return parsed, fmt.Errorf("field value length=%d leaves %d bytes", fieldLen, len(tail))
+		}
+		parsed.FieldValue = string(tail)
+		return parsed, nil
+	default:
+		return parsed, fmt.Errorf("not an openGemini field index item")
+	}
+}
+
+func isMergesetFieldIndexPrefix(item []byte) bool {
+	if len(item) == 0 {
+		return false
+	}
+	switch item[0] {
+	case opengeminiTSINSPrefixTSIDToField, opengeminiTSINSFieldToPID, opengeminiTSINSMstToFieldKey:
+		return true
+	default:
+		return false
+	}
+}
+
+func addMergesetFieldIndexSummary(report *FileReport, summary mergesetFieldIndexSummary) {
+	if !summary.Detected {
+		return
+	}
+	report.Extra["opengemini_field_index_detected"] = "true"
+	report.Extra["opengemini_field_index_measurements"] = fmt.Sprint(len(summary.MeasurementFieldKeys))
+	report.Extra["opengemini_field_index_tsid_field_values"] = fmt.Sprint(summary.TSIDToFieldValueCount)
+	report.Extra["opengemini_field_index_field_pid_mappings"] = fmt.Sprint(summary.FieldToPIDCount)
+	report.Extra["opengemini_field_index_invalid_items"] = fmt.Sprint(summary.InvalidItems)
+	if len(summary.MeasurementSamples) > 0 {
+		report.Extra["opengemini_field_index_measurement_samples"] = strings.Join(summary.MeasurementSamples, ",")
+	}
+	if len(summary.FieldValueSamples) > 0 {
+		report.Extra["opengemini_field_index_value_samples"] = strings.Join(summary.FieldValueSamples, ",")
+	}
+	if len(summary.FieldToPIDSamples) > 0 {
+		report.Extra["opengemini_field_index_pid_samples"] = strings.Join(summary.FieldToPIDSamples, ",")
+	}
+	report.BlocksByType["opengemini-field-index-measurement"] = len(summary.MeasurementFieldKeys)
+	report.BlocksByType["opengemini-field-index-tsid-value"] = summary.TSIDToFieldValueCount
+	report.BlocksByType["opengemini-field-index-field-pid"] = summary.FieldToPIDCount
+	if summary.InvalidItems > 0 {
+		report.BlocksByType["opengemini-field-index-invalid-item"] = summary.InvalidItems
+		report.Notices = append(report.Notices, fmt.Sprintf("openGemini field index has %d invalid namespaced item(s)", summary.InvalidItems))
+	}
+	if summary.DuplicateMeasurementKey > 0 {
+		report.BlocksByType["opengemini-field-index-duplicate-measurement-key"] = summary.DuplicateMeasurementKey
+		report.Notices = append(report.Notices, fmt.Sprintf("openGemini field index has %d duplicate measurement field-key mapping(s)", summary.DuplicateMeasurementKey))
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1008,8 +1009,215 @@ func TestAnalyzeMergesetBadItemPayloadNotice(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetOpenGeminiFieldIndexItems(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiFieldIndexTSIDValue(42, "us-east"),
+		encodeTestOpenGeminiFieldIndexFieldPID(42, "us-east", 1001),
+		encodeTestOpenGeminiFieldIndexMeasurement("cpu", "region"),
+	}
+	partPath := filepath.Join(t.TempDir(), "3_1_fieldindex")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_field_index_detected"], "true"; got != want {
+		t.Fatalf("field index detected = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_measurements"], "1"; got != want {
+		t.Fatalf("field index measurements = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_tsid_field_values"], "1"; got != want {
+		t.Fatalf("field value count = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_field_pid_mappings"], "1"; got != want {
+		t.Fatalf("field pid count = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_measurement_samples"], "cpu:region"; got != want {
+		t.Fatalf("measurement samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_value_samples"], "42:us-east"; got != want {
+		t.Fatalf("field value samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_pid_samples"], "42:us-east->1001"; got != want {
+		t.Fatalf("pid samples = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-field-index-measurement"], 1; got != want {
+		t.Fatalf("field index measurement blocks = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-field-index-tsid-value"], 1; got != want {
+		t.Fatalf("field index value blocks = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-field-index-field-pid"], 1; got != want {
+		t.Fatalf("field index pid blocks = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiFieldIndexInvalidItem(t *testing.T) {
+	items := [][]byte{
+		{opengeminiTSINSMstToFieldKey, 0, 4, 'c'},
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_badfieldindex")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_field_index_invalid_items"], "1"; got != want {
+		t.Fatalf("invalid field index items = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-field-index-invalid-item"], 1; got != want {
+		t.Fatalf("invalid field index block count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "openGemini field index has 1 invalid") {
+		t.Fatalf("notices = %v, want invalid field index notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiFieldIndexPIDMayContainSeparatorByte(t *testing.T) {
+	pid := uint64(0x0202020202020202)
+	items := [][]byte{
+		encodeTestOpenGeminiFieldIndexFieldPID(42, "us-east", pid),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_fieldpid")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_field_index_field_pid_mappings"], "1"; got != want {
+		t.Fatalf("field pid mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_invalid_items"], "0"; got != want {
+		t.Fatalf("invalid field index items = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_pid_samples"], fmt.Sprintf("42:us-east->%d", pid); got != want {
+		t.Fatalf("pid samples = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiFieldIndexFieldValueMayContainSeparatorByte(t *testing.T) {
+	fieldValue := "us" + string([]byte{opengeminiTSINSSeparator}) + "east"
+	items := [][]byte{
+		encodeTestOpenGeminiFieldIndexFieldPID(42, fieldValue, 1001),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_fieldpidsep")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_field_index_field_pid_mappings"], "1"; got != want {
+		t.Fatalf("field pid mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_field_index_invalid_items"], "0"; got != want {
+		t.Fatalf("invalid field index items = %q, want %q", got, want)
+	}
+	if got := file.BlocksByType["opengemini-field-index-ambiguous-field-pid"]; got != 0 {
+		t.Fatalf("ambiguous field-pid count = %d, want 0", got)
+	}
+	if containsString(file.Notices, "separator bytes inside the field value") {
+		t.Fatalf("notices = %v, want no separator-in-field-value notice", file.Notices)
+	}
+}
+
 func writeTestMergesetPart(path string, metadata mergesetPartMetadata) error {
 	return writeTestMergesetPartWithMarshalTypes(path, metadata, nil)
+}
+
+func writeTestMergesetPartWithItems(path string, items [][]byte) error {
+	if len(items) == 0 {
+		return fmt.Errorf("test mergeset items cannot be empty")
+	}
+	for i := 1; i < len(items); i++ {
+		if bytes.Compare(items[i-1], items[i]) >= 0 {
+			return fmt.Errorf("test mergeset item %d is not sorted: %x >= %x", i, items[i-1], items[i])
+		}
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	metadata := mergesetPartMetadata{
+		ItemsCount:  uint64(len(items)),
+		BlocksCount: 1,
+		FirstItem:   hex.EncodeToString(items[0]),
+		LastItem:    hex.EncodeToString(items[len(items)-1]),
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetMetadataFile), data, 0o600); err != nil {
+		return err
+	}
+	itemsData, lensData, err := encodeTestMergesetBlockPayload(items, nil, mergesetMarshalTypePlain)
+	if err != nil {
+		return err
+	}
+	header := mergesetBlockHeader{
+		FirstItem:        append([]byte(nil), items[0]...),
+		MarshalType:      mergesetMarshalTypePlain,
+		ItemsCount:       uint32(len(items)),
+		ItemsBlockOffset: 0,
+		LensBlockOffset:  0,
+		ItemsBlockSize:   uint32(len(itemsData)),
+		LensBlockSize:    uint32(len(lensData)),
+	}
+	indexData, err := encodeTestMergesetIndexBlock([]mergesetBlockHeader{header})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetIndexFile), indexData, 0o600); err != nil {
+		return err
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         header.FirstItem,
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexData)),
+	}})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetMetaindexFile), metaindex, 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetItemsFile), itemsData, 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(path, mergesetLensFile), lensData, 0o600)
 }
 
 func writeTestMergesetPartWithMarshalTypes(path string, metadata mergesetPartMetadata, marshalTypes []byte) error {
@@ -1299,6 +1507,29 @@ func encodeTestZSTD(data []byte) ([]byte, error) {
 	return encoder.EncodeAll(data, nil), nil
 }
 
+func encodeTestOpenGeminiFieldIndexTSIDValue(tsid uint64, value string) []byte {
+	item := []byte{opengeminiTSINSPrefixTSIDToField}
+	item = appendTestBigEndianUint64(item, tsid)
+	item = append(item, byte(len(value)))
+	return append(item, value...)
+}
+
+func encodeTestOpenGeminiFieldIndexFieldPID(tsid uint64, value string, pid uint64) []byte {
+	item := []byte{opengeminiTSINSFieldToPID}
+	item = appendTestBigEndianUint64(item, tsid)
+	item = append(item, value...)
+	item = append(item, opengeminiTSINSSeparator)
+	return appendTestBigEndianUint64(item, pid)
+}
+
+func encodeTestOpenGeminiFieldIndexMeasurement(measurement, field string) []byte {
+	item := []byte{opengeminiTSINSMstToFieldKey}
+	item = appendTestBigEndianUint16(item, uint16(len(measurement)))
+	item = append(item, measurement...)
+	item = appendTestBigEndianUint16(item, uint16(len(field)))
+	return append(item, field...)
+}
+
 func containsString(values []string, needle string) bool {
 	for _, value := range values {
 		if strings.Contains(value, needle) {
@@ -1306,6 +1537,12 @@ func containsString(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func appendTestBigEndianUint16(dst []byte, value uint16) []byte {
+	var buf [2]byte
+	binary.BigEndian.PutUint16(buf[:], value)
+	return append(dst, buf[:]...)
 }
 
 func bytesOf(value byte, count int) []byte {
