@@ -220,6 +220,7 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			report.Extra["data_block_probe_value_blocks"] = fmt.Sprint(dataProbe.ValueBlocks)
 			report.Extra["data_block_probe_value_unknowns"] = fmt.Sprint(dataProbe.ValueUnknowns)
 			report.Extra["data_block_probe_null_values"] = fmt.Sprint(dataProbe.NullValues)
+			report.Extra["data_block_probe_record_samples"] = fmt.Sprint(dataProbe.RecordSamples)
 			if len(dataProbe.BlockTypes) > 0 {
 				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
 			}

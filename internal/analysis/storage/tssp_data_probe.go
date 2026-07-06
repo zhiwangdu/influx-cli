@@ -22,6 +22,7 @@ type tsspAttachedDataProbe struct {
 	ValueUnknowns       int
 	ValueUnknownReasons map[string]int
 	NullValues          int
+	RecordSamples       int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
 	chunkFailureReason  map[uint64]string
@@ -191,6 +192,12 @@ func (p *tsspAttachedDataProbe) chunkOutputPointsFor(chunk tsspChunkMeta) int {
 
 func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, queryRange TimeRange, sampleLimit int) {
 	if probe == nil || sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
+		return
+	}
+	var recordSamples int
+	probe.valueSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, queryRange, sampleLimit)
+	probe.RecordSamples += recordSamples
+	if len(probe.valueSamples) >= sampleLimit {
 		return
 	}
 	columnNames := sortedTSSPDataBlockColumns(blocks)

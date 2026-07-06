@@ -143,6 +143,7 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["data_block_probe_value_blocks"] = fmt.Sprint(dataProbe.ValueBlocks)
 			report.Extra["data_block_probe_value_unknowns"] = fmt.Sprint(dataProbe.ValueUnknowns)
 			report.Extra["data_block_probe_null_values"] = fmt.Sprint(dataProbe.NullValues)
+			report.Extra["data_block_probe_record_samples"] = fmt.Sprint(dataProbe.RecordSamples)
 			if len(dataProbe.BlockTypes) > 0 {
 				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
 			}
@@ -370,6 +371,7 @@ type tsspDetachedDataProbe struct {
 	ValueUnknowns       int
 	ValueUnknownReasons map[string]int
 	NullValues          int
+	RecordSamples       int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
 	chunkFailureReason  map[uint64]string
@@ -1939,6 +1941,12 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 	if probe == nil || sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
 		return
 	}
+	var recordSamples int
+	probe.valueSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "meta-index-id", chunk.SID, timeRange, blocks, queryRange, sampleLimit)
+	probe.RecordSamples += recordSamples
+	if len(probe.valueSamples) >= sampleLimit {
+		return
+	}
 	columnNames := sortedTSSPDataBlockColumns(blocks)
 	for _, columnName := range columnNames {
 		block := blocks[columnName]
@@ -1969,6 +1977,88 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 			}
 		}
 	}
+}
+
+func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefix string, id uint64, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, queryRange TimeRange, sampleLimit int) ([]DecodePathCursorOutput, int) {
+	if sampleLimit <= 0 || len(samples) >= sampleLimit {
+		return samples, 0
+	}
+	columnNames := tsspDataProbeRecordColumns(blocks)
+	if len(columnNames) < 2 {
+		return samples, 0
+	}
+	rows := 0
+	for _, columnName := range columnNames {
+		block := blocks[columnName]
+		if !block.RowsKnown || !block.ValueKnown {
+			return samples, 0
+		}
+		if rows == 0 {
+			rows = block.Rows
+		} else if rows != block.Rows {
+			return samples, 0
+		}
+		if !block.ValueNull && len(block.Values) != block.Rows {
+			return samples, 0
+		}
+	}
+	timestamps, ok := tsspDataBlockSampleTimes(timeRange, blocks, rows)
+	if !ok {
+		return samples, 0
+	}
+	recordSamples := 0
+	for row := 0; row < rows; row++ {
+		timestamp := timestamps[row]
+		if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
+			continue
+		}
+		fields := make([]string, 0, len(columnNames))
+		for _, columnName := range columnNames {
+			fields = append(fields, columnName+"="+tsspDataProbeRecordValue(blocks[columnName], row))
+		}
+		samples = append(samples, DecodePathCursorOutput{
+			Key:            fmt.Sprintf("%s:%d/record", keyPrefix, id),
+			Time:           timestamp,
+			Type:           "record",
+			OptimizedValue: strings.Join(fields, ","),
+			Matches:        true,
+		})
+		recordSamples++
+		if len(samples) >= sampleLimit {
+			return samples, recordSamples
+		}
+	}
+	return samples, recordSamples
+}
+
+func tsspDataProbeRecordColumns(blocks map[string]tsspDetachedDataBlockInfo) []string {
+	columnNames := sortedTSSPDataBlockColumns(blocks)
+	out := make([]string, 0, len(columnNames))
+	for _, columnName := range columnNames {
+		if columnName == "time" {
+			continue
+		}
+		block := blocks[columnName]
+		if block.RowsKnown && block.ValueKnown {
+			out = append(out, columnName)
+		}
+	}
+	return out
+}
+
+func tsspDataProbeRecordValue(block tsspDetachedDataBlockInfo, row int) string {
+	if block.ValueNull {
+		return "null"
+	}
+	if len(block.ValuePresent) > 0 {
+		if row >= len(block.ValuePresent) || !block.ValuePresent[row] {
+			return "null"
+		}
+	}
+	if row < 0 || row >= len(block.Values) {
+		return ""
+	}
+	return block.Values[row]
 }
 
 func tsspDataBlockSampleTimes(timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, rows int) ([]int64, bool) {
@@ -2108,6 +2198,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeValueBlocks = dataProbe.ValueBlocks
 		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
 		summary.DataBlockProbeNullValues = dataProbe.NullValues
+		summary.DataBlockProbeRecordSamples = dataProbe.RecordSamples
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -2425,10 +2516,21 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			summary.OptimizedValueOutputPoints,
 		))
 	}
-	if len(summary.CursorOutputSamples) > 0 {
+	if summary.DataBlockProbeRecordSamples > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"materialized %d detached TSSP record sample(s) from decoded column blocks",
+			summary.DataBlockProbeRecordSamples,
+		))
+	}
+	recordSamplesInOutput := summary.DataBlockProbeRecordSamples
+	if recordSamplesInOutput > len(summary.CursorOutputSamples) {
+		recordSamplesInOutput = len(summary.CursorOutputSamples)
+	}
+	valueSamples := len(summary.CursorOutputSamples) - recordSamplesInOutput
+	if valueSamples > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"sampled %d detached TSSP value output(s) from data blocks",
-			len(summary.CursorOutputSamples),
+			valueSamples,
 		))
 	}
 	if summary.DataBlockProbeFailures > 0 {

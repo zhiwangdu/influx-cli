@@ -460,6 +460,66 @@ func TestAnalyzeTSSPSamplesAttachedNullableRegularFloatBlocks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPMaterializesAttachedRecordSamples(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "3"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_blocks"], "3"; got != want {
+		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_record_samples"], "2"; got != want {
+		t.Fatalf("data block probe record samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "boolean-full:1,float-full:1,integer-full:1"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, len(times); got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordSamples, 2; got != want {
+		t.Fatalf("data block probe record samples = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 6; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "sid:7/record", Time: times[0], Type: "record", OptimizedValue: "status=true,value=1.25", Matches: true},
+		{Key: "sid:7/record", Time: times[1], Type: "record", OptimizedValue: "status=false,value=2.5", Matches: true},
+	} {
+		got := decode.CursorOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+		}
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "materialized 2 TSSP record sample") {
+		t.Fatalf("recommendations = %v, want record materialization recommendation", decode.Recommendations)
+	}
+}
+
 func TestInspectTSSPDataBlockPayloadNullableRegularFloat(t *testing.T) {
 	encoded, err := testTSSPFloatFullEncodedPayload([]float64{1.25, 3.75}, 0)
 	if err != nil {
@@ -2117,6 +2177,64 @@ func writeTestTSSPWithIntegerFullData(path string) error {
 	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+func writeTestTSSPWithMultiColumnRecordData(path string) ([]int64, error) {
+	times := []int64{333, 444}
+
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+
+	dataOffset := int64(buf.Len())
+	valueOffset := int64(buf.Len())
+	valueSize, err := writeTestTSSPAttachedFloatFullBlock(&buf, []float64{1.25, 2.5}, 0)
+	if err != nil {
+		return nil, err
+	}
+	statusOffset := int64(buf.Len())
+	statusSize := writeTestTSSPAttachedBooleanFullBlock(&buf, []bool{true, false})
+	timeOffset := int64(buf.Len())
+	timeSize := writeTestTSSPAttachedIntegerFullBlock(&buf, times)
+	dataSize := int64(valueSize + statusSize + timeSize)
+
+	payload := testTSSPMultiColumnChunkMetaPayload(7, times[0], times[1], []testTSSPColumnSpec{
+		{name: "value", typ: 1, offset: valueOffset, size: valueSize},
+		{name: "status", typ: 5, offset: statusOffset, size: statusSize},
+		{name: "time", typ: 0, offset: timeOffset, size: timeSize},
+	})
+	payloadOffset := int64(buf.Len())
+	buf.Write(payload)
+
+	metaOffset := int64(buf.Len())
+	writeTestTSSPMetaIndex(&buf, tsspMetaIndex{
+		ID:      7,
+		MinTime: times[0],
+		MaxTime: times[1],
+		Offset:  payloadOffset,
+		Count:   1,
+		Size:    uint32(len(payload)),
+	})
+
+	trailerOffset := int64(buf.Len())
+	writeTestTSSPTrailer(&buf, tsspTrailer{
+		DataOffset:         dataOffset,
+		DataSize:           dataSize,
+		IndexSize:          metaOffset - dataOffset - dataSize,
+		MetaIndexSize:      int64(buf.Len()) - metaOffset,
+		BloomSize:          0,
+		IDTimeSize:         0,
+		IDCount:            1,
+		MinID:              7,
+		MaxID:              7,
+		MinTime:            times[0],
+		MaxTime:            times[1],
+		MetaIndexItemCount: 1,
+		ChunkMetaCompress:  tsspChunkMetaCompressNone,
+		MeasurementName:    "cpu",
+	})
+	writeGeminiInt64(&buf, trailerOffset)
+	return times, os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
 func writeTestTSSPWithIntegerConstDeltaData(path string) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsspMagic)
@@ -3024,12 +3142,45 @@ type testTSSPChunkSpec struct {
 	timeSize uint32
 }
 
+type testTSSPColumnSpec struct {
+	name   string
+	typ    byte
+	offset int64
+	size   uint32
+}
+
 func testTSSPChunkMetaPayload(chunks ...testTSSPChunkSpec) []byte {
 	var data bytes.Buffer
 	var offsets bytes.Buffer
 	for _, chunk := range chunks {
 		writeUint32(&offsets, uint32(data.Len()))
 		writeTestTSSPChunkMeta(&data, chunk)
+	}
+	data.Write(offsets.Bytes())
+	return data.Bytes()
+}
+
+func testTSSPMultiColumnChunkMetaPayload(sid uint64, minTime, maxTime int64, columns []testTSSPColumnSpec) []byte {
+	var data bytes.Buffer
+	var offsets bytes.Buffer
+	writeUint32(&offsets, 0)
+	writeUint64(&data, sid)
+	chunkOffset := int64(0)
+	chunkSize := uint32(0)
+	if len(columns) > 0 {
+		chunkOffset = columns[0].offset
+	}
+	for _, column := range columns {
+		chunkSize += column.size
+	}
+	writeGeminiInt64(&data, chunkOffset)
+	writeUint32(&data, chunkSize)
+	writeUint32(&data, uint32(len(columns)))
+	writeUint32(&data, 1)
+	writeGeminiInt64(&data, minTime)
+	writeGeminiInt64(&data, maxTime)
+	for _, column := range columns {
+		writeTestTSSPColumnMeta(&data, column.name, column.typ, column.offset, column.size)
 	}
 	data.Write(offsets.Bytes())
 	return data.Bytes()

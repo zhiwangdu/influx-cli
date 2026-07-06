@@ -119,6 +119,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeValueBlocks = dataProbe.ValueBlocks
 		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
 		summary.DataBlockProbeNullValues = dataProbe.NullValues
+		summary.DataBlockProbeRecordSamples = dataProbe.RecordSamples
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -263,6 +264,7 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeValueBlocks += src.DataBlockProbeValueBlocks
 	dst.DataBlockProbeValueUnknowns += src.DataBlockProbeValueUnknowns
 	dst.DataBlockProbeNullValues += src.DataBlockProbeNullValues
+	dst.DataBlockProbeRecordSamples += src.DataBlockProbeRecordSamples
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
 	dst.IteratorCostBytes += src.IteratorCostBytes
@@ -521,10 +523,21 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			summary.OptimizedValueOutputPoints,
 		))
 	}
-	if len(summary.CursorOutputSamples) > 0 {
+	if summary.DataBlockProbeRecordSamples > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"materialized %d TSSP record sample(s) from decoded column blocks",
+			summary.DataBlockProbeRecordSamples,
+		))
+	}
+	recordSamplesInOutput := summary.DataBlockProbeRecordSamples
+	if recordSamplesInOutput > len(summary.CursorOutputSamples) {
+		recordSamplesInOutput = len(summary.CursorOutputSamples)
+	}
+	valueSamples := len(summary.CursorOutputSamples) - recordSamplesInOutput
+	if valueSamples > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"sampled %d TSSP value output(s) from data blocks",
-			len(summary.CursorOutputSamples),
+			valueSamples,
 		))
 	}
 	if summary.DataBlockProbeFailures > 0 {
