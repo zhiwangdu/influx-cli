@@ -963,12 +963,13 @@ func parseMergesetVarUint64s(src []byte, count int) ([]uint64, []byte, error) {
 }
 
 type mergesetSearchPlan struct {
-	QueryKeys       []string
-	CandidateBlocks map[int]struct{}
-	MatchedKeys     map[string]struct{}
-	SeekResults     map[string]mergesetSeekResult
-	SampleLimit     int
-	DecodePath      *DecodePathSummary
+	QueryKeys           []string
+	CandidateBlocks     map[int]struct{}
+	CandidateBlockByKey map[string]int
+	MatchedKeys         map[string]struct{}
+	SeekResults         map[string]mergesetSeekResult
+	SampleLimit         int
+	DecodePath          *DecodePathSummary
 }
 
 type mergesetScanPlan struct {
@@ -983,6 +984,7 @@ func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options, first
 	}
 	plan.QueryKeys = append([]string(nil), options.QueryKeys...)
 	plan.CandidateBlocks = map[int]struct{}{}
+	plan.CandidateBlockByKey = map[string]int{}
 	plan.MatchedKeys = map[string]struct{}{}
 	plan.SeekResults = map[string]mergesetSeekResult{}
 	plan.SampleLimit = options.BlockSampleLimit
@@ -1012,6 +1014,7 @@ func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options, first
 		}
 		if idx >= 0 {
 			plan.CandidateBlocks[idx] = struct{}{}
+			plan.CandidateBlockByKey[key] = idx
 		}
 	}
 	plan.DecodePath = &DecodePathSummary{
@@ -1171,13 +1174,15 @@ func (p *mergesetSearchPlan) ObserveDecodedBlock(index int, decoded mergesetDeco
 		return
 	}
 	for _, key := range p.QueryKeys {
+		candidateBlock, ok := p.CandidateBlockByKey[key]
+		if !ok || candidateBlock != index {
+			continue
+		}
 		result, ok := decoded.SeekResults[key]
 		if !ok {
 			continue
 		}
-		if _, exists := p.SeekResults[key]; !exists {
-			p.SeekResults[key] = result
-		}
+		p.SeekResults[key] = result
 		if !result.Matches {
 			if len(p.DecodePath.CursorOutputSamples) < p.SampleLimit {
 				p.DecodePath.CursorOutputSamples = append(p.DecodePath.CursorOutputSamples, DecodePathCursorOutput{

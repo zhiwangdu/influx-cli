@@ -63,8 +63,8 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	summary.TableSearchHeapPops = heapPops
 	summary.TableSearchOutputValues = len(tableSeekResults)
 	summary.TableSearchExactMisses = len(summary.MissingKeys)
-	populateMergesetFileSetCursorWindows(summary, matchedKeyFiles, options)
-	populateMergesetFileSetCursorOutputSamples(summary, tableSeekResults, options)
+	populateMergesetFileSetCursorWindows(summary, tableSeekResults, matchedKeyFiles, options)
+	populateMergesetFileSetCursorOutputSamples(summary, tableSeekResults, matchedKeyFiles, options)
 	populateMergesetFileSetFinalSearchOutputSamples(summary, tableSeekResults, matchedKeyFiles, options)
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
@@ -231,14 +231,23 @@ func appendMergesetFileScanWindows(dst, src *DecodePathSummary, path string, sam
 	}
 }
 
-func populateMergesetFileSetCursorWindows(summary *DecodePathSummary, matchedKeyFiles map[string][]string, options Options) {
-	summary.CursorWindowCount = len(matchedKeyFiles)
+func populateMergesetFileSetCursorWindows(summary *DecodePathSummary, tableSeekResults map[string]mergesetSeekResult, matchedKeyFiles map[string][]string, options Options) {
+	summary.CursorWindowCount = len(tableSeekResults)
 	for _, key := range options.QueryKeys {
-		files := matchedKeyFiles[key]
-		if len(files) == 0 {
+		result, ok := tableSeekResults[key]
+		if !ok {
 			continue
 		}
-		if len(files) > 1 {
+		files := uniqueStringsPreserveOrder(matchedKeyFiles[key])
+		reason := "item_search_exact_match"
+		if !result.Matches {
+			files = []string{result.File}
+			reason = "item_search_exact_miss"
+		} else if len(files) == 0 && result.File != "" {
+			files = []string{result.File}
+		}
+		requiresMerge := result.Matches && len(files) > 1
+		if requiresMerge {
 			summary.MergeWindowCount++
 			summary.MergeWindowBlocks += len(files)
 			summary.MergeWindowKeys++
@@ -251,12 +260,13 @@ func populateMergesetFileSetCursorWindows(summary *DecodePathSummary, matchedKey
 			Files:          append([]string(nil), files...),
 			LocationBlocks: len(files),
 			DecodedBlocks:  len(files),
-			RequiresMerge:  len(files) > 1,
+			RequiresMerge:  requiresMerge,
+			Reason:         reason,
 		})
 	}
 }
 
-func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tableSeekResults map[string]mergesetSeekResult, options Options) {
+func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tableSeekResults map[string]mergesetSeekResult, matchedKeyFiles map[string][]string, options Options) {
 	if options.BlockSampleLimit <= 0 {
 		return
 	}
@@ -268,13 +278,21 @@ func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tabl
 		if !ok {
 			continue
 		}
-		summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
+		files := uniqueStringsPreserveOrder(matchedKeyFiles[key])
+		requiresDedup := result.Matches && len(files) > 1
+		output := DecodePathCursorOutput{
 			Key:            key,
 			Type:           "mergeset-table-search-item",
 			File:           result.File,
 			OptimizedValue: string(result.Item),
 			Matches:        result.Matches,
-		})
+			RequiresDedup:  requiresDedup,
+			RequiresMerge:  requiresDedup,
+		}
+		if requiresDedup {
+			output.MergeFiles = newDecodePathStringList(files)
+		}
+		summary.CursorOutputSamples = append(summary.CursorOutputSamples, output)
 	}
 }
 
@@ -653,6 +671,9 @@ func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Op
 	if summary.TableSearchHeapCandidates > summary.TableSearchOutputValues {
 		recommendations = append(recommendations, fmt.Sprintf("table search heap compares %d part candidate item(s) for %d table output seek(s)", summary.TableSearchHeapCandidates, summary.TableSearchOutputValues))
 	}
+	if exactMissWindows := countMergesetExactMissCursorWindows(summary.CursorWindows); exactMissWindows > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("recorded %d exact-miss TableSearch seek window(s) with nearest local item candidates", exactMissWindows))
+	}
 	if len(summary.CursorFinalOutputSamples) > 0 {
 		recommendations = append(recommendations, "final item-search output samples show deduplicated exact TableSearch results")
 	}
@@ -663,6 +684,16 @@ func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Op
 		recommendations = append(recommendations, "all query item keys mapped to decoded mergeset block candidates")
 	}
 	return recommendations
+}
+
+func countMergesetExactMissCursorWindows(windows []DecodePathCursorWindow) int {
+	count := 0
+	for _, window := range windows {
+		if window.Reason == "item_search_exact_miss" {
+			count++
+		}
+	}
+	return count
 }
 
 func countMergesetMatchedItemFiles(matchedKeyFiles map[string][]string) int {
