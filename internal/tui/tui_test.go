@@ -385,6 +385,7 @@ func TestWatchIntervalCanBeAdjustedInCommandMode(t *testing.T) {
 func TestViewIncludesResultAndWatchContext(t *testing.T) {
 	model := newTestModel(&fakeAdapter{})
 	model.lastResult = seriesResult()
+	model.lastQuery = "select value from cpu"
 	model.lastRefresh = time.Date(2026, 7, 6, 12, 30, 0, 0, time.UTC)
 	model.watch = true
 	model.rerender()
@@ -397,6 +398,9 @@ func TestViewIncludesResultAndWatchContext(t *testing.T) {
 		"series 1",
 		"watch: on 5s",
 		"format: table",
+		"precision: rfc3339",
+		"query: select value from cpu",
+		"controls: S toggle, L refresh",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view does not contain %q:\n%s", want, view)

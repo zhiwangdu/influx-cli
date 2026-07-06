@@ -163,7 +163,9 @@ func (m Model) contextPanel(width int) string {
 		"db: " + printValue(snapshot.Database),
 		"rp: " + printValue(snapshot.RP),
 		"adapter: " + printValue(snapshot.AdapterName),
+		"precision: " + printValue(snapshot.Precision),
 		"measurement: " + printValue(m.schemaMeasurement),
+		"query: " + printValue(m.querySummary()),
 		"format: " + printValue(m.renderMode),
 		"result: " + printValue(m.resultSummary()),
 		"latency: " + formatDuration(snapshot.LastLatency),
@@ -172,7 +174,11 @@ func (m Model) contextPanel(width int) string {
 	if timeRange := m.resultTimeRange(); timeRange != "" {
 		lines = append(lines, "time: "+timeRange)
 	}
+	if m.lastErr != nil {
+		lines = append(lines, "last error: "+oneLine(m.lastErr.Error()))
+	}
 	lines = append(lines, m.schemaLines()...)
+	lines = append(lines, "controls: S toggle, L refresh")
 	return strings.Join(fitLines(lines, width), "\n")
 }
 
@@ -212,7 +218,7 @@ func (m Model) schemaLines() []string {
 }
 
 func (m Model) footerView(width int) string {
-	footer := string(m.mode) + " | Ctrl+J run | Ctrl+C cancel/quit | Ctrl+L clear | Ctrl+R history | Tab complete | Esc mode | Enter/V result | 0 auto | 1 table | 2 spark | 3 chart | 4 json | R refresh | +/- interval | S schema | L schema refresh | W watch | F fullscreen | Q quit"
+	footer := string(m.mode) + " | Ctrl+J run | Ctrl+C cancel/quit | Ctrl+L clear | Ctrl+R history | Tab complete | Esc mode | Enter/V result | 0 auto | 1 table | 2 spark | 3 chart | 4 json | R refresh | +/- interval | S context | L schema refresh | W watch | F fullscreen | Q quit"
 	footer = truncateRunes(footer, width)
 	if !m.renderOptions.Color {
 		return footer
@@ -319,6 +325,14 @@ func (m Model) resultSummary() string {
 		parts = append(parts, fmt.Sprintf("series %d", seriesCount))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func (m Model) querySummary() string {
+	query := strings.TrimSpace(m.lastQuery)
+	if query == "" {
+		return ""
+	}
+	return oneLine(query)
 }
 
 func (m Model) resultTimeRange() string {

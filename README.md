@@ -15,6 +15,7 @@ The formal documents are the source of truth:
 | [Product Design](docs/PRODUCT_DESIGN.md) | Product positioning, users, workflows, TUI/CLI behavior, MVP boundaries |
 | [Architecture](docs/ARCHITECTURE.md) | Go package structure, core interfaces, data flow, adapter/render/analyzer design |
 | [Roadmap](docs/ROADMAP.md) | Delivery phases, scope, acceptance criteria, risks |
+| [Phase 2 TUI Iteration Plan](docs/PHASE2_TUI_ITERATION_PLAN.md) | Detailed TUI iteration route, scope boundaries, and acceptance criteria |
 
 Legacy drafts are kept under [docs/legacy](docs/legacy/) for historical context only. Do not use them for future decisions unless explicitly needed.
 
@@ -49,6 +50,40 @@ influx-cli repl
 influx-cli tui
 influx-cli config show
 ```
+
+## TUI Usage
+
+Start the terminal UI with:
+
+```bash
+influx-cli tui
+```
+
+The TUI provides a query editor, result workbench, context panel, selectable completion menu, searchable history panel, and watch refresh loop.
+
+Key bindings:
+
+Single-letter shortcuts apply in command/result modes. In edit mode, printable keys are inserted into the query editor.
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+J` / `Ctrl+Enter` | Run the current query |
+| `Ctrl+C` | Cancel a running query; press again to quit while cancellation is pending |
+| `Ctrl+L` | Clear the query editor |
+| `Ctrl+R` | Open searchable query history |
+| `Tab` | Open completion candidates |
+| `Esc` | Switch edit/command modes or close overlays |
+| `Enter` / `V` | Enter result mode from command mode |
+| `0` / `1` / `2` / `3` / `4` | Switch auto/table/sparkline/chart/json rendering |
+| `R` | Refresh the current editor query, falling back to the last query |
+| `+` / `-` | Adjust watch interval |
+| `S` | Toggle context panel |
+| `L` | Refresh schema for the current measurement |
+| `W` | Toggle watch refresh |
+| `F` | Toggle fullscreen result view |
+| `Q` | Quit |
+
+Watch mode never starts a second query while one is still running. A failed watch refresh keeps the last successful result visible and reports the last error in status/context.
 
 Implemented Dataset Generator surface:
 
