@@ -94,7 +94,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 					chunkFailureReason = "segment_overlap_data_read_unavailable"
 					continue
 				}
-				blockInfo, ok, reason := inspectTSSPDataBlockPayload(block)
+				blockInfo, ok, reason := inspectTSSPDataBlockPayloadForColumn(block, column.Name)
 				if !ok {
 					chunkAvailable = false
 					segmentAvailable = false

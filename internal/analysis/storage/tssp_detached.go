@@ -523,7 +523,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 					chunkFailureReason = "segment_overlap_data_read_unavailable"
 					continue
 				}
-				blockInfo, ok, reason := inspectTSSPDetachedDataBlock(block)
+				blockInfo, ok, reason := inspectTSSPDetachedDataBlockForColumn(block, column.Name)
 				if !ok {
 					chunkAvailable = false
 					segmentAvailable = false
@@ -606,6 +606,10 @@ type tsspDetachedDataBlockInfo struct {
 }
 
 func inspectTSSPDetachedDataBlock(block []byte) (tsspDetachedDataBlockInfo, bool, string) {
+	return inspectTSSPDetachedDataBlockForColumn(block, "")
+}
+
+func inspectTSSPDetachedDataBlockForColumn(block []byte, columnName string) (tsspDetachedDataBlockInfo, bool, string) {
 	if len(block) < crc32.Size+1 {
 		return tsspDetachedDataBlockInfo{}, false, "segment_overlap_data_header_unavailable"
 	}
@@ -614,10 +618,14 @@ func inspectTSSPDetachedDataBlock(block []byte) (tsspDetachedDataBlockInfo, bool
 	if gotCRC := crc32.ChecksumIEEE(payload); gotCRC != wantCRC {
 		return tsspDetachedDataBlockInfo{}, false, "segment_overlap_data_crc_unavailable"
 	}
-	return inspectTSSPDataBlockPayload(payload)
+	return inspectTSSPDataBlockPayloadForColumn(payload, columnName)
 }
 
 func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, bool, string) {
+	return inspectTSSPDataBlockPayloadForColumn(payload, "")
+}
+
+func inspectTSSPDataBlockPayloadForColumn(payload []byte, columnName string) (tsspDetachedDataBlockInfo, bool, string) {
 	var info tsspDetachedDataBlockInfo
 	if len(payload) < 1 {
 		return info, false, "segment_overlap_data_header_unavailable"
@@ -685,8 +693,53 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 		if !validTSSPRegularDataBlockHeader(payload) {
 			return info, false, "segment_overlap_data_header_unavailable"
 		}
+		if rows, values, ok := decodeTSSPRegularDataBlockValues(payload, columnName); ok {
+			info.Rows = rows
+			info.RowsKnown = true
+			info.Values = values
+			if len(values) > 0 {
+				info.Value = values[0]
+			}
+			info.ValueKnown = true
+		}
 	}
 	return info, true, ""
+}
+
+func decodeTSSPRegularDataBlockValues(payload []byte, columnName string) (int, []string, bool) {
+	if len(payload) < 13 {
+		return 0, nil, false
+	}
+	nilBitmapLen := int(binary.BigEndian.Uint32(payload[1:5]))
+	headerLen := 1 + 4 + nilBitmapLen + 4 + 4
+	if nilBitmapLen < 0 || headerLen > len(payload) {
+		return 0, nil, false
+	}
+	nilCount := int(binary.BigEndian.Uint32(payload[1+4+nilBitmapLen+4 : headerLen]))
+	if nilCount != 0 {
+		return 0, nil, false
+	}
+	encoded := payload[headerLen:]
+	switch payload[0] {
+	case 1:
+		if columnName == "time" {
+			values, ok := decodeTSSPTimestampValues(encoded)
+			return len(values), values, ok
+		}
+		values, ok := decodeTSSPIntegerValues(encoded)
+		return len(values), values, ok
+	case 3:
+		values, ok := decodeTSSPFloatValues(encoded)
+		return len(values), values, ok
+	case 4:
+		values, ok := decodeTSSPStringValues(encoded)
+		return len(values), values, ok
+	case 5:
+		values, ok := decodeTSSPBooleanValues(encoded)
+		return len(values), values, ok
+	default:
+		return 0, nil, false
+	}
 }
 
 func tsspDataBlockValueUnknownReason(blockType byte, encoded []byte) string {
@@ -739,6 +792,324 @@ func decodeTSSPDetachedOneBlockValue(payload []byte) (string, bool) {
 		return string(value), true
 	default:
 		return "", false
+	}
+}
+
+func decodeTSSPTimestampValues(encoded []byte) ([]string, bool) {
+	if len(encoded) < 1 {
+		return nil, false
+	}
+	switch encoded[0] >> 4 {
+	case 1:
+		return decodeTSSPTimestampConstDeltaValues(encoded[1:])
+	case 2:
+		return decodeTSSPTimestampSimple8bValues(encoded[1:])
+	case 3:
+		return decodeTSSPTimestampSnappyValues(encoded[1:])
+	case 4:
+		return decodeTSSPTimestampUncompressedValues(encoded[1:])
+	default:
+		return nil, false
+	}
+}
+
+func decodeTSSPTimestampConstDeltaValues(encoded []byte) ([]string, bool) {
+	if len(encoded) < 8 {
+		return nil, false
+	}
+	first := int64(binary.BigEndian.Uint64(encoded[:8]))
+	encoded = encoded[8:]
+	delta, n := binary.Uvarint(encoded)
+	if n <= 0 {
+		return nil, false
+	}
+	encoded = encoded[n:]
+	deltaCount, n := binary.Uvarint(encoded)
+	if n <= 0 {
+		return nil, false
+	}
+	values := make([]string, int(deltaCount)+1)
+	value := first
+	step := int64(delta)
+	for i := range values {
+		values[i] = strconv.FormatInt(value, 10)
+		value += step
+	}
+	return values, true
+}
+
+func decodeTSSPTimestampSimple8bValues(encoded []byte) ([]string, bool) {
+	if len(encoded) < 16 {
+		return nil, false
+	}
+	scale := binary.BigEndian.Uint64(encoded[:8])
+	encodedCount := int(binary.BigEndian.Uint32(encoded[8:12]))
+	sourceCount := int(binary.BigEndian.Uint32(encoded[12:16]))
+	encoded = encoded[16:]
+	if sourceCount <= 0 || encodedCount < 1 || len(encoded) < encodedCount*8 {
+		return nil, false
+	}
+	encoded = encoded[:encodedCount*8]
+	values := make([]string, sourceCount)
+	value := binary.BigEndian.Uint64(encoded[:8])
+	values[0] = strconv.FormatInt(int64(value), 10)
+	if sourceCount == 1 {
+		if encodedCount != 1 {
+			return nil, false
+		}
+		return values, true
+	}
+	deltas, err := decodeSimple8bValues(encoded[8:])
+	if err != nil || len(deltas) < sourceCount-1 {
+		return nil, false
+	}
+	for i := 1; i < sourceCount; i++ {
+		value += deltas[i-1] * scale
+		values[i] = strconv.FormatInt(int64(value), 10)
+	}
+	return values, true
+}
+
+func decodeTSSPTimestampSnappyValues(encoded []byte) ([]string, bool) {
+	if len(encoded) < 8 {
+		return nil, false
+	}
+	sourceLen := int(binary.BigEndian.Uint32(encoded[:4]))
+	compressedLen := int(binary.BigEndian.Uint32(encoded[4:8]))
+	encoded = encoded[8:]
+	if sourceLen%8 != 0 || compressedLen < 0 || len(encoded) < compressedLen {
+		return nil, false
+	}
+	raw, err := ksnappy.Decode(nil, encoded[:compressedLen])
+	if err != nil || len(raw) != sourceLen {
+		return nil, false
+	}
+	return formatTSSPBigEndianInt64Values(raw)
+}
+
+func decodeTSSPTimestampUncompressedValues(encoded []byte) ([]string, bool) {
+	if len(encoded) < 4 {
+		return nil, false
+	}
+	sourceLen := int(binary.BigEndian.Uint32(encoded[:4]))
+	encoded = encoded[4:]
+	if sourceLen%8 != 0 || len(encoded) < sourceLen {
+		return nil, false
+	}
+	return formatTSSPBigEndianInt64Values(encoded[:sourceLen])
+}
+
+func formatTSSPBigEndianInt64Values(raw []byte) ([]string, bool) {
+	if len(raw)%8 != 0 {
+		return nil, false
+	}
+	values := make([]string, 0, len(raw)/8)
+	for offset := 0; offset < len(raw); offset += 8 {
+		values = append(values, strconv.FormatInt(int64(binary.BigEndian.Uint64(raw[offset:offset+8])), 10))
+	}
+	return values, true
+}
+
+func decodeTSSPIntegerValues(encoded []byte) ([]string, bool) {
+	rows, ok := tsspIntegerEncodedRows(encoded)
+	if !ok {
+		return nil, false
+	}
+	return decodeTSSPIntegerFullValues(encoded, rows)
+}
+
+func tsspIntegerEncodedRows(encoded []byte) (int, bool) {
+	if len(encoded) < 1 {
+		return 0, false
+	}
+	switch encoded[0] >> 4 {
+	case 1:
+		if len(encoded) < 10 {
+			return 0, false
+		}
+		rest := encoded[9:]
+		_, n := binary.Uvarint(rest)
+		if n <= 0 {
+			return 0, false
+		}
+		rest = rest[n:]
+		deltaCount, n := binary.Uvarint(rest)
+		if n <= 0 {
+			return 0, false
+		}
+		return int(deltaCount) + 1, true
+	case 2:
+		if len(encoded) < 9 {
+			return 0, false
+		}
+		return int(binary.BigEndian.Uint32(encoded[5:9])), true
+	case 3, 4:
+		if len(encoded) < 5 {
+			return 0, false
+		}
+		sourceLen := int(binary.BigEndian.Uint32(encoded[1:5]))
+		if sourceLen%8 != 0 {
+			return 0, false
+		}
+		return sourceLen / 8, true
+	default:
+		return 0, false
+	}
+}
+
+func decodeTSSPFloatValues(encoded []byte) ([]string, bool) {
+	rows, ok := tsspFloatEncodedRows(encoded)
+	if !ok {
+		return nil, false
+	}
+	return decodeTSSPFloatFullValues(encoded, rows)
+}
+
+func tsspFloatEncodedRows(encoded []byte) (int, bool) {
+	if len(encoded) < 1 {
+		return 0, false
+	}
+	switch encoded[0] >> 4 {
+	case 0:
+		if (len(encoded)-1)%8 != 0 {
+			return 0, false
+		}
+		return (len(encoded) - 1) / 8, true
+	case 1:
+		if len(encoded) < 5 {
+			return 0, false
+		}
+		return int(binary.BigEndian.Uint32(encoded[1:5])), true
+	case 2:
+		raw, err := gsnappy.Decode(nil, encoded[1:])
+		if err != nil || len(raw)%8 != 0 {
+			return 0, false
+		}
+		return len(raw) / 8, true
+	case 3:
+		values, err := decodeTSMFloatValues(encoded[1:])
+		if err != nil {
+			return 0, false
+		}
+		return len(values), true
+	case 4:
+		if len(encoded) < 3 {
+			return 0, false
+		}
+		return int(binary.BigEndian.Uint16(encoded[1:3])), true
+	case 5:
+		values, ok := decodeTSSPFloatRLEValues(encoded[1:])
+		return len(values), ok
+	case 6:
+		if len(encoded) < 3 {
+			return 0, false
+		}
+		return int(binary.BigEndian.Uint16(encoded[1:3])), true
+	default:
+		return 0, false
+	}
+}
+
+func decodeTSSPFloatRLEValues(encoded []byte) ([]float64, bool) {
+	values := make([]float64, 0)
+	for len(encoded) > 0 {
+		if len(encoded) < 2 {
+			return nil, false
+		}
+		countBits := binary.BigEndian.Uint16(encoded[:2])
+		encoded = encoded[2:]
+		zero := countBits>>15 == 1
+		count := int(countBits &^ (uint16(1) << 15))
+		if count == 0 {
+			return nil, false
+		}
+		value := 0.0
+		if !zero {
+			if len(encoded) < 8 {
+				return nil, false
+			}
+			value = math.Float64frombits(binary.LittleEndian.Uint64(encoded[:8]))
+			encoded = encoded[8:]
+		}
+		for i := 0; i < count; i++ {
+			values = append(values, value)
+		}
+	}
+	return values, true
+}
+
+func decodeTSSPBooleanValues(encoded []byte) ([]string, bool) {
+	if len(encoded) < 5 {
+		return nil, false
+	}
+	rows := int(binary.BigEndian.Uint32(encoded[1:5]))
+	return decodeTSSPBooleanFullBitpackValues(encoded, rows)
+}
+
+func decodeTSSPStringValues(encoded []byte) ([]string, bool) {
+	raw, ok := decodeTSSPStringRawValues(encoded)
+	if !ok {
+		return nil, false
+	}
+	rows, ok := tsspPackedStringRows(raw)
+	if !ok {
+		return nil, false
+	}
+	return decodeTSSPPackedStringValues(raw, rows)
+}
+
+func decodeTSSPStringRawValues(encoded []byte) ([]byte, bool) {
+	if len(encoded) < 9 {
+		return nil, false
+	}
+	codec := encoded[0] >> 4
+	sourceLen := int(binary.BigEndian.Uint32(encoded[1:5]))
+	compressedLen := int(binary.BigEndian.Uint32(encoded[5:9]))
+	if sourceLen < 0 || compressedLen < 0 || len(encoded)-9 < compressedLen {
+		return nil, false
+	}
+	compressed := encoded[9 : 9+compressedLen]
+	switch codec {
+	case 0:
+		if sourceLen != compressedLen {
+			return nil, false
+		}
+		return compressed, true
+	case 1:
+		raw, err := ksnappy.Decode(nil, compressed)
+		return raw, err == nil && len(raw) == sourceLen
+	case 2:
+		decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return nil, false
+		}
+		defer decoder.Close()
+		raw, err := decoder.DecodeAll(compressed, make([]byte, 0, sourceLen))
+		return raw, err == nil && len(raw) == sourceLen
+	case 3:
+		raw := make([]byte, sourceLen)
+		n, err := lz4.UncompressBlock(compressed, raw)
+		return raw[:n], err == nil && n == sourceLen
+	default:
+		return nil, false
+	}
+}
+
+func tsspPackedStringRows(src []byte) (int, bool) {
+	if len(src) < 8 {
+		return 0, false
+	}
+	version := binary.BigEndian.Uint32(src[:4])
+	switch {
+	case version == tsspStringEncodingV2:
+		if len(src) < 12 {
+			return 0, false
+		}
+		return int(binary.BigEndian.Uint32(src[8:12])), true
+	case version == tsspStringEncodingV1 || version < tsspStringEncodingEnd:
+		return int(binary.BigEndian.Uint32(src[4:8])), true
+	default:
+		return 0, false
 	}
 }
 
