@@ -272,6 +272,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeOpenGeminiMeta(path, info, options)
 	case FormatOpenGeminiPKMeta:
 		return analyzeOpenGeminiPKMeta(path, info, options)
+	case FormatOpenGeminiPKIndex:
+		return analyzeOpenGeminiPKIndex(path, info, options)
 	default:
 		return FileReport{}, fmt.Errorf("unsupported storage format %q", format)
 	}
@@ -329,6 +331,9 @@ func detectFormat(path string) (Format, error) {
 	if n >= len(fieldsIndexMagicNumber) && string(header[:len(fieldsIndexMagicNumber)]) == string(fieldsIndexMagicNumber) {
 		return FormatFieldsIndex, nil
 	}
+	if n >= len(opengeminiPKMagic) && string(header[:len(opengeminiPKMagic)]) == opengeminiPKMagic {
+		return FormatOpenGeminiPKIndex, nil
+	}
 	if n < 5 {
 		return "", fmt.Errorf("file too small to detect storage format")
 	}
@@ -360,8 +365,10 @@ func isStorageCandidate(path string, format Format) bool {
 		return isOpenGeminiMetaPath(path)
 	case FormatOpenGeminiPKMeta:
 		return isOpenGeminiPKMetaPath(path)
+	case FormatOpenGeminiPKIndex:
+		return isOpenGeminiPKIndexCandidatePath(path)
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path)
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path) || isOpenGeminiPKIndexCandidatePath(path)
 	}
 }
 
@@ -377,6 +384,16 @@ func isOpenGeminiMetaPath(path string) bool {
 
 func isOpenGeminiPKMetaPath(path string) bool {
 	return strings.EqualFold(filepath.Base(path), opengeminiPKMetaFileName)
+}
+
+func isOpenGeminiPKIndexCandidatePath(path string) bool {
+	lower := strings.ToLower(filepath.Base(path))
+	switch lower {
+	case opengeminiPKMetaFileName, opengeminiPKDataFileName, tsspDetachedMetaIndexFileName, fieldsIndexFileName:
+		return false
+	default:
+		return strings.HasSuffix(lower, ".idx")
+	}
 }
 
 func isTSILogPath(path string) bool {

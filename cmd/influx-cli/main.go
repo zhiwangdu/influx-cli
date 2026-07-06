@@ -300,7 +300,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, wal, tssp, tssp-metaindex, tsi, tsi-log, series-file, fields-index, mergeset, opengemini-meta, opengemini-pk-meta")
+	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, wal, tssp, tssp-metaindex, tsi, tsi-log, series-file, fields-index, mergeset, opengemini-meta, opengemini-pk-meta, opengemini-pk-index")
 	analyzeCommand.Flags().BoolVar(&analyzeFlags.recursive, "recursive", false, "walk directories recursively")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")

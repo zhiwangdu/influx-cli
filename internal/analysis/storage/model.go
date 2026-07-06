@@ -23,6 +23,7 @@ const (
 	FormatMergeset          Format = "mergeset"
 	FormatOpenGeminiMeta    Format = "opengemini-meta"
 	FormatOpenGeminiPKMeta  Format = "opengemini-pk-meta"
+	FormatOpenGeminiPKIndex Format = "opengemini-pk-index"
 )
 
 type Options struct {
@@ -117,6 +118,7 @@ type PrimaryKeySummary struct {
 	MetaBlockCount          int                      `json:"meta_block_count"`
 	RowCount                uint64                   `json:"row_count"`
 	DataSizeBytes           int64                    `json:"data_size_bytes"`
+	DataInline              bool                     `json:"data_inline"`
 	DataFilePresent         bool                     `json:"data_file_present"`
 	DataFileSizeBytes       int64                    `json:"data_file_size_bytes"`
 	CRCMismatches           int                      `json:"crc_mismatches"`
@@ -134,8 +136,11 @@ type PrimaryKeySummary struct {
 }
 
 type PrimaryKeyColumnReport struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	DataOffset      int64  `json:"data_offset,omitempty"`
+	DataSizeBytes   int64  `json:"data_size_bytes,omitempty"`
+	DataOutOfBounds bool   `json:"data_out_of_bounds,omitempty"`
 }
 
 type FieldIndexSummary struct {
