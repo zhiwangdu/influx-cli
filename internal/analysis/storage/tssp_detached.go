@@ -146,6 +146,11 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			if len(dataProbe.BlockTypes) > 0 {
 				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
 			}
+			if len(dataProbe.ValueUnknownReasons) > 0 {
+				reasonSummary := tsspDetachedDataProbeTypeSummary(dataProbe.ValueUnknownReasons)
+				report.Extra["data_block_probe_value_unknown_reasons"] = reasonSummary
+				report.Notices = append(report.Notices, fmt.Sprintf("detached data block probe found %d block(s) with unavailable value samples: %s", dataProbe.ValueUnknowns, reasonSummary))
+			}
 			if dataProbe.Failures() > 0 {
 				report.Notices = append(report.Notices, fmt.Sprintf(
 					"detached data block probe found %d invalid block(s), including %d crc mismatch(es)",
@@ -349,26 +354,27 @@ type tsspDetachedDataValidation struct {
 }
 
 type tsspDetachedDataProbe struct {
-	Checked            bool
-	BlocksChecked      int
-	ValidBlocks        int
-	BytesRead          int64
-	CRCMismatches      int
-	ShortBlocks        int
-	UnknownBlockTypes  int
-	ReadErrors         int
-	RowCountBlocks     int
-	RowCountUnknowns   int
-	RowCountMismatches int
-	OutputPoints       int
-	ValueBlocks        int
-	ValueUnknowns      int
-	NullValues         int
-	BlockTypes         map[string]int
-	chunkAvailable     map[uint64]bool
-	chunkFailureReason map[uint64]string
-	chunkOutputPoints  map[uint64]int
-	valueSamples       []DecodePathCursorOutput
+	Checked             bool
+	BlocksChecked       int
+	ValidBlocks         int
+	BytesRead           int64
+	CRCMismatches       int
+	ShortBlocks         int
+	UnknownBlockTypes   int
+	ReadErrors          int
+	RowCountBlocks      int
+	RowCountUnknowns    int
+	RowCountMismatches  int
+	OutputPoints        int
+	ValueBlocks         int
+	ValueUnknowns       int
+	ValueUnknownReasons map[string]int
+	NullValues          int
+	BlockTypes          map[string]int
+	chunkAvailable      map[uint64]bool
+	chunkFailureReason  map[uint64]string
+	chunkOutputPoints   map[uint64]int
+	valueSamples        []DecodePathCursorOutput
 }
 
 func (p *tsspDetachedDataProbe) Failures() int {
@@ -463,11 +469,12 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 	}
 
 	probe := &tsspDetachedDataProbe{
-		Checked:            true,
-		BlockTypes:         map[string]int{},
-		chunkAvailable:     map[uint64]bool{},
-		chunkFailureReason: map[uint64]string{},
-		chunkOutputPoints:  map[uint64]int{},
+		Checked:             true,
+		ValueUnknownReasons: map[string]int{},
+		BlockTypes:          map[string]int{},
+		chunkAvailable:      map[uint64]bool{},
+		chunkFailureReason:  map[uint64]string{},
+		chunkOutputPoints:   map[uint64]int{},
 	}
 	idSet := queryMetaIndexIDSet(options.QueryMetaIndexIDs)
 	for _, chunk := range chunks {
@@ -542,6 +549,12 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 					}
 				} else {
 					probe.ValueUnknowns++
+					if blockInfo.ValueReason != "" {
+						probe.ValueUnknownReasons[blockInfo.ValueReason]++
+						chunkAvailable = false
+						segmentAvailable = false
+						chunkFailureReason = "segment_overlap_data_value_unavailable"
+					}
 				}
 				if !blockInfo.RowsKnown {
 					probe.RowCountUnknowns++
@@ -582,13 +595,14 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 }
 
 type tsspDetachedDataBlockInfo struct {
-	Type       string
-	Rows       int
-	RowsKnown  bool
-	Value      string
-	Values     []string
-	ValueKnown bool
-	ValueNull  bool
+	Type        string
+	Rows        int
+	RowsKnown   bool
+	Value       string
+	Values      []string
+	ValueKnown  bool
+	ValueReason string
+	ValueNull   bool
 }
 
 func inspectTSSPDetachedDataBlock(block []byte) (tsspDetachedDataBlockInfo, bool, string) {
@@ -664,12 +678,37 @@ func inspectTSSPDataBlockPayload(payload []byte) (tsspDetachedDataBlockInfo, boo
 				info.ValueKnown = true
 			}
 		}
+		if !info.ValueKnown && !info.ValueNull {
+			info.ValueReason = tsspDataBlockValueUnknownReason(payload[0], payload[5:])
+		}
 	default:
 		if !validTSSPRegularDataBlockHeader(payload) {
 			return info, false, "segment_overlap_data_header_unavailable"
 		}
 	}
 	return info, true, ""
+}
+
+func tsspDataBlockValueUnknownReason(blockType byte, encoded []byte) string {
+	if len(encoded) == 0 {
+		return ""
+	}
+	codec := encoded[0] >> 4
+	if codec == 0 {
+		return ""
+	}
+	switch blockType {
+	case 31:
+		return fmt.Sprintf("float-full-codec-%d", codec)
+	case 32:
+		return fmt.Sprintf("integer-full-codec-%d", codec)
+	case 33:
+		return fmt.Sprintf("boolean-full-codec-%d", codec)
+	case 34:
+		return fmt.Sprintf("string-full-codec-%d", codec)
+	default:
+		return "value-codec-unavailable"
+	}
 }
 
 func decodeTSSPDetachedOneBlockValue(payload []byte) (string, bool) {

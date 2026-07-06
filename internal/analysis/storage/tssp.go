@@ -223,6 +223,11 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			if len(dataProbe.BlockTypes) > 0 {
 				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
 			}
+			if len(dataProbe.ValueUnknownReasons) > 0 {
+				reasonSummary := tsspDetachedDataProbeTypeSummary(dataProbe.ValueUnknownReasons)
+				report.Extra["data_block_probe_value_unknown_reasons"] = reasonSummary
+				report.Notices = append(report.Notices, fmt.Sprintf("TSSP data block probe found %d block(s) with unavailable value samples: %s", dataProbe.ValueUnknowns, reasonSummary))
+			}
 			if dataProbe.Failures() > 0 {
 				report.Notices = append(report.Notices, fmt.Sprintf("TSSP data block probe found %d invalid block(s)", dataProbe.Failures()))
 			}

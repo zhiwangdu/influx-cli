@@ -343,6 +343,93 @@ func TestAnalyzeTSSPSamplesAttachedFloatFullBlocks(t *testing.T) {
 	}
 }
 
+func TestInspectTSSPDataBlockPayloadFloatFullUnsupportedCodecReason(t *testing.T) {
+	var payload bytes.Buffer
+	payload.WriteByte(31) // openGemini encoding.BlockFloatFull.
+	writeUint32(&payload, 2)
+	payload.WriteByte(6 << 4) // openGemini floatCompressMLF.
+
+	info, ok, reason := inspectTSSPDataBlockPayload(payload.Bytes())
+	if !ok {
+		t.Fatalf("inspect ok = false, reason = %q", reason)
+	}
+	if got, want := info.Type, "float-full"; got != want {
+		t.Fatalf("type = %q, want %q", got, want)
+	}
+	if got, want := info.Rows, 2; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	if !info.RowsKnown {
+		t.Fatal("expected rows to be known")
+	}
+	if info.ValueKnown {
+		t.Fatal("expected unsupported codec value to be unknown")
+	}
+	if got, want := info.ValueReason, "float-full-codec-6"; got != want {
+		t.Fatalf("value reason = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSSPSamplesAttachedFloatFullUnsupportedCodecReason(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithUnsupportedFloatFullCodec(path, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: len(times) + 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_blocks"], "1"; got != want {
+		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_unknowns"], "1"; got != want {
+		t.Fatalf("data block probe value unknowns = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_unknown_reasons"], "float-full-codec-6:1"; got != want {
+		t.Fatalf("data block probe value unknown reasons = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "float-full:1,integer-full:1"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
+	}
+	if notices := strings.Join(file.Notices, "\n"); !strings.Contains(notices, "unavailable value samples: float-full-codec-6:1") {
+		t.Fatalf("notices = %v, want unavailable value sample reason", file.Notices)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.DataBlockProbeValueBlocks, 1; got != want {
+		t.Fatalf("decode data block probe value blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeValueUnknowns, 1; got != want {
+		t.Fatalf("decode data block probe value unknowns = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 1; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 0; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+}
+
 func TestAnalyzeTSSPSamplesAttachedIntegerFullUncompressedBlocks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSPWithIntegerFullData(path); err != nil {
@@ -1547,6 +1634,62 @@ func writeTestTSSPWithFloatFullValues(path string, values []float64, codec byte)
 	return times, os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+func writeTestTSSPWithUnsupportedFloatFullCodec(path string, codec byte) ([]int64, error) {
+	times := []int64{333, 444}
+
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+
+	dataOffset := int64(buf.Len())
+	valueOffset := int64(buf.Len())
+	valueSize := writeTestTSSPAttachedUnsupportedFloatFullBlock(&buf, len(times), codec)
+	timeSize := writeTestTSSPAttachedIntegerFullBlock(&buf, times)
+	dataSize := int64(valueSize + timeSize)
+	chunk := testTSSPChunkSpec{
+		sid:      7,
+		minTime:  times[0],
+		maxTime:  times[len(times)-1],
+		offset:   valueOffset,
+		size:     valueSize,
+		timeSize: timeSize,
+	}
+
+	payload := testTSSPChunkMetaPayload(chunk)
+	payloadOffset := int64(buf.Len())
+	buf.Write(payload)
+
+	metaOffset := int64(buf.Len())
+	writeTestTSSPMetaIndex(&buf, tsspMetaIndex{
+		ID:      7,
+		MinTime: times[0],
+		MaxTime: times[len(times)-1],
+		Offset:  payloadOffset,
+		Count:   1,
+		Size:    uint32(len(payload)),
+	})
+
+	trailerOffset := int64(buf.Len())
+	writeTestTSSPTrailer(&buf, tsspTrailer{
+		DataOffset:         dataOffset,
+		DataSize:           dataSize,
+		IndexSize:          metaOffset - dataOffset - dataSize,
+		MetaIndexSize:      int64(buf.Len()) - metaOffset,
+		BloomSize:          0,
+		IDTimeSize:         0,
+		IDCount:            1,
+		MinID:              7,
+		MaxID:              7,
+		MinTime:            times[0],
+		MaxTime:            times[len(times)-1],
+		MetaIndexItemCount: 1,
+		ChunkMetaCompress:  tsspChunkMetaCompressNone,
+		MeasurementName:    "cpu",
+	})
+	writeGeminiInt64(&buf, trailerOffset)
+	return times, os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
 func writeTestTSSPWithIntegerFullData(path string) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsspMagic)
@@ -1902,6 +2045,14 @@ func writeTestTSSPAttachedFloatFullBlock(buf *bytes.Buffer, values []float64, co
 	writeUint32(buf, uint32(len(values)))
 	buf.Write(encoded)
 	return uint32(buf.Len() - start), nil
+}
+
+func writeTestTSSPAttachedUnsupportedFloatFullBlock(buf *bytes.Buffer, rows int, codec byte) uint32 {
+	start := buf.Len()
+	buf.WriteByte(31) // openGemini encoding.BlockFloatFull.
+	writeUint32(buf, uint32(rows))
+	buf.WriteByte(codec << 4)
+	return uint32(buf.Len() - start)
 }
 
 func testTSSPFloatFullPayload(values []float64, codec byte) ([]byte, error) {

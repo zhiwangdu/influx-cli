@@ -7,25 +7,26 @@ import (
 )
 
 type tsspAttachedDataProbe struct {
-	Checked            bool
-	BlocksChecked      int
-	ValidBlocks        int
-	BytesRead          int64
-	ShortBlocks        int
-	UnknownBlockTypes  int
-	ReadErrors         int
-	RowCountBlocks     int
-	RowCountUnknowns   int
-	RowCountMismatches int
-	OutputPoints       int
-	ValueBlocks        int
-	ValueUnknowns      int
-	NullValues         int
-	BlockTypes         map[string]int
-	chunkAvailable     map[uint64]bool
-	chunkFailureReason map[uint64]string
-	chunkOutputPoints  map[uint64]int
-	valueSamples       []DecodePathCursorOutput
+	Checked             bool
+	BlocksChecked       int
+	ValidBlocks         int
+	BytesRead           int64
+	ShortBlocks         int
+	UnknownBlockTypes   int
+	ReadErrors          int
+	RowCountBlocks      int
+	RowCountUnknowns    int
+	RowCountMismatches  int
+	OutputPoints        int
+	ValueBlocks         int
+	ValueUnknowns       int
+	ValueUnknownReasons map[string]int
+	NullValues          int
+	BlockTypes          map[string]int
+	chunkAvailable      map[uint64]bool
+	chunkFailureReason  map[uint64]string
+	chunkOutputPoints   map[uint64]int
+	valueSamples        []DecodePathCursorOutput
 }
 
 func (p *tsspAttachedDataProbe) Failures() int {
@@ -44,11 +45,12 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 	}
 
 	probe := &tsspAttachedDataProbe{
-		Checked:            true,
-		BlockTypes:         map[string]int{},
-		chunkAvailable:     map[uint64]bool{},
-		chunkFailureReason: map[uint64]string{},
-		chunkOutputPoints:  map[uint64]int{},
+		Checked:             true,
+		ValueUnknownReasons: map[string]int{},
+		BlockTypes:          map[string]int{},
+		chunkAvailable:      map[uint64]bool{},
+		chunkFailureReason:  map[uint64]string{},
+		chunkOutputPoints:   map[uint64]int{},
 	}
 	seriesSet := querySeriesIDSet(options.QuerySeriesIDs)
 	for _, chunk := range chunks {
@@ -116,6 +118,12 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 					}
 				} else {
 					probe.ValueUnknowns++
+					if blockInfo.ValueReason != "" {
+						probe.ValueUnknownReasons[blockInfo.ValueReason]++
+						chunkAvailable = false
+						segmentAvailable = false
+						chunkFailureReason = "segment_overlap_data_value_unavailable"
+					}
 				}
 				if !blockInfo.RowsKnown {
 					probe.RowCountUnknowns++
