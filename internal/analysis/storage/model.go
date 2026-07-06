@@ -19,6 +19,7 @@ const (
 	FormatTSI               Format = "tsi"
 	FormatTSILog            Format = "tsi-log"
 	FormatSeriesFile        Format = "series-file"
+	FormatFieldsIndex       Format = "fields-index"
 	FormatMergeset          Format = "mergeset"
 	FormatOpenGeminiMeta    Format = "opengemini-meta"
 )
@@ -100,8 +101,32 @@ type FileReport struct {
 	SeriesID           SeriesIDSummary    `json:"series_id,omitempty"`
 	MetaIndexID        SeriesIDSummary    `json:"meta_index_id,omitempty"`
 	Index              *IndexSummary      `json:"index,omitempty"`
+	Fields             *FieldIndexSummary `json:"fields,omitempty"`
 	Extra              map[string]string  `json:"extra,omitempty"`
 	Notices            []string           `json:"notices,omitempty"`
+}
+
+type FieldIndexSummary struct {
+	Type               string                        `json:"type,omitempty"`
+	MeasurementCount   int                           `json:"measurement_count,omitempty"`
+	FieldCount         int                           `json:"field_count,omitempty"`
+	FieldsByType       map[string]int                `json:"fields_by_type,omitempty"`
+	ChangeSetCount     int                           `json:"change_set_count,omitempty"`
+	ChangeCount        int                           `json:"change_count,omitempty"`
+	AddFieldChanges    int                           `json:"add_field_changes,omitempty"`
+	DeleteMeasurements int                           `json:"delete_measurements,omitempty"`
+	MeasurementSamples []FieldIndexMeasurementReport `json:"measurement_samples,omitempty"`
+}
+
+type FieldIndexMeasurementReport struct {
+	Name       string                  `json:"name"`
+	FieldCount int                     `json:"field_count"`
+	Fields     []FieldIndexFieldReport `json:"fields,omitempty"`
+}
+
+type FieldIndexFieldReport struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 type SeriesIDSummary struct {

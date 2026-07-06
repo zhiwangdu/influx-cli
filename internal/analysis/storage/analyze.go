@@ -264,6 +264,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeTSILog(path, info, options)
 	case FormatSeriesFile:
 		return analyzeSeriesFile(path, info, options)
+	case FormatFieldsIndex:
+		return analyzeFieldsIndex(path, info, options)
 	case FormatMergeset:
 		return analyzeMergesetPart(path, info, options)
 	case FormatOpenGeminiMeta:
@@ -288,6 +290,9 @@ func detectFormat(path string) (Format, error) {
 	}
 	if isSeriesFilePath(path) {
 		return FormatSeriesFile, nil
+	}
+	if isFieldsIndexPath(path) {
+		return FormatFieldsIndex, nil
 	}
 
 	f, err := os.Open(path)
@@ -316,6 +321,9 @@ func detectFormat(path string) (Format, error) {
 	if n >= seriesSegmentHeaderSize && string(header[:len(seriesSegmentMagic)]) == seriesSegmentMagic && header[len(seriesSegmentMagic)] == seriesSegmentVersion {
 		return FormatSeriesFile, nil
 	}
+	if n >= len(fieldsIndexMagicNumber) && string(header[:len(fieldsIndexMagicNumber)]) == string(fieldsIndexMagicNumber) {
+		return FormatFieldsIndex, nil
+	}
 	if n < 5 {
 		return "", fmt.Errorf("file too small to detect storage format")
 	}
@@ -339,12 +347,14 @@ func isStorageCandidate(path string, format Format) bool {
 		return isTSILogPath(path)
 	case FormatSeriesFile:
 		return isSeriesFilePath(path)
+	case FormatFieldsIndex:
+		return isFieldsIndexPath(path)
 	case FormatMergeset:
 		return isMergesetPartPath(path)
 	case FormatOpenGeminiMeta:
 		return isOpenGeminiMetaPath(path)
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path)
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path)
 	}
 }
 
