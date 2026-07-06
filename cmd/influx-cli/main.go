@@ -182,7 +182,10 @@ type ingestCommandFlags struct {
 	rate        string
 	duration    string
 	start       string
+	tick        string
 	batchSize   int
+	pointCount  int
+	seriesCount int
 	hosts       int
 	pids        int
 	ratio       float64
@@ -192,12 +195,15 @@ type ingestCommandFlags struct {
 
 func newIngestCommand(flags *globalFlags) *cobra.Command {
 	ingestFlags := &ingestCommandFlags{
-		rate:      "100/s",
-		duration:  "1m",
-		batchSize: 5000,
-		hosts:     10,
-		pids:      1000,
-		ratio:     0.1,
+		rate:        "100/s",
+		duration:    "1m",
+		tick:        "10s",
+		batchSize:   5000,
+		pointCount:  100,
+		seriesCount: 100000,
+		hosts:       10,
+		pids:        1000,
+		ratio:       0.1,
 	}
 	command := &cobra.Command{
 		Use:   "ingest <dataset>",
@@ -219,6 +225,10 @@ func newIngestCommand(flags *globalFlags) *cobra.Command {
 			duration, err := time.ParseDuration(ingestFlags.duration)
 			if err != nil {
 				return fmt.Errorf("parse duration %q: %w", ingestFlags.duration, err)
+			}
+			tick, err := time.ParseDuration(ingestFlags.tick)
+			if err != nil {
+				return fmt.Errorf("parse tick %q: %w", ingestFlags.tick, err)
 			}
 			start, err := parseIngestStart(ingestFlags.start)
 			if err != nil {
@@ -243,7 +253,10 @@ func newIngestCommand(flags *globalFlags) *cobra.Command {
 				Precision:       effective.Precision,
 				RatePerSecond:   ratePerSecond,
 				Duration:        duration,
+				Tick:            tick,
 				BatchSize:       ingestFlags.batchSize,
+				PointCount:      ingestFlags.pointCount,
+				SeriesCount:     ingestFlags.seriesCount,
 				Hosts:           ingestFlags.hosts,
 				PIDs:            ingestFlags.pids,
 				Ratio:           ingestFlags.ratio,
@@ -265,7 +278,10 @@ func newIngestCommand(flags *globalFlags) *cobra.Command {
 	command.Flags().StringVar(&ingestFlags.rate, "rate", ingestFlags.rate, "points per simulated second, for example 100/s or 10k/s")
 	command.Flags().StringVar(&ingestFlags.duration, "duration", ingestFlags.duration, "simulated time range to generate")
 	command.Flags().StringVar(&ingestFlags.start, "start", "", "simulated range start time in RFC3339 or RFC3339Nano")
+	command.Flags().StringVar(&ingestFlags.tick, "tick", ingestFlags.tick, "timestamp step between stress-basic point groups")
 	command.Flags().IntVar(&ingestFlags.batchSize, "batch-size", ingestFlags.batchSize, fmt.Sprintf("line protocol rows per write request (max %d)", ingest.MaxBatchSize))
+	command.Flags().IntVar(&ingestFlags.pointCount, "point-count", ingestFlags.pointCount, "number of timestamp groups for stress-basic")
+	command.Flags().IntVar(&ingestFlags.seriesCount, "series-count", ingestFlags.seriesCount, "number of generated series for stress-basic")
 	command.Flags().IntVar(&ingestFlags.hosts, "hosts", ingestFlags.hosts, "number of host tag values")
 	command.Flags().IntVar(&ingestFlags.pids, "pids", ingestFlags.pids, "number of pid tag values for high-cardinality data")
 	command.Flags().Float64Var(&ingestFlags.ratio, "ratio", ingestFlags.ratio, "out-of-order row ratio from 0 to 1")
@@ -373,11 +389,22 @@ func printIngestSummary(w io.Writer, summary ingest.Summary, dryRun bool) {
 	fmt.Fprintf(w, "retention_policy: %s\n", printableSummaryValue(summary.RetentionPolicy))
 	fmt.Fprintf(w, "measurement: %s\n", summary.Measurement)
 	fmt.Fprintf(w, "precision: %s\n", summary.Precision)
-	fmt.Fprintf(w, "rate: %d/s\n", summary.RatePerSecond)
+	if summary.Dataset != ingest.DatasetStressBasic {
+		fmt.Fprintf(w, "rate: %d/s\n", summary.RatePerSecond)
+	}
 	fmt.Fprintf(w, "duration: %s\n", summary.Duration)
+	if summary.Dataset == ingest.DatasetStressBasic {
+		fmt.Fprintf(w, "point_count: %d\n", summary.PointCount)
+		fmt.Fprintf(w, "series_count: %d\n", summary.SeriesCount)
+		fmt.Fprintf(w, "tick: %s\n", summary.Tick)
+	}
 	fmt.Fprintf(w, "points: %d\n", summary.WrittenPoints)
 	fmt.Fprintf(w, "batches: %d\n", summary.Batches)
 	fmt.Fprintf(w, "simulated_range: %s to %s\n", summary.StartedAt.Format(time.RFC3339Nano), summary.EndedAt.Format(time.RFC3339Nano))
+	if summary.Dataset == ingest.DatasetStressBasic && !summary.DataStartedAt.IsZero() && !summary.DataEndedAt.IsZero() &&
+		(!summary.DataStartedAt.Equal(summary.StartedAt) || !summary.DataEndedAt.Equal(summary.EndedAt)) {
+		fmt.Fprintf(w, "data_range: %s to %s\n", summary.DataStartedAt.Format(time.RFC3339Nano), summary.DataEndedAt.Format(time.RFC3339Nano))
+	}
 	fmt.Fprintf(w, "elapsed: %s\n", summary.Elapsed.Truncate(time.Millisecond))
 }
 

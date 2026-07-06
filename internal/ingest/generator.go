@@ -21,16 +21,21 @@ const (
 	DatasetHighCardinality Dataset = "high-cardinality"
 	DatasetOutOfOrder      Dataset = "out-of-order"
 	DatasetCoveringBlock   Dataset = "covering-block"
+	DatasetStressBasic     Dataset = "stress-basic"
 )
 
 const (
 	defaultRatePerSecond = 100
 	defaultDuration      = time.Minute
 	defaultBatchSize     = 5000
+	defaultPointCount    = 100
+	defaultSeriesCount   = 100000
+	defaultTick          = 10 * time.Second
 	defaultHosts         = 10
 	defaultPIDs          = 1000
 	defaultPrecision     = "ns"
 	MaxBatchSize         = 100000
+	maxInt64             = int64(1<<63 - 1)
 )
 
 type Options struct {
@@ -41,6 +46,9 @@ type Options struct {
 	RatePerSecond   int
 	Duration        time.Duration
 	BatchSize       int
+	PointCount      int
+	SeriesCount     int
+	Tick            time.Duration
 	Hosts           int
 	PIDs            int
 	Ratio           float64
@@ -56,11 +64,16 @@ type Summary struct {
 	Measurement     string
 	RatePerSecond   int
 	Duration        time.Duration
+	PointCount      int
+	SeriesCount     int
+	Tick            time.Duration
 	RequestedPoints int64
 	WrittenPoints   int64
 	Batches         int
 	StartedAt       time.Time
 	EndedAt         time.Time
+	DataStartedAt   time.Time
+	DataEndedAt     time.Time
 	Elapsed         time.Duration
 }
 
@@ -86,13 +99,14 @@ func Datasets() []Dataset {
 		DatasetHighCardinality,
 		DatasetOutOfOrder,
 		DatasetCoveringBlock,
+		DatasetStressBasic,
 	}
 }
 
 func ParseDataset(raw string) (Dataset, error) {
 	normalized := Dataset(strings.ToLower(strings.TrimSpace(raw)))
 	switch normalized {
-	case DatasetDemoCPU, DatasetHighCardinality, DatasetOutOfOrder, DatasetCoveringBlock:
+	case DatasetDemoCPU, DatasetHighCardinality, DatasetOutOfOrder, DatasetCoveringBlock, DatasetStressBasic:
 		return normalized, nil
 	default:
 		return "", fmt.Errorf("unknown dataset %q; supported datasets: %s", raw, datasetList())
@@ -209,6 +223,15 @@ func newPlan(options Options, now time.Time) (plan, error) {
 	if options.BatchSize == 0 {
 		options.BatchSize = defaultBatchSize
 	}
+	if options.PointCount == 0 {
+		options.PointCount = defaultPointCount
+	}
+	if options.SeriesCount == 0 {
+		options.SeriesCount = defaultSeriesCount
+	}
+	if options.Tick == 0 {
+		options.Tick = defaultTick
+	}
 	if options.Hosts == 0 {
 		options.Hosts = defaultHosts
 	}
@@ -236,6 +259,15 @@ func newPlan(options Options, now time.Time) (plan, error) {
 	if options.BatchSize > MaxBatchSize {
 		return plan{}, fmt.Errorf("batch size must be less than or equal to %d", MaxBatchSize)
 	}
+	if options.PointCount < 1 {
+		return plan{}, errors.New("point count must be greater than zero")
+	}
+	if options.SeriesCount < 1 {
+		return plan{}, errors.New("series count must be greater than zero")
+	}
+	if options.Tick <= 0 {
+		return plan{}, errors.New("tick must be greater than zero")
+	}
 	if options.Hosts < 1 {
 		return plan{}, errors.New("hosts must be greater than zero")
 	}
@@ -246,18 +278,15 @@ func newPlan(options Options, now time.Time) (plan, error) {
 		return plan{}, errors.New("ratio must be between 0 and 1")
 	}
 
-	total := int64(math.Ceil(float64(options.RatePerSecond) * options.Duration.Seconds()))
-	if total < 1 {
-		total = 1
+	total, duration, interval, err := planCardinality(dataset, options)
+	if err != nil {
+		return plan{}, err
 	}
-	interval := options.Duration / time.Duration(total)
-	if interval <= 0 {
-		interval = time.Nanosecond
-	}
+	options.Duration = duration
 
 	startedAt := options.Start
 	if startedAt.IsZero() {
-		startedAt = now.Add(-options.Duration)
+		startedAt = now.Add(-duration)
 	}
 	return plan{
 		options:     options,
@@ -265,13 +294,38 @@ func newPlan(options Options, now time.Time) (plan, error) {
 		total:       total,
 		interval:    interval,
 		startedAt:   startedAt.UTC(),
-		endedAt:     startedAt.Add(options.Duration).UTC(),
+		endedAt:     startedAt.Add(duration).UTC(),
 		measurement: options.Measurement,
 		precision:   precision,
 	}, nil
 }
 
+func planCardinality(dataset Dataset, options Options) (total int64, duration time.Duration, interval time.Duration, err error) {
+	if dataset == DatasetStressBasic {
+		if int64(options.PointCount) > maxInt64/int64(options.SeriesCount) {
+			return 0, 0, 0, errors.New("point count and series count produce too many points")
+		}
+		if int64(options.Tick) > maxInt64/int64(options.PointCount) {
+			return 0, 0, 0, errors.New("point count and tick produce an unsupported duration")
+		}
+		total = int64(options.PointCount) * int64(options.SeriesCount)
+		duration = time.Duration(options.PointCount) * options.Tick
+		return total, duration, options.Tick, nil
+	}
+
+	total = int64(math.Ceil(float64(options.RatePerSecond) * options.Duration.Seconds()))
+	if total < 1 {
+		total = 1
+	}
+	interval = options.Duration / time.Duration(total)
+	if interval <= 0 {
+		interval = time.Nanosecond
+	}
+	return total, options.Duration, interval, nil
+}
+
 func (p plan) summary() Summary {
+	dataStartedAt, dataEndedAt := p.dataRange()
 	return Summary{
 		Dataset:         p.dataset,
 		Database:        p.options.Database,
@@ -280,9 +334,23 @@ func (p plan) summary() Summary {
 		Measurement:     p.measurement,
 		RatePerSecond:   p.options.RatePerSecond,
 		Duration:        p.options.Duration,
+		PointCount:      p.options.PointCount,
+		SeriesCount:     p.options.SeriesCount,
+		Tick:            p.options.Tick,
 		RequestedPoints: p.total,
 		StartedAt:       p.startedAt,
 		EndedAt:         p.endedAt,
+		DataStartedAt:   dataStartedAt,
+		DataEndedAt:     dataEndedAt,
+	}
+}
+
+func (p plan) dataRange() (time.Time, time.Time) {
+	switch p.dataset {
+	case DatasetStressBasic:
+		return p.startedAt.Add(p.interval).UTC(), p.endedAt
+	default:
+		return p.startedAt, p.endedAt
 	}
 }
 
@@ -296,6 +364,8 @@ func (p plan) line(i int64) string {
 		return p.outOfOrderLine(i)
 	case DatasetCoveringBlock:
 		return p.coveringBlockLine(i)
+	case DatasetStressBasic:
+		return p.stressBasicLine(i)
 	default:
 		return ""
 	}
@@ -376,6 +446,21 @@ func (p plan) coveringBlockLine(i int64) string {
 			{key: "usage_idle", value: value},
 		},
 		p.timestampAt(timestampIndex),
+	)
+}
+
+func (p plan) stressBasicLine(i int64) string {
+	seriesIndex := i % int64(p.options.SeriesCount)
+	pointIndex := i / int64(p.options.SeriesCount)
+	return formatLine(p.measurement,
+		[]pair{
+			{key: "host", value: fmt.Sprintf("server-%d", seriesIndex)},
+			{key: "location", value: "us-west"},
+		},
+		[]field{
+			{key: "value", value: float64((i * 37) % 1000)},
+		},
+		p.timestampAt(pointIndex+1),
 	)
 }
 
@@ -535,6 +620,8 @@ func defaultMeasurement(dataset Dataset) string {
 		return "out_of_order_cpu"
 	case DatasetCoveringBlock:
 		return "covering_block_cpu"
+	case DatasetStressBasic:
+		return "cpu"
 	default:
 		return "generated"
 	}

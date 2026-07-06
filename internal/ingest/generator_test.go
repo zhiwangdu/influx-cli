@@ -68,6 +68,49 @@ func TestRunBatchesHighCardinalityDataset(t *testing.T) {
 	}
 }
 
+func TestRunStressBasicDatasetMatchesInfluxStressShape(t *testing.T) {
+	writer := &captureWriter{}
+	start := time.Date(2006, 1, 2, 0, 0, 0, 0, time.UTC)
+	summary, err := Run(context.Background(), writer, Options{
+		Dataset:     DatasetStressBasic,
+		Database:    "stress",
+		Precision:   "s",
+		PointCount:  2,
+		SeriesCount: 3,
+		Tick:        10 * time.Second,
+		BatchSize:   4,
+		Start:       start,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.RequestedPoints != 6 || summary.WrittenPoints != 6 || summary.Batches != 2 {
+		t.Fatalf("summary = %#v, want 6 points in 2 batches", summary)
+	}
+	if summary.Duration != 20*time.Second || summary.PointCount != 2 || summary.SeriesCount != 3 || summary.Tick != 10*time.Second {
+		t.Fatalf("summary dimensions = %#v", summary)
+	}
+	if !summary.DataStartedAt.Equal(start.Add(10*time.Second)) || !summary.DataEndedAt.Equal(start.Add(20*time.Second)) {
+		t.Fatalf("summary data range = %s to %s, want first generated point to last generated point", summary.DataStartedAt, summary.DataEndedAt)
+	}
+
+	lines := strings.Split(strings.TrimSpace(writer.body()), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("line count = %d, want 6", len(lines))
+	}
+	firstTimestamp := start.Add(10 * time.Second).Unix()
+	secondTimestamp := start.Add(20 * time.Second).Unix()
+	if want := "cpu,host=server-0,location=us-west value=0.000 " + strconv.FormatInt(firstTimestamp, 10); lines[0] != want {
+		t.Fatalf("first line = %q, want %q", lines[0], want)
+	}
+	if !strings.Contains(lines[2], "cpu,host=server-2,location=us-west") || !strings.HasSuffix(lines[2], " "+strconv.FormatInt(firstTimestamp, 10)) {
+		t.Fatalf("third line has unexpected series/timestamp: %q", lines[2])
+	}
+	if !strings.Contains(lines[3], "cpu,host=server-0,location=us-west") || !strings.HasSuffix(lines[3], " "+strconv.FormatInt(secondTimestamp, 10)) {
+		t.Fatalf("fourth line has unexpected series/timestamp: %q", lines[3])
+	}
+}
+
 func TestOutOfOrderDatasetMovesConfiguredRowsBackward(t *testing.T) {
 	plan, err := newPlan(Options{
 		Dataset:       DatasetOutOfOrder,

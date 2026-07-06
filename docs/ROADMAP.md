@@ -244,6 +244,7 @@ GROUP BY time(1s) over 30d may return too many points
 influx-cli ingest demo-cpu --rate 10k/s --duration 5m
 influx-cli ingest high-cardinality --hosts 1000 --pids 10000
 influx-cli ingest out-of-order --ratio 0.1
+influx-cli ingest stress-basic --point-count 10 --series-count 1000 --tick 10s
 influx-cli ingest demo-cpu --start 2026-07-05T00:00:00Z --dry-run
 ```
 
@@ -257,6 +258,7 @@ influx-cli ingest demo-cpu --start 2026-07-05T00:00:00Z --dry-run
 | high-cardinality | series explosion 复现 |
 | out-of-order | 乱序写入复现 |
 | covering-block | TSM 覆盖 block 慢查询复现 |
+| stress-basic | 兼容 `influx_stress` basic point generator 的点数 × series 数压测形态 |
 
 ### 7.3 Query Lab
 
