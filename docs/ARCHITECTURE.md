@@ -545,7 +545,7 @@ TSSP `--field` 只在本地已解码 data block value 上执行有限谓词：`=
 
 openGemini detached primary key meta analyzer 覆盖本地 `primary.meta` sidecar：解析 `COLX` public header、主键 schema、time-cluster location、meta block 的 block-id 范围、`primary.idx` offset/length、列 offset 和 IEEE CRC；若同目录存在 `primary.idx`，只做本地文件大小和 range 边界校验，不解码主键 record，不调用 `DetachedPKMetaReader`、OBS/fileops runtime、shard engine、HTTP API 或数据库服务。
 
-openGemini attached primary key index analyzer 覆盖本地 colstore 主键 `.idx` 文件：解析 `COLX` header、attached meta size、row count、主键 schema、time-cluster location 和列数据绝对 offset，并校验列 offset 是否落在当前文件 data section 内；不解码 record，不调用 `PrimaryKeyReader`、fileops runtime、shard engine、HTTP API 或数据库服务。`primary.meta` 仍由 `opengemini-pk-meta` 解析，detached `primary.idx` data sidecar 不会被 auto-detect 当作 attached index。
+openGemini attached primary key index analyzer 覆盖本地 colstore 主键 `.idx` 文件：解析 `COLX` header、attached meta size、row count、主键 schema、time-cluster location 和列数据绝对 offset，并校验列 offset 是否落在当前文件 data section 内，汇总完整落界的 column data byte；不解码 record，不调用 `PrimaryKeyReader`、fileops runtime、shard engine、HTTP API 或数据库服务。`primary.meta` 仍由 `opengemini-pk-meta` 解析，detached `primary.idx` data sidecar 不会被 auto-detect 当作 attached index。
 
 openGemini bloom filter secondary index analyzer 覆盖本地 colstore skip-index sidecar：attached `.bf` 按连续 line filter block 解析，detached `bloomfilter_*.idx` 按 vertical filter group/piece 摘要，使用 openGemini 当前 logstore filter 尺寸和 Castagnoli CRC 校验完整 block/piece，并报告 field/full-text 推断、有效字节、尾随字节和 CRC mismatch；不调用 `NewFilterReader`、`NewVerticalFilterReader`、fileops/OBS runtime、shard engine、HTTP API 或数据库服务。
 

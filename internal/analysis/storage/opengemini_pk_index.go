@@ -26,6 +26,7 @@ type opengeminiPKIndexInfo struct {
 	ColumnUnordered      int
 	ColumnOffsetCount    int
 	PublicInfoValidBytes int64
+	ValidDataBytes       int64
 	Notices              []string
 }
 
@@ -75,6 +76,7 @@ func analyzeOpenGeminiPKIndex(path string, info os.FileInfo, options Options) (F
 		"data_inline":                 "true",
 		"data_section_offset":         fmt.Sprint(index.DataSectionOffset),
 		"data_size_bytes":             fmt.Sprint(index.DataSizeBytes),
+		"valid_data_bytes":            fmt.Sprint(index.ValidDataBytes),
 		"column_offset_count":         fmt.Sprint(index.ColumnOffsetCount),
 		"column_out_of_bounds_blocks": fmt.Sprint(index.ColumnOutOfBounds),
 		"column_unordered_blocks":     fmt.Sprint(index.ColumnUnordered),
@@ -101,6 +103,7 @@ func analyzeOpenGeminiPKIndex(path string, info os.FileInfo, options Options) (F
 			TimeClusterLocation:     index.TCLocation,
 			RowCount:                index.RowCount,
 			DataSizeBytes:           index.DataSizeBytes,
+			ValidDataBytes:          index.ValidDataBytes,
 			DataInline:              true,
 			ColumnOutOfBoundsBlocks: index.ColumnOutOfBounds,
 			ColumnUnorderedBlocks:   index.ColumnUnordered,
@@ -180,8 +183,11 @@ func parseOpenGeminiPKIndex(data []byte) (opengeminiPKIndexInfo, error) {
 func validateOpenGeminiPKIndexColumnOffsets(index *opengeminiPKIndexInfo, fileSize int64) {
 	index.ColumnOffsetCount = len(index.ColumnOffsets)
 	for i, offset := range index.ColumnOffsets {
-		if _, outOfBounds := openGeminiPKIndexColumnDataSize(index.ColumnOffsets, i, index.DataSectionOffset, fileSize); outOfBounds {
+		size, outOfBounds := openGeminiPKIndexColumnDataSize(index.ColumnOffsets, i, index.DataSectionOffset, fileSize)
+		if outOfBounds {
 			index.ColumnOutOfBounds++
+		} else {
+			index.ValidDataBytes += size
 		}
 		if i > 0 && offset < index.ColumnOffsets[i-1] {
 			index.ColumnUnordered++

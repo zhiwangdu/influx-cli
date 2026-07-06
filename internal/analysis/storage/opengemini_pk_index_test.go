@@ -66,6 +66,9 @@ func TestAnalyzeOpenGeminiPKIndex(t *testing.T) {
 	if got, want := file.PrimaryKey.DataSizeBytes, int64(72); got != want {
 		t.Fatalf("data size = %d, want %d", got, want)
 	}
+	if got, want := file.PrimaryKey.ValidDataBytes, int64(72); got != want {
+		t.Fatalf("valid data bytes = %d, want %d", got, want)
+	}
 	if !file.PrimaryKey.DataInline {
 		t.Fatal("data inline = false, want true")
 	}
@@ -97,6 +100,7 @@ func TestAnalyzeOpenGeminiPKIndex(t *testing.T) {
 		"time_cluster_location": "-1",
 		"data_inline":           "true",
 		"data_size_bytes":       "72",
+		"valid_data_bytes":      "72",
 		"column_offset_count":   "3",
 		"local_only":            "true",
 	} {
@@ -175,6 +179,12 @@ func TestAnalyzeOpenGeminiPKIndexReportsOffsetIssues(t *testing.T) {
 	if got, want := file.PrimaryKey.ColumnUnorderedBlocks, 1; got != want {
 		t.Fatalf("column unordered = %d, want %d", got, want)
 	}
+	if got := file.PrimaryKey.ValidDataBytes; got != 0 {
+		t.Fatalf("valid data bytes = %d, want 0 for invalid ranges", got)
+	}
+	if got, want := file.Extra["valid_data_bytes"], "0"; got != want {
+		t.Fatalf("valid data bytes extra = %q, want %q", got, want)
+	}
 	if got, want := file.BlocksByType["primary-key-column-out-of-bounds"], 2; got != want {
 		t.Fatalf("blocksByType out-of-bounds = %d, want %d", got, want)
 	}
@@ -186,6 +196,52 @@ func TestAnalyzeOpenGeminiPKIndexReportsOffsetIssues(t *testing.T) {
 	}
 	if !containsOpenGeminiPKNotice(file.Notices, "primary key index has 1 unordered column data offset") {
 		t.Fatalf("notices = %v, want unordered warning", file.Notices)
+	}
+}
+
+func TestAnalyzeOpenGeminiPKIndexCountsOnlyValidDataRanges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "0000-0000-0003.idx")
+	columns := []testOpenGeminiPKColumn{
+		{Name: "host", Type: 6},
+		{Name: "time", Type: 1},
+		{Name: "value", Type: 3},
+	}
+	firstOffset := uint32(opengeminiPKHeaderSize + testOpenGeminiPKIndexMetaSize(columns))
+	data := encodeTestOpenGeminiPKIndex(
+		columns,
+		3,
+		-1,
+		[]uint32{firstOffset, firstOffset + 10, 1000},
+		[]int{10, 10, 10},
+	)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatOpenGeminiPKIndex,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.PrimaryKey.ValidDataBytes, int64(10); got != want {
+		t.Fatalf("valid data bytes = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["valid_data_bytes"], "10"; got != want {
+		t.Fatalf("valid data bytes extra = %q, want %q", got, want)
+	}
+	if got, want := file.PrimaryKey.ColumnOutOfBoundsBlocks, 2; got != want {
+		t.Fatalf("column out-of-bounds = %d, want %d", got, want)
+	}
+	if got, want := file.PrimaryKey.Schema[0].DataSizeBytes, int64(10); got != want {
+		t.Fatalf("first column data size = %d, want %d", got, want)
+	}
+	if got, want := file.PrimaryKey.Schema[1].DataSizeBytes, int64(0); got != want {
+		t.Fatalf("second column data size = %d, want %d", got, want)
 	}
 }
 
@@ -313,7 +369,7 @@ func encodeTestOpenGeminiPKIndex(columns []testOpenGeminiPKColumn, rowCount uint
 	for _, column := range columns {
 		nameBytes = append(nameBytes, column.Name...)
 	}
-	metaSize := opengeminiPKIndexMinMetaSize + len(columns)*4*3 + len(nameBytes)
+	metaSize := testOpenGeminiPKIndexMetaSize(columns)
 	if offsets == nil {
 		offsets = make([]uint32, 0, len(columns))
 		nextOffset := uint32(opengeminiPKHeaderSize + metaSize)
@@ -350,6 +406,14 @@ func encodeTestOpenGeminiPKIndex(columns []testOpenGeminiPKColumn, rowCount uint
 		data = append(data, make([]byte, size)...)
 	}
 	return data
+}
+
+func testOpenGeminiPKIndexMetaSize(columns []testOpenGeminiPKColumn) int {
+	nameBytes := 0
+	for _, column := range columns {
+		nameBytes += len(column.Name)
+	}
+	return opengeminiPKIndexMinMetaSize + len(columns)*4*3 + nameBytes
 }
 
 func appendOpenGeminiPKIndexHeader(dst []byte, metaSize int) []byte {
