@@ -58,6 +58,7 @@ type TagFilter struct {
 
 type FieldFilter struct {
 	Key   string `json:"key"`
+	Op    string `json:"op,omitempty"`
 	Value string `json:"value"`
 }
 

@@ -87,18 +87,30 @@ func TestParseStorageTagFiltersRejectsMalformedValues(t *testing.T) {
 }
 
 func TestParseStorageFieldFilters(t *testing.T) {
-	got, err := parseStorageFieldFilters([]string{" value = 99 ", "", "status=true"})
+	got, err := parseStorageFieldFilters([]string{" value = 99 ", "", "status!=true", "temperature>=1.5", "usage<10", "load<=2", "label!=a=b"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("field filters = %d, want 2", len(got))
+	if len(got) != 6 {
+		t.Fatalf("field filters = %d, want 6", len(got))
 	}
-	if got[0].Key != "value" || got[0].Value != "99" {
+	if got[0].Key != "value" || got[0].Op != "" || got[0].Value != "99" {
 		t.Fatalf("first field filter = %+v, want value=99", got[0])
 	}
-	if got[1].Key != "status" || got[1].Value != "true" {
-		t.Fatalf("second field filter = %+v, want status=true", got[1])
+	if got[1].Key != "status" || got[1].Op != "!=" || got[1].Value != "true" {
+		t.Fatalf("second field filter = %+v, want status!=true", got[1])
+	}
+	if got[2].Key != "temperature" || got[2].Op != ">=" || got[2].Value != "1.5" {
+		t.Fatalf("third field filter = %+v, want temperature>=1.5", got[2])
+	}
+	if got[3].Key != "usage" || got[3].Op != "<" || got[3].Value != "10" {
+		t.Fatalf("fourth field filter = %+v, want usage<10", got[3])
+	}
+	if got[4].Key != "load" || got[4].Op != "<=" || got[4].Value != "2" {
+		t.Fatalf("fifth field filter = %+v, want load<=2", got[4])
+	}
+	if got[5].Key != "label" || got[5].Op != "!=" || got[5].Value != "a=b" {
+		t.Fatalf("sixth field filter = %+v, want label!=a=b", got[5])
 	}
 }
 
@@ -108,6 +120,9 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	}
 	if _, err := parseStorageFieldFilters([]string{"=99"}); err == nil || !strings.Contains(err.Error(), "key cannot be empty") {
 		t.Fatalf("error = %v, want empty key guidance", err)
+	}
+	if _, err := parseStorageFieldFilters([]string{"value>"}); err == nil || !strings.Contains(err.Error(), "value cannot be empty") {
+		t.Fatalf("error = %v, want empty comparison value guidance", err)
 	}
 }
 

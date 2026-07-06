@@ -729,6 +729,57 @@ func TestAnalyzeTSSPDetachedFieldFilterSuppressesNonMatchingRows(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedFieldFilterMatchesIntegerComparison(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 42, minTime: 333, maxTime: 333, offset: 1000, size: 13, timeSize: 13},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedOneRowData(filepath.Join(dir, tsspDetachedDataFileName), 1200, chunks[0], 99, 333); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 333)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: ">=", Value: "99"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: ">=", Value: "99"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].OptimizedValue, "99"; got != want {
+		t.Fatalf("cursor output value = %q, want %q", got, want)
+	}
+}
+
 func TestInspectTSSPDetachedDataBlockEmptyRows(t *testing.T) {
 	payload := make([]byte, 5)
 	payload[0] = 42 // openGemini encoding.BlockIntegerEmpty.

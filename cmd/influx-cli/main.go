@@ -322,7 +322,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
-	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field equality predicate as key=value for local record filtering; repeat for multiple fields; requires --from/--to")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key!=value, key>value, key>=value, key<value, or key<=value for local record filtering; repeat for multiple fields; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.cursorOrder, "cursor-order", "asc", "TSM/openGemini TSSP cursor order for decode-path planning: asc or desc")
@@ -443,20 +443,38 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		if trimmed == "" {
 			continue
 		}
-		key, filterValue, ok := strings.Cut(trimmed, "=")
+		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key!=value, key>value, key>=value, key<value, or key<=value", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
 			return nil, fmt.Errorf("parse --field %q: key cannot be empty", value)
 		}
+		filterValue = strings.TrimSpace(filterValue)
+		if filterValue == "" && op != "=" && op != "!=" {
+			return nil, fmt.Errorf("parse --field %q: value cannot be empty for operator %s", value, op)
+		}
+		if op == "=" {
+			op = ""
+		}
 		filters = append(filters, storage.FieldFilter{
 			Key:   key,
-			Value: strings.TrimSpace(filterValue),
+			Op:    op,
+			Value: filterValue,
 		})
 	}
 	return filters, nil
+}
+
+func splitStorageFieldFilter(value string) (string, string, string, bool) {
+	for _, op := range []string{">=", "<=", "!=", "=", ">", "<"} {
+		key, filterValue, ok := strings.Cut(value, op)
+		if ok {
+			return key, op, filterValue, true
+		}
+	}
+	return "", "", "", false
 }
 
 func parseStorageSeriesIDs(values []string) ([]uint64, error) {

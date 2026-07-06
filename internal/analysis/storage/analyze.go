@@ -29,6 +29,9 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	options.QueryMetaIndexIDs = normalizeQuerySeriesIDs(options.QueryMetaIndexIDs)
 	options.QueryColumns = normalizeQueryKeys(options.QueryColumns)
 	options.QueryFields = normalizeFieldFilters(options.QueryFields)
+	if err := validateFieldFilters(options.QueryFields); err != nil {
+		return Report{}, err
+	}
 	options.QueryMeasurements = normalizeQueryKeys(options.QueryMeasurements)
 	options.QueryTags = normalizeTagFilters(options.QueryTags)
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set && options.Format != FormatMergeset {
@@ -189,12 +192,13 @@ func normalizeFieldFilters(values []FieldFilter) []FieldFilter {
 	for _, value := range values {
 		filter := FieldFilter{
 			Key:   strings.TrimSpace(value.Key),
+			Op:    normalizeFieldFilterOperator(value.Op),
 			Value: strings.TrimSpace(value.Value),
 		}
 		if filter.Key == "" {
 			continue
 		}
-		id := filter.Key + "\x00" + filter.Value
+		id := filter.Key + "\x00" + fieldFilterOperator(filter) + "\x00" + filter.Value
 		if _, ok := seen[id]; ok {
 			continue
 		}
@@ -203,11 +207,50 @@ func normalizeFieldFilters(values []FieldFilter) []FieldFilter {
 	}
 	sort.Slice(filters, func(i, j int) bool {
 		if filters[i].Key == filters[j].Key {
+			if fieldFilterOperator(filters[i]) != fieldFilterOperator(filters[j]) {
+				return fieldFilterOperator(filters[i]) < fieldFilterOperator(filters[j])
+			}
 			return filters[i].Value < filters[j].Value
 		}
 		return filters[i].Key < filters[j].Key
 	})
 	return filters
+}
+
+func normalizeFieldFilterOperator(op string) string {
+	op = strings.TrimSpace(op)
+	if op == "=" {
+		return ""
+	}
+	return op
+}
+
+func fieldFilterOperator(filter FieldFilter) string {
+	if filter.Op == "" {
+		return "="
+	}
+	return filter.Op
+}
+
+func validFieldFilterOperator(op string) bool {
+	switch op {
+	case "", "!=", ">", ">=", "<", "<=":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateFieldFilters(filters []FieldFilter) error {
+	for _, filter := range filters {
+		if !validFieldFilterOperator(filter.Op) {
+			return fmt.Errorf("query field filter %q has unsupported operator %q", filter.Key, filter.Op)
+		}
+		if filter.Value == "" && fieldFilterOperator(filter) != "=" && fieldFilterOperator(filter) != "!=" {
+			return fmt.Errorf("query field filter %q requires a value for operator %q", filter.Key, fieldFilterOperator(filter))
+		}
+	}
+	return nil
 }
 
 func expandPaths(ctx context.Context, paths []string, options Options) ([]string, error) {

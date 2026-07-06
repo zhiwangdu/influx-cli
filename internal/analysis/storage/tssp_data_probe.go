@@ -287,7 +287,7 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 	for row := 0; row < rows; row++ {
 		match := true
 		for _, filterBlock := range filterBlocks {
-			if !tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter.Value) {
+			if !tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter) {
 				match = false
 				break
 			}
@@ -300,13 +300,17 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 	return matchingRows, matched, true
 }
 
-func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, want string) bool {
+func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter FieldFilter) bool {
+	op := fieldFilterOperator(filter)
+	want := filter.Value
 	got := tsspDataProbeRecordValue(block, row)
-	if got == want {
-		return true
-	}
 	if got == "null" || want == "null" {
-		return false
+		return compareTSSPEqualValues(got, want, op)
+	}
+	if op == "=" || op == "!=" {
+		if got == want {
+			return op == "="
+		}
 	}
 	switch {
 	case strings.HasPrefix(block.Type, "float"):
@@ -315,15 +319,76 @@ func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, want st
 		if gotErr != nil || wantErr != nil {
 			return false
 		}
-		return gotFloat == wantFloat || (math.IsNaN(gotFloat) && math.IsNaN(wantFloat))
+		return compareTSSPFloatValues(gotFloat, wantFloat, op)
 	case strings.HasPrefix(block.Type, "integer"):
 		gotInt, gotErr := strconv.ParseInt(got, 10, 64)
 		wantInt, wantErr := strconv.ParseInt(want, 10, 64)
-		return gotErr == nil && wantErr == nil && gotInt == wantInt
+		if gotErr != nil || wantErr != nil {
+			return false
+		}
+		return compareTSSPIntegerValues(gotInt, wantInt, op)
 	case strings.HasPrefix(block.Type, "boolean"):
 		gotBool, gotErr := strconv.ParseBool(got)
 		wantBool, wantErr := strconv.ParseBool(want)
-		return gotErr == nil && wantErr == nil && gotBool == wantBool
+		if gotErr != nil || wantErr != nil {
+			return false
+		}
+		return compareTSSPEqualValues(gotBool, wantBool, op)
+	default:
+		if op == "=" || op == "!=" {
+			return compareTSSPEqualValues(got, want, op)
+		}
+		return false
+	}
+}
+
+func compareTSSPEqualValues[T comparable](got, want T, op string) bool {
+	switch op {
+	case "=":
+		return got == want
+	case "!=":
+		return got != want
+	default:
+		return false
+	}
+}
+
+func compareTSSPFloatValues(got, want float64, op string) bool {
+	if math.IsNaN(got) || math.IsNaN(want) {
+		return compareTSSPEqualValues(math.IsNaN(got), math.IsNaN(want), op)
+	}
+	switch op {
+	case "=":
+		return got == want
+	case "!=":
+		return got != want
+	case ">":
+		return got > want
+	case ">=":
+		return got >= want
+	case "<":
+		return got < want
+	case "<=":
+		return got <= want
+	default:
+		return false
+	}
+}
+
+func compareTSSPIntegerValues(got, want int64, op string) bool {
+	switch op {
+	case "=":
+		return got == want
+	case "!=":
+		return got != want
+	case ">":
+		return got > want
+	case ">=":
+		return got >= want
+	case "<":
+		return got < want
+	case "<=":
+		return got <= want
 	default:
 		return false
 	}
