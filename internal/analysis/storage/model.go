@@ -395,6 +395,7 @@ type DecodePathSummary struct {
 	CursorWindows                []DecodePathCursorWindow  `json:"cursor_windows,omitempty"`
 	CursorOutputSamples          []DecodePathCursorOutput  `json:"cursor_output_samples,omitempty"`
 	CursorFinalOutputSamples     []DecodePathCursorOutput  `json:"cursor_final_output_samples,omitempty"`
+	CursorExecutionSamples       []DecodePathCursorStep    `json:"cursor_execution_samples,omitempty"`
 	Recommendations              []string                  `json:"recommendations,omitempty"`
 	mergesetSeekResults          map[string]mergesetSeekResult
 	mergesetScanItems            [][]byte
@@ -457,6 +458,21 @@ type DecodePathCursorOutput struct {
 	Matches        bool                 `json:"matches"`
 	RequiresDedup  bool                 `json:"requires_dedup,omitempty"`
 	RequiresMerge  bool                 `json:"requires_merge,omitempty"`
+}
+
+type DecodePathCursorStep struct {
+	Step                int    `json:"step"`
+	Type                string `json:"type"`
+	Action              string `json:"action"`
+	Key                 string `json:"key"`
+	File                string `json:"file,omitempty"`
+	HeapSizeBefore      int    `json:"heap_size_before"`
+	HeapSizeAfterPop    int    `json:"heap_size_after_pop"`
+	HeapSizeAfterAction int    `json:"heap_size_after_action"`
+	CursorIndexBefore   int    `json:"cursor_index_before"`
+	CursorIndexAfter    int    `json:"cursor_index_after"`
+	CursorAdvanced      bool   `json:"cursor_advanced"`
+	CursorExhausted     bool   `json:"cursor_exhausted"`
 }
 
 type DecodePathStringList string

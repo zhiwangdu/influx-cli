@@ -412,6 +412,37 @@ func TestAnalyzeMergesetFileSetTableScanSingleStreamHeapAccounting(t *testing.T)
 	if got, want := decode.TableSearchOutputValues, 3; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorExecutionSamples), 2; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantFirstStep := DecodePathCursorStep{
+		Step:                1,
+		Type:                "mergeset-table-search-heap-step",
+		Action:              "heap_pop_cursor_advance",
+		Key:                 "aa",
+		File:                partPath,
+		HeapSizeBefore:      1,
+		HeapSizeAfterPop:    0,
+		HeapSizeAfterAction: 1,
+		CursorIndexBefore:   0,
+		CursorIndexAfter:    1,
+		CursorAdvanced:      true,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantFirstStep {
+		t.Fatalf("cursor execution sample[0] = %+v, want %+v", got, wantFirstStep)
+	}
+	firstStepJSON, err := json.Marshal(decode.CursorExecutionSamples[0])
+	if err != nil {
+		t.Fatalf("marshal cursor execution sample: %v", err)
+	}
+	for _, want := range []string{`"key":"aa"`, `"heap_size_after_pop":0`, `"cursor_index_before":0`, `"cursor_exhausted":false`} {
+		if !strings.Contains(string(firstStepJSON), want) {
+			t.Fatalf("cursor execution sample json = %s, want %s", firstStepJSON, want)
+		}
+	}
+	if got := decode.CursorExecutionSamples[1]; got.Step != 2 || got.Action != "heap_pop_cursor_advance" || got.CursorIndexBefore != 1 || got.CursorIndexAfter != 2 || !got.CursorAdvanced {
+		t.Fatalf("cursor execution sample[1] = %+v, want second local advance", got)
+	}
 }
 
 func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
@@ -463,6 +494,41 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 	}
 	if got, want := decode.MergeWindowKeys, 2; got != want {
 		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorExecutionSamples), 6; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantFirstStep := DecodePathCursorStep{
+		Step:                1,
+		Type:                "mergeset-table-search-heap-step",
+		Action:              "heap_pop_cursor_advance",
+		Key:                 "aa",
+		File:                partPath1,
+		HeapSizeBefore:      2,
+		HeapSizeAfterPop:    1,
+		HeapSizeAfterAction: 2,
+		CursorIndexBefore:   0,
+		CursorIndexAfter:    1,
+		CursorAdvanced:      true,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantFirstStep {
+		t.Fatalf("cursor execution sample[0] = %+v, want %+v", got, wantFirstStep)
+	}
+	wantLastStep := DecodePathCursorStep{
+		Step:                6,
+		Type:                "mergeset-table-search-heap-step",
+		Action:              "heap_pop_cursor_exhaust",
+		Key:                 "ae",
+		File:                partPath2,
+		HeapSizeBefore:      1,
+		HeapSizeAfterPop:    0,
+		HeapSizeAfterAction: 0,
+		CursorIndexBefore:   2,
+		CursorIndexAfter:    3,
+		CursorExhausted:     true,
+	}
+	if got := decode.CursorExecutionSamples[5]; got != wantLastStep {
+		t.Fatalf("cursor execution sample[5] = %+v, want %+v", got, wantLastStep)
 	}
 	if got, want := len(decode.CursorOutputSamples), 6; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
@@ -541,6 +607,9 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "merge/dedup 2 duplicate table-scan item candidate") {
 		t.Fatalf("recommendations = %v, want duplicate heap output recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "heap pop/advance/exhaust steps") {
+		t.Fatalf("recommendations = %v, want heap execution sample recommendation", decode.Recommendations)
 	}
 }
 
@@ -735,6 +804,9 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateWindowSamplingDisabled(t *testi
 	}
 	if got := len(decode.CursorFinalOutputSamples); got != 0 {
 		t.Fatalf("cursor final output samples = %d, want 0", got)
+	}
+	if got := len(decode.CursorExecutionSamples); got != 0 {
+		t.Fatalf("cursor execution samples = %d, want 0", got)
 	}
 	if containsString(decode.Recommendations, "sampled 0 of") {
 		t.Fatalf("recommendations = %v, want no sampled-0 recommendation", decode.Recommendations)

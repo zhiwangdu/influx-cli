@@ -478,8 +478,10 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 		}
 	}
 	for cursorHeap.Len() > 0 {
+		heapSizeBefore := cursorHeap.Len()
 		stream := heap.Pop(&cursorHeap).(*mergesetFileSetScanStream)
 		item := stream.current()
+		indexBefore := stream.index
 		heapPops++
 		total++
 		if previous == nil || !bytes.Equal(previous, item) {
@@ -505,13 +507,29 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 			})
 			groupSampleIndexes = append(groupSampleIndexes, sampleIndex)
 		}
-		if stream.advance(options.CursorDescending) {
+		advanced := stream.advance(options.CursorDescending)
+		exhausted := !advanced
+		if advanced {
 			heap.Push(&cursorHeap, stream)
 			heapInserts++
 			cursorAdvances++
 		} else {
 			cursorExhaustions++
 		}
+		appendMergesetFileSetScanExecutionSample(summary, options.BlockSampleLimit, DecodePathCursorStep{
+			Step:                total,
+			Type:                "mergeset-table-search-heap-step",
+			Action:              mergesetFileSetScanExecutionAction(advanced),
+			Key:                 string(item),
+			File:                stream.path,
+			HeapSizeBefore:      heapSizeBefore,
+			HeapSizeAfterPop:    heapSizeBefore - 1,
+			HeapSizeAfterAction: cursorHeap.Len(),
+			CursorIndexBefore:   indexBefore,
+			CursorIndexAfter:    stream.index,
+			CursorAdvanced:      advanced,
+			CursorExhausted:     exhausted,
+		})
 	}
 	finishGroup()
 	summary.TableSearchHeapInserts = heapInserts
@@ -522,6 +540,20 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 	summary.DeduplicatedOutputValues = unique
 	summary.DuplicateOutputValues = duplicates
 	summary.MergeWindowKeys = duplicateGroups
+}
+
+func mergesetFileSetScanExecutionAction(advanced bool) string {
+	if advanced {
+		return "heap_pop_cursor_advance"
+	}
+	return "heap_pop_cursor_exhaust"
+}
+
+func appendMergesetFileSetScanExecutionSample(summary *DecodePathSummary, sampleLimit int, sample DecodePathCursorStep) {
+	if sampleLimit <= 0 || len(summary.CursorExecutionSamples) >= sampleLimit {
+		return
+	}
+	summary.CursorExecutionSamples = append(summary.CursorExecutionSamples, sample)
 }
 
 func appendMergesetDuplicateMergeWindow(summary *DecodePathSummary, window DecodePathCursorWindow, sampleLimit int) {
@@ -652,6 +684,9 @@ func mergesetFileSetScanRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(summary.CursorOutputSamples) > 0 {
 		recommendations = append(recommendations, "file-set scan output samples follow TableSearch heap cursor order")
+	}
+	if len(summary.CursorExecutionSamples) > 0 {
+		recommendations = append(recommendations, "file-set scan execution samples show local heap pop/advance/exhaust steps")
 	}
 	if len(summary.CursorFinalOutputSamples) > 0 {
 		recommendations = append(recommendations, "final file-set scan output samples show deduplicated TableSearch cursor output")
