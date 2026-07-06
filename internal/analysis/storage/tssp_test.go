@@ -1043,6 +1043,67 @@ func TestAnalyzeTSSPFieldFilterMatchesStringInSet(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterMatchesStringComparison(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithStringFullData(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "<", Value: "red"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: "<", Value: "red"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRows, 2; got != want {
+		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterMatches, 1; got != want {
+		t.Fatalf("data block probe filter matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRejects, 1; got != want {
+		t.Fatalf("data block probe filter rejects = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "sid:7/value",
+		Time:           444,
+		Type:           "string-full",
+		OptimizedValue: "blue",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterOrderedBooleanDoesNotMatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)

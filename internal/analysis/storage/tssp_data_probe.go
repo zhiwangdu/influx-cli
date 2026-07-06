@@ -359,6 +359,8 @@ func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter 
 			return false
 		}
 		return compareTSSPEqualValues(gotBool, wantBool, op)
+	case strings.HasPrefix(block.Type, "string"):
+		return compareTSSPStringValues(got, want, op)
 	default:
 		if op == "=" || op == "!=" {
 			return compareTSSPEqualValues(got, want, op)
@@ -401,6 +403,25 @@ func compareTSSPFloatValues(got, want float64, op string) bool {
 }
 
 func compareTSSPIntegerValues(got, want int64, op string) bool {
+	switch op {
+	case "=":
+		return got == want
+	case "!=":
+		return got != want
+	case ">":
+		return got > want
+	case ">=":
+		return got >= want
+	case "<":
+		return got < want
+	case "<=":
+		return got <= want
+	default:
+		return false
+	}
+}
+
+func compareTSSPStringValues(got, want, op string) bool {
 	switch op {
 	case "=":
 		return got == want
