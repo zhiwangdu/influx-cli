@@ -221,7 +221,13 @@ func (m Model) schemaLines() []string {
 }
 
 func (m Model) footerView(width int) string {
-	footer := string(m.mode) + " | Ctrl+J run | Ctrl+C cancel/quit | Ctrl+L clear | Ctrl+R history | Tab complete | Esc mode | Enter/V result | 0 auto | 1 table | 2 spark | 3 chart | 4 json | R refresh | +/- interval | S context | L schema refresh | W watch | F fullscreen | Q quit"
+	clearLine := "Ctrl+U clear line"
+	if m.mode == modeHistory {
+		clearLine = "Ctrl+U clear filter"
+	} else if m.mode == modeCompletion {
+		clearLine = "Ctrl+U -"
+	}
+	footer := string(m.mode) + " | Ctrl+J run | Ctrl+C cancel/quit | " + clearLine + " | Ctrl+L clear all | Ctrl+R history | Tab complete | Esc mode | Enter/V result | 0 auto | 1 table | 2 spark | 3 chart | 4 json | R refresh | +/- interval | S context | L schema refresh | W watch | F fullscreen | Q quit"
 	footer = truncateRunes(footer, width)
 	if !m.renderOptions.Color {
 		return footer

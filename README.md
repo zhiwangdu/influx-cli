@@ -69,7 +69,8 @@ Single-letter shortcuts apply in command/result modes. In edit mode, printable k
 | --- | --- |
 | `Ctrl+J` / `Ctrl+Enter` | Run the current query |
 | `Ctrl+C` | Cancel a running query; press again to quit while cancellation is pending |
-| `Ctrl+L` | Clear the query editor |
+| `Ctrl+U` | Clear the current editor line |
+| `Ctrl+L` | Clear the whole query editor |
 | `Ctrl+R` | Open searchable query history |
 | `Tab` | Open completion candidates |
 | `Esc` | Switch edit/command modes or close overlays |
@@ -84,6 +85,7 @@ Single-letter shortcuts apply in command/result modes. In edit mode, printable k
 | `Q` | Quit |
 
 Watch mode never starts a second query while one is still running. A failed watch refresh keeps the last successful result visible and reports the last error in status/context.
+In the history panel, `Ctrl+U` clears the history filter instead of editing the query.
 
 Implemented Dataset Generator surface:
 

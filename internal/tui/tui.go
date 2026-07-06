@@ -310,6 +310,9 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startQuery(strings.TrimSpace(m.editor.Value()), false)
 	case "ctrl+r":
 		return m.openHistoryPanel()
+	case "ctrl+u":
+		m.clearEditorLine()
+		return m, nil
 	case "ctrl+l":
 		m.clearEditor()
 		return m, nil
@@ -344,6 +347,9 @@ func (m Model) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startQuery(strings.TrimSpace(m.editor.Value()), false)
 	case "ctrl+r":
 		return m.openHistoryPanel()
+	case "ctrl+u":
+		m.clearEditorLine()
+		return m, nil
 	case "ctrl+l":
 		m.clearEditor()
 		return m, nil
@@ -367,6 +373,9 @@ func (m Model) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+r":
 		return m.openHistoryPanel()
+	case "ctrl+u":
+		m.clearEditorLine()
+		return m, nil
 	case "ctrl+l":
 		m.clearEditor()
 		return m, nil
@@ -557,6 +566,24 @@ func (m *Model) setMode(mode tuiMode) tea.Cmd {
 func (m *Model) clearEditor() {
 	m.editor.Reset()
 	m.statusMessage = "editor cleared"
+}
+
+func (m *Model) clearEditorLine() {
+	lines := strings.Split(m.editor.Value(), "\n")
+	row := m.editor.Line()
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(lines) {
+		row = len(lines) - 1
+	}
+	lines[row] = ""
+	m.editor.SetValue(strings.Join(lines, "\n"))
+	for line := len(lines) - 1; line > row; line-- {
+		m.editor.CursorUp()
+	}
+	m.editor.CursorStart()
+	m.statusMessage = "line cleared"
 }
 
 func (m *Model) closeOverlay() tea.Cmd {

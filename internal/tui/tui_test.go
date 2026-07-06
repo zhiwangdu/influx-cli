@@ -620,6 +620,43 @@ func TestClearEditorKeepsEditMode(t *testing.T) {
 	}
 }
 
+func TestClearEditorLineKeepsOtherLines(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.editor.SetValue("select usage_idle\nfrom cpu\nwhere host = 'a'")
+	model.editor.CursorUp()
+
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("expected clear line to be synchronous")
+	}
+	want := "select usage_idle\n\nwhere host = 'a'"
+	if got := model.editor.Value(); got != want {
+		t.Fatalf("editor value = %q, want %q", got, want)
+	}
+	if model.editor.Line() != 1 {
+		t.Fatalf("editor line = %d, want 1", model.editor.Line())
+	}
+	if model.statusMessage != "line cleared" {
+		t.Fatalf("status = %q, want line cleared", model.statusMessage)
+	}
+}
+
+func TestClearEditorLineWorksFromCommandMode(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.editor.SetValue("select usage_idle\nfrom cpu")
+	model.setMode(modeCommand)
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlU})
+	model = updated.(Model)
+	if got := model.editor.Value(); got != "select usage_idle\n" {
+		t.Fatalf("editor value = %q, want first line preserved and second cleared", got)
+	}
+	if model.mode != modeCommand || model.editor.Focused() {
+		t.Fatalf("mode/focus = %q/%v, want command/blurred", model.mode, model.editor.Focused())
+	}
+}
+
 func TestCommandModeRefreshesCurrentSchema(t *testing.T) {
 	model := newTestModel(&fakeAdapter{schemaSnapshot: cpuSnapshot()})
 	model.schemaMeasurement = "cpu"
