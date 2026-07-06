@@ -19,6 +19,7 @@ const (
 	FormatTSI               Format = "tsi"
 	FormatTSILog            Format = "tsi-log"
 	FormatMergeset          Format = "mergeset"
+	FormatOpenGeminiMeta    Format = "opengemini-meta"
 )
 
 type Options struct {
