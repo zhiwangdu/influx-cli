@@ -24,6 +24,7 @@ const (
 	FormatOpenGeminiMeta    Format = "opengemini-meta"
 	FormatOpenGeminiPKMeta  Format = "opengemini-pk-meta"
 	FormatOpenGeminiPKIndex Format = "opengemini-pk-index"
+	FormatOpenGeminiBloom   Format = "opengemini-bloom-filter"
 )
 
 type Options struct {
@@ -83,30 +84,31 @@ type Summary struct {
 }
 
 type FileReport struct {
-	Path               string             `json:"path"`
-	Format             Format             `json:"format"`
-	SizeBytes          int64              `json:"size_bytes"`
-	ModTime            time.Time          `json:"mod_time"`
-	MinTime            int64              `json:"min_time"`
-	MaxTime            int64              `json:"max_time"`
-	MinKey             string             `json:"min_key,omitempty"`
-	MaxKey             string             `json:"max_key,omitempty"`
-	KeyCount           int                `json:"key_count"`
-	KeySamples         []string           `json:"key_samples,omitempty"`
-	BlockCount         int                `json:"block_count"`
-	BlocksByType       map[string]int     `json:"blocks_by_type,omitempty"`
-	Blocks             []BlockReport      `json:"blocks,omitempty"`
-	QueryOverlapsFile  bool               `json:"query_overlaps_file,omitempty"`
-	QueryOverlapBlocks int                `json:"query_overlap_blocks,omitempty"`
-	DecodePath         *DecodePathSummary `json:"decode_path,omitempty"`
-	Tombstones         TombstoneSummary   `json:"tombstones,omitempty"`
-	SeriesID           SeriesIDSummary    `json:"series_id,omitempty"`
-	MetaIndexID        SeriesIDSummary    `json:"meta_index_id,omitempty"`
-	Index              *IndexSummary      `json:"index,omitempty"`
-	Fields             *FieldIndexSummary `json:"fields,omitempty"`
-	PrimaryKey         *PrimaryKeySummary `json:"primary_key,omitempty"`
-	Extra              map[string]string  `json:"extra,omitempty"`
-	Notices            []string           `json:"notices,omitempty"`
+	Path               string                 `json:"path"`
+	Format             Format                 `json:"format"`
+	SizeBytes          int64                  `json:"size_bytes"`
+	ModTime            time.Time              `json:"mod_time"`
+	MinTime            int64                  `json:"min_time"`
+	MaxTime            int64                  `json:"max_time"`
+	MinKey             string                 `json:"min_key,omitempty"`
+	MaxKey             string                 `json:"max_key,omitempty"`
+	KeyCount           int                    `json:"key_count"`
+	KeySamples         []string               `json:"key_samples,omitempty"`
+	BlockCount         int                    `json:"block_count"`
+	BlocksByType       map[string]int         `json:"blocks_by_type,omitempty"`
+	Blocks             []BlockReport          `json:"blocks,omitempty"`
+	QueryOverlapsFile  bool                   `json:"query_overlaps_file,omitempty"`
+	QueryOverlapBlocks int                    `json:"query_overlap_blocks,omitempty"`
+	DecodePath         *DecodePathSummary     `json:"decode_path,omitempty"`
+	Tombstones         TombstoneSummary       `json:"tombstones,omitempty"`
+	SeriesID           SeriesIDSummary        `json:"series_id,omitempty"`
+	MetaIndexID        SeriesIDSummary        `json:"meta_index_id,omitempty"`
+	Index              *IndexSummary          `json:"index,omitempty"`
+	Fields             *FieldIndexSummary     `json:"fields,omitempty"`
+	PrimaryKey         *PrimaryKeySummary     `json:"primary_key,omitempty"`
+	SecondaryIndex     *SecondaryIndexSummary `json:"secondary_index,omitempty"`
+	Extra              map[string]string      `json:"extra,omitempty"`
+	Notices            []string               `json:"notices,omitempty"`
 }
 
 type PrimaryKeySummary struct {
@@ -141,6 +143,23 @@ type PrimaryKeyColumnReport struct {
 	DataOffset      int64  `json:"data_offset,omitempty"`
 	DataSizeBytes   int64  `json:"data_size_bytes,omitempty"`
 	DataOutOfBounds bool   `json:"data_out_of_bounds,omitempty"`
+}
+
+type SecondaryIndexSummary struct {
+	Type             string `json:"type,omitempty"`
+	Layout           string `json:"layout,omitempty"`
+	Field            string `json:"field,omitempty"`
+	Version          uint32 `json:"version,omitempty"`
+	BlockCount       int64  `json:"block_count,omitempty"`
+	GroupCount       int64  `json:"group_count,omitempty"`
+	PieceCount       int64  `json:"piece_count,omitempty"`
+	PayloadSizeBytes int64  `json:"payload_size_bytes,omitempty"`
+	BlockSizeBytes   int64  `json:"block_size_bytes,omitempty"`
+	PieceSizeBytes   int64  `json:"piece_size_bytes,omitempty"`
+	GroupSizeBytes   int64  `json:"group_size_bytes,omitempty"`
+	ValidBytes       int64  `json:"valid_bytes,omitempty"`
+	TrailingBytes    int64  `json:"trailing_bytes,omitempty"`
+	CRCMismatches    int    `json:"crc_mismatches,omitempty"`
 }
 
 type FieldIndexSummary struct {
