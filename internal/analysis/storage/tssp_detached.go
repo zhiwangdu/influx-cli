@@ -546,6 +546,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 						probe.NullValues += blockInfo.Rows
 					} else {
 						probe.ValueBlocks++
+						probe.NullValues += blockInfo.Nulls
 					}
 				} else {
 					probe.ValueUnknowns++
@@ -595,14 +596,16 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 }
 
 type tsspDetachedDataBlockInfo struct {
-	Type        string
-	Rows        int
-	RowsKnown   bool
-	Value       string
-	Values      []string
-	ValueKnown  bool
-	ValueReason string
-	ValueNull   bool
+	Type         string
+	Rows         int
+	RowsKnown    bool
+	Value        string
+	Values       []string
+	ValuePresent []bool
+	ValueKnown   bool
+	ValueReason  string
+	ValueNull    bool
+	Nulls        int
 }
 
 func inspectTSSPDetachedDataBlock(block []byte) (tsspDetachedDataBlockInfo, bool, string) {
@@ -653,6 +656,7 @@ func inspectTSSPDataBlockPayloadForColumn(payload []byte, columnName string) (ts
 		if tsspDataBlockTypeIsEmpty(payload[0]) {
 			info.ValueKnown = true
 			info.ValueNull = true
+			info.Nulls = info.Rows
 		} else if payload[0] == 31 {
 			if values, ok := decodeTSSPFloatFullValues(payload[5:], info.Rows); ok {
 				info.Values = values
@@ -693,53 +697,132 @@ func inspectTSSPDataBlockPayloadForColumn(payload []byte, columnName string) (ts
 		if !validTSSPRegularDataBlockHeader(payload) {
 			return info, false, "segment_overlap_data_header_unavailable"
 		}
-		if rows, values, ok := decodeTSSPRegularDataBlockValues(payload, columnName); ok {
+		if rows, values, present, nulls, ok := decodeTSSPRegularDataBlockValues(payload, columnName); ok {
 			info.Rows = rows
 			info.RowsKnown = true
 			info.Values = values
-			if len(values) > 0 {
-				info.Value = values[0]
-			}
+			info.ValuePresent = present
+			info.Nulls = nulls
+			info.Value = firstPresentTSSPDataBlockValue(values, present)
+			info.ValueNull = rows > 0 && nulls == rows
 			info.ValueKnown = true
 		}
 	}
 	return info, true, ""
 }
 
-func decodeTSSPRegularDataBlockValues(payload []byte, columnName string) (int, []string, bool) {
+func decodeTSSPRegularDataBlockValues(payload []byte, columnName string) (int, []string, []bool, int, bool) {
 	if len(payload) < 13 {
-		return 0, nil, false
+		return 0, nil, nil, 0, false
 	}
 	nilBitmapLen := int(binary.BigEndian.Uint32(payload[1:5]))
 	headerLen := 1 + 4 + nilBitmapLen + 4 + 4
 	if nilBitmapLen < 0 || headerLen > len(payload) {
-		return 0, nil, false
+		return 0, nil, nil, 0, false
 	}
+	nilBitmap := payload[5 : 5+nilBitmapLen]
+	bitmapOffset := binary.BigEndian.Uint32(payload[1+4+nilBitmapLen : 1+4+nilBitmapLen+4])
 	nilCount := int(binary.BigEndian.Uint32(payload[1+4+nilBitmapLen+4 : headerLen]))
-	if nilCount != 0 {
-		return 0, nil, false
-	}
 	encoded := payload[headerLen:]
+	var values []string
+	var ok bool
 	switch payload[0] {
 	case 1:
 		if columnName == "time" {
-			values, ok := decodeTSSPTimestampValues(encoded)
-			return len(values), values, ok
+			values, ok = decodeTSSPTimestampValues(encoded)
+			break
 		}
-		values, ok := decodeTSSPIntegerValues(encoded)
-		return len(values), values, ok
+		values, ok = decodeTSSPIntegerValues(encoded)
 	case 3:
-		values, ok := decodeTSSPFloatValues(encoded)
-		return len(values), values, ok
+		values, ok = decodeTSSPFloatValues(encoded)
 	case 4:
-		values, ok := decodeTSSPStringValues(encoded)
-		return len(values), values, ok
+		values, ok = decodeTSSPStringValues(encoded)
+		if !ok {
+			return 0, nil, nil, 0, false
+		}
+		rows, rowValues, present, ok := alignTSSPRegularDataBlockValues(values, nilBitmap, int(bitmapOffset), nilCount, true)
+		if !ok {
+			return 0, nil, nil, 0, false
+		}
+		return rows, rowValues, present, nilCount, true
 	case 5:
-		values, ok := decodeTSSPBooleanValues(encoded)
-		return len(values), values, ok
+		values, ok = decodeTSSPBooleanValues(encoded)
 	default:
-		return 0, nil, false
+		return 0, nil, nil, 0, false
 	}
+	if !ok {
+		return 0, nil, nil, 0, false
+	}
+	rows, rowValues, present, ok := alignTSSPRegularDataBlockValues(values, nilBitmap, int(bitmapOffset), nilCount, false)
+	if !ok {
+		return 0, nil, nil, 0, false
+	}
+	return rows, rowValues, present, nilCount, true
+}
+
+func alignTSSPRegularDataBlockValues(values []string, bitmap []byte, bitmapOffset int, nilCount int, rowAligned bool) (int, []string, []bool, bool) {
+	if nilCount < 0 || bitmapOffset < 0 {
+		return 0, nil, nil, false
+	}
+	rows := len(values)
+	if !rowAligned {
+		rows += nilCount
+	}
+	if rows == 0 {
+		return 0, nil, nil, nilCount == 0
+	}
+	if nilCount == 0 {
+		present := make([]bool, rows)
+		for i := range present {
+			present[i] = true
+		}
+		return rows, values, present, true
+	}
+	if uint64(bitmapOffset)+uint64(rows) > uint64(len(bitmap))*8 {
+		return 0, nil, nil, false
+	}
+	if rowAligned && len(values) != rows {
+		return 0, nil, nil, false
+	}
+	present := make([]bool, rows)
+	rowValues := make([]string, rows)
+	valueIndex := 0
+	observedNulls := 0
+	for i := 0; i < rows; i++ {
+		bitIndex := bitmapOffset + i
+		isPresent := bitmap[bitIndex>>3]&(1<<uint(bitIndex&0x07)) != 0
+		present[i] = isPresent
+		if !isPresent {
+			observedNulls++
+			continue
+		}
+		if rowAligned {
+			rowValues[i] = values[i]
+			continue
+		}
+		if valueIndex >= len(values) {
+			return 0, nil, nil, false
+		}
+		rowValues[i] = values[valueIndex]
+		valueIndex++
+	}
+	if rowAligned {
+		valueIndex = len(values)
+	}
+	if observedNulls != nilCount || valueIndex != len(values) {
+		return 0, nil, nil, false
+	}
+	return rows, rowValues, present, true
+}
+
+func firstPresentTSSPDataBlockValue(values []string, present []bool) string {
+	for i, value := range values {
+		if len(present) > 0 && (i >= len(present) || !present[i]) {
+			continue
+		}
+		return value
+	}
+	return ""
 }
 
 func tsspDataBlockValueUnknownReason(blockType byte, encoded []byte) string {
@@ -1105,9 +1188,27 @@ func tsspPackedStringRows(src []byte) (int, bool) {
 		if len(src) < 12 {
 			return 0, false
 		}
-		return int(binary.BigEndian.Uint32(src[8:12])), true
+		byteLen := int(binary.BigEndian.Uint32(src[4:8]))
+		offsetCountPos := 8 + byteLen
+		if byteLen < 0 || offsetCountPos+4 > len(src) {
+			return 0, false
+		}
+		rows := int(binary.BigEndian.Uint32(src[offsetCountPos : offsetCountPos+4]))
+		if rows < 0 || offsetCountPos+4+rows*4 > len(src) {
+			return 0, false
+		}
+		return rows, true
 	case version == tsspStringEncodingV1 || version < tsspStringEncodingEnd:
-		return int(binary.BigEndian.Uint32(src[4:8])), true
+		byteLen := int(binary.BigEndian.Uint32(src[:4]))
+		offsetBytesPos := 4 + byteLen
+		if byteLen < 0 || offsetBytesPos+4 > len(src) {
+			return 0, false
+		}
+		offsetBytes := int(binary.BigEndian.Uint32(src[offsetBytesPos : offsetBytesPos+4]))
+		if offsetBytes < 0 || offsetBytes%4 != 0 || offsetBytesPos+4+offsetBytes > len(src) {
+			return 0, false
+		}
+		return offsetBytes / 4, true
 	default:
 		return 0, false
 	}
@@ -1849,6 +1950,9 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 			continue
 		}
 		for i, value := range block.Values {
+			if len(block.ValuePresent) > 0 && !block.ValuePresent[i] {
+				continue
+			}
 			timestamp := timestamps[i]
 			if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
 				continue

@@ -115,6 +115,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 						probe.NullValues += blockInfo.Rows
 					} else {
 						probe.ValueBlocks++
+						probe.NullValues += blockInfo.Nulls
 					}
 				} else {
 					probe.ValueUnknowns++
@@ -203,6 +204,9 @@ func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk
 			continue
 		}
 		for i, value := range block.Values {
+			if len(block.ValuePresent) > 0 && !block.ValuePresent[i] {
+				continue
+			}
 			timestamp := timestamps[i]
 			if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
 				continue
