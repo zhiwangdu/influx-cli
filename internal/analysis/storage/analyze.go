@@ -220,10 +220,12 @@ func normalizeFieldFilters(values []FieldFilter) []FieldFilter {
 func normalizeFieldFilterOperator(op string) string {
 	op = strings.ToLower(strings.TrimSpace(op))
 	switch op {
-	case "=", "":
+	case "=", "is", "":
 		return ""
 	case "not in", "not-in":
 		return "not-in"
+	case "is not", "is-not":
+		return "!="
 	default:
 		return op
 	}

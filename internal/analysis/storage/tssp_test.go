@@ -541,8 +541,24 @@ func TestAnalyzeTSSPFieldFilterMatchesNullPredicates(t *testing.T) {
 			wantValueOutCount: 1,
 		},
 		{
+			name:              "is-null",
+			filter:            FieldFilter{Key: "value", Op: "is", Value: "null"},
+			wantOutputPoints:  "1",
+			wantValueOutCount: 1,
+		},
+		{
 			name:             "not-null",
 			filter:           FieldFilter{Key: "value", Op: "!=", Value: "null"},
+			wantOutputPoints: "2",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "sid:7/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},
+				{Key: "sid:7/value", Time: 555, Type: "float", OptimizedValue: "3.75", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+		{
+			name:             "is-not-null",
+			filter:           FieldFilter{Key: "value", Op: "is-not", Value: "null"},
 			wantOutputPoints: "2",
 			wantSamples: []DecodePathCursorOutput{
 				{Key: "sid:7/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},

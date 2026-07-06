@@ -445,7 +445,7 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key!=value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2)", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key!=value, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2)", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -480,6 +480,9 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 	}{
 		{text: "not-in", op: "not-in"},
 		{text: "not in", op: "not-in"},
+		{text: "is-not", op: "!="},
+		{text: "is not", op: "!="},
+		{text: "is", op: "="},
 		{text: "in", op: "in"},
 	} {
 		key, filterValue, ok := splitStorageFieldWordOperator(value, operator.text)
@@ -493,21 +496,44 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 func splitStorageFieldWordOperator(value, operator string) (string, string, bool) {
 	lower := strings.ToLower(value)
 	for _, needle := range []string{" " + operator + " ", " " + operator + "("} {
-		index := strings.Index(lower, needle)
-		if index < 0 {
-			continue
+		searchFrom := 0
+		for {
+			relativeIndex := strings.Index(lower[searchFrom:], needle)
+			if relativeIndex < 0 {
+				break
+			}
+			index := searchFrom + relativeIndex
+			searchFrom = index + len(needle)
+			if storageFieldOperatorInParentheses(value, index) {
+				continue
+			}
+			key := value[:index]
+			if strings.ContainsAny(key, "=<>!") {
+				continue
+			}
+			if operator == "in" && strings.EqualFold(strings.TrimSpace(key), "not") {
+				continue
+			}
+			valueStart := index + 1 + len(operator)
+			return key, strings.TrimSpace(value[valueStart:]), true
 		}
-		key := value[:index]
-		if strings.ContainsAny(key, "=<>!") {
-			continue
-		}
-		if operator == "in" && strings.EqualFold(strings.TrimSpace(key), "not") {
-			continue
-		}
-		valueStart := index + 1 + len(operator)
-		return key, strings.TrimSpace(value[valueStart:]), true
 	}
 	return "", "", false
+}
+
+func storageFieldOperatorInParentheses(value string, index int) bool {
+	depth := 0
+	for i := 0; i < index && i < len(value); i++ {
+		switch value[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return depth > 0
 }
 
 func parseStorageSeriesIDs(values []string) ([]uint64, error) {

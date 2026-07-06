@@ -87,12 +87,12 @@ func TestParseStorageTagFiltersRejectsMalformedValues(t *testing.T) {
 }
 
 func TestParseStorageFieldFilters(t *testing.T) {
-	got, err := parseStorageFieldFilters([]string{" value = 99 ", "", "status!=true", "temperature>=1.5", "usage<10", "load<=2", "label!=a=b", "status in (true,false)", "value in(1.25,2.5)", "value not in (1.25,2.5)", "region not-in(us,eu)", "message=error in transit", "notes in review>5"})
+	got, err := parseStorageFieldFilters([]string{" value = 99 ", "", "status!=true", "temperature>=1.5", "usage<10", "load<=2", "label!=a=b", "status in (true,false)", "value in(1.25,2.5)", "value not in (1.25,2.5)", "region not-in(us,eu)", "value is null", "status is-not true", "region is not us", "notes in review is null", "message=error in transit", "notes in review>5"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 12 {
-		t.Fatalf("field filters = %d, want 12", len(got))
+	if len(got) != 16 {
+		t.Fatalf("field filters = %d, want 16", len(got))
 	}
 	if got[0].Key != "value" || got[0].Op != "" || got[0].Value != "99" {
 		t.Fatalf("first field filter = %+v, want value=99", got[0])
@@ -124,11 +124,23 @@ func TestParseStorageFieldFilters(t *testing.T) {
 	if got[9].Key != "region" || got[9].Op != "not-in" || got[9].Value != "(us,eu)" {
 		t.Fatalf("tenth field filter = %+v, want region not-in(us,eu)", got[9])
 	}
-	if got[10].Key != "message" || got[10].Op != "" || got[10].Value != "error in transit" {
-		t.Fatalf("eleventh field filter = %+v, want message=error in transit", got[10])
+	if got[10].Key != "value" || got[10].Op != "" || got[10].Value != "null" {
+		t.Fatalf("eleventh field filter = %+v, want value is null", got[10])
 	}
-	if got[11].Key != "notes in review" || got[11].Op != ">" || got[11].Value != "5" {
-		t.Fatalf("twelfth field filter = %+v, want notes in review>5", got[11])
+	if got[11].Key != "status" || got[11].Op != "!=" || got[11].Value != "true" {
+		t.Fatalf("twelfth field filter = %+v, want status is-not true", got[11])
+	}
+	if got[12].Key != "region" || got[12].Op != "!=" || got[12].Value != "us" {
+		t.Fatalf("thirteenth field filter = %+v, want region is not us", got[12])
+	}
+	if got[13].Key != "notes in review" || got[13].Op != "" || got[13].Value != "null" {
+		t.Fatalf("fourteenth field filter = %+v, want notes in review is null", got[13])
+	}
+	if got[14].Key != "message" || got[14].Op != "" || got[14].Value != "error in transit" {
+		t.Fatalf("fifteenth field filter = %+v, want message=error in transit", got[14])
+	}
+	if got[15].Key != "notes in review" || got[15].Op != ">" || got[15].Value != "5" {
+		t.Fatalf("sixteenth field filter = %+v, want notes in review>5", got[15])
 	}
 }
 
@@ -147,6 +159,19 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	}
 	if _, err := parseStorageFieldFilters([]string{"not in (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing key guidance", err)
+	}
+}
+
+func TestParseStorageFieldFiltersIgnoresWordOperatorsInsideSets(t *testing.T) {
+	got, err := parseStorageFieldFilters([]string{"status in (this is true,not in service)"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("field filters = %d, want 1", len(got))
+	}
+	if got[0].Key != "status" || got[0].Op != "in" || got[0].Value != "(this is true,not in service)" {
+		t.Fatalf("field filter = %+v, want status in full set", got[0])
 	}
 }
 
