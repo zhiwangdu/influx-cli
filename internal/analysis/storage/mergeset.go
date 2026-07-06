@@ -1289,10 +1289,32 @@ func (p *mergesetSearchPlan) Finish(options Options) {
 	summary.TableSearchOutputValues = len(p.SeekResults)
 	summary.TableSearchExactMisses = len(summary.MissingKeys)
 	summary.mergesetSeekResults = p.SeekResults
+	populateMergesetSearchFinalOutputSamples(summary, p.SeekResults, p.QueryKeys, p.SampleLimit)
 	if summary.OptimizedDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.BaselineDecodeBlocks) / float64(summary.OptimizedDecodeBlocks)
 	}
 	summary.Recommendations = mergesetSearchRecommendations(summary, options)
+}
+
+func populateMergesetSearchFinalOutputSamples(summary *DecodePathSummary, seekResults map[string]mergesetSeekResult, queryKeys []string, sampleLimit int) {
+	if summary == nil || sampleLimit <= 0 {
+		return
+	}
+	for _, key := range queryKeys {
+		if len(summary.CursorFinalOutputSamples) >= sampleLimit {
+			return
+		}
+		result, ok := seekResults[key]
+		if !ok || !result.Matches {
+			continue
+		}
+		summary.CursorFinalOutputSamples = append(summary.CursorFinalOutputSamples, DecodePathCursorOutput{
+			Key:            key,
+			Type:           "mergeset-item-search-final-output-item",
+			OptimizedValue: string(result.Item),
+			Matches:        true,
+		})
+	}
 }
 
 func mergesetSearchMode(options Options) string {
@@ -1333,6 +1355,9 @@ func mergesetSearchRecommendations(summary *DecodePathSummary, options Options) 
 	}
 	if summary.TableSearchCursorAdvances > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("advanced %d local mergeset cursor step(s) to reach the next item candidate", summary.TableSearchCursorAdvances))
+	}
+	if len(summary.CursorFinalOutputSamples) > 0 {
+		recommendations = append(recommendations, "final item-search output samples show exact local mergeset seek results")
 	}
 	if len(recommendations) == 0 && len(options.QueryKeys) > 0 {
 		recommendations = append(recommendations, "all query item keys mapped to decoded mergeset block candidates")

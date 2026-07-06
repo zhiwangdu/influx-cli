@@ -1146,6 +1146,18 @@ func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	if !decode.CursorOutputSamples[1].Matches {
 		t.Fatal("expected second cursor output sample to match exactly")
 	}
+	if got, want := len(decode.CursorFinalOutputSamples), 1; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	wantFinal := DecodePathCursorOutput{
+		Key:            "aa",
+		Type:           "mergeset-item-search-final-output-item",
+		OptimizedValue: "aa",
+		Matches:        true,
+	}
+	if got := decode.CursorFinalOutputSamples[0]; got != wantFinal {
+		t.Fatalf("cursor final output sample = %+v, want %+v", got, wantFinal)
+	}
 	if got, want := decode.TableSearchSeekCalls, 2; got != want {
 		t.Fatalf("table search seek calls = %d, want %d", got, want)
 	}
@@ -1166,6 +1178,9 @@ func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	}
 	if len(decode.Recommendations) == 0 {
 		t.Fatal("expected recommendations")
+	}
+	if !containsString(decode.Recommendations, "final item-search output samples show exact local mergeset seek results") {
+		t.Fatalf("recommendations = %v, want final output recommendation", decode.Recommendations)
 	}
 }
 
@@ -1226,6 +1241,47 @@ func TestAnalyzeMergesetQueryKeyBelowFirstItemSeeksFirstBlock(t *testing.T) {
 	}
 	if sample.Matches {
 		t.Fatal("expected cursor output sample to be a non-exact table seek result")
+	}
+	if got, want := len(decode.CursorFinalOutputSamples), 0; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeMergesetQueryKeySearchSampleLimitZeroSuppressesSamples(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "2_1_searchlimit")
+	if err := writeTestMergesetPartWithItems(partPath, [][]byte{
+		[]byte("aa"),
+		[]byte("ab"),
+	}); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		QueryKeys:        []string{"aa"},
+		BlockSampleLimit: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("expected decode path")
+	}
+	if got, want := decode.MatchedKeys, []string{"aa"}; !equalStrings(got, want) {
+		t.Fatalf("matched keys = %v, want %v", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got := len(decode.CursorWindows); got != 0 {
+		t.Fatalf("cursor windows = %d, want 0", got)
+	}
+	if got := len(decode.CursorOutputSamples); got != 0 {
+		t.Fatalf("cursor output samples = %d, want 0", got)
+	}
+	if got := len(decode.CursorFinalOutputSamples); got != 0 {
+		t.Fatalf("cursor final output samples = %d, want 0", got)
 	}
 }
 
@@ -1292,8 +1348,17 @@ func TestAnalyzeMergesetQueryKeySearchDescending(t *testing.T) {
 			t.Fatalf("cursor output sample[%d] = %+v, want %+v", i, got, want)
 		}
 	}
-	if got, want := len(decode.CursorFinalOutputSamples), 0; got != want {
+	if got, want := len(decode.CursorFinalOutputSamples), 1; got != want {
 		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	wantFinal := DecodePathCursorOutput{
+		Key:            "ad",
+		Type:           "mergeset-item-search-final-output-item",
+		OptimizedValue: "ad",
+		Matches:        true,
+	}
+	if got := decode.CursorFinalOutputSamples[0]; got != wantFinal {
+		t.Fatalf("cursor final output sample = %+v, want %+v", got, wantFinal)
 	}
 }
 
@@ -1378,6 +1443,15 @@ func TestAnalyzeMergesetQueryKeySearchDescendingMultiBlockExactMatch(t *testing.
 	}
 	if !decode.mergesetSeekResults["ba"].Matches {
 		t.Fatal("expected ba seek result to match exactly")
+	}
+	if got, want := len(decode.CursorFinalOutputSamples), 2; got != want {
+		t.Fatalf("part final output samples = %d, want %d", got, want)
+	}
+	for i, wantKey := range []string{"ab", "ba"} {
+		got := decode.CursorFinalOutputSamples[i]
+		if got.Key != wantKey || got.Type != "mergeset-item-search-final-output-item" || got.OptimizedValue != wantKey || !got.Matches {
+			t.Fatalf("part final output sample[%d] = %+v, want exact %q", i, got, wantKey)
+		}
 	}
 
 	fileSetDecode := report.DecodePath
