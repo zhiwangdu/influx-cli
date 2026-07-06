@@ -555,7 +555,7 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary == nil {
 		return ""
 	}
-	parts := make([]string, 0, 7)
+	parts := make([]string, 0, 10)
 	if summary.Mode != "" {
 		parts = append(parts, summary.Mode)
 	}
@@ -579,6 +579,12 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.TableSearchHeapInserts > 0 || summary.TableSearchHeapPops > 0 {
 		parts = append(parts, fmt.Sprintf("table_search_heap inserts=%d pops=%d", summary.TableSearchHeapInserts, summary.TableSearchHeapPops))
+	}
+	if summary.TableSearchSeekCalls > 0 || summary.TableSearchHeapCandidates > 0 || summary.TableSearchOutputValues > 0 || summary.TableSearchExactMisses > 0 {
+		parts = append(parts, fmt.Sprintf("table_search seeks=%d candidates=%d outputs=%d exact_misses=%d", summary.TableSearchSeekCalls, summary.TableSearchHeapCandidates, summary.TableSearchOutputValues, summary.TableSearchExactMisses))
+	}
+	if summary.DeduplicatedOutputValues > 0 || summary.DuplicateOutputValues > 0 {
+		parts = append(parts, fmt.Sprintf("dedup outputs=%d duplicates=%d", summary.DeduplicatedOutputValues, summary.DuplicateOutputValues))
 	}
 	if summary.DataBlockProbeFilterRows > 0 || summary.DataBlockProbeFilterMatches > 0 || summary.DataBlockProbeFilterRejects > 0 {
 		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects))

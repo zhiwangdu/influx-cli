@@ -99,6 +99,57 @@ func TestReportResultIncludesTSMCursorDecodePathSummary(t *testing.T) {
 	}
 }
 
+func TestReportResultIncludesMergesetTableSearchDecodePathSummary(t *testing.T) {
+	report := Report{
+		Files: []FileReport{{
+			Path:   "3_1_part",
+			Format: FormatMergeset,
+			DecodePath: &DecodePathSummary{
+				Mode:                      "mergeset-file-set-item-search-ascending",
+				BaselineDecodeBlocks:      4,
+				OptimizedDecodeBlocks:     2,
+				SavedDecodeBlocks:         2,
+				TableSearchSeekCalls:      4,
+				TableSearchHeapCandidates: 3,
+				TableSearchHeapInserts:    3,
+				TableSearchHeapPops:       2,
+				TableSearchOutputValues:   2,
+				TableSearchExactMisses:    1,
+				DeduplicatedOutputValues:  1,
+				DuplicateOutputValues:     1,
+				OptimizedDecodeValues:     4,
+				OptimizedOutputValues:     2,
+				CursorWindowCount:         2,
+				MergeWindowCount:          1,
+				MergeWindowBlocks:         2,
+				MergeWindowKeys:           1,
+				Recommendations: []string{
+					"deduplicated exact TableSearch results",
+				},
+			},
+		}},
+	}
+
+	result := report.Result()
+	row := result.Table.Rows[0]
+	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)
+	for _, want := range []string{
+		"mergeset-file-set-item-search-ascending",
+		"blocks 4->2",
+		"table_search_heap inserts=3 pops=2",
+		"table_search seeks=4 candidates=3 outputs=2 exact_misses=1",
+		"dedup outputs=1 duplicates=1",
+	} {
+		if !strings.Contains(decodeText, want) {
+			t.Fatalf("decode path summary %q does not contain %q", decodeText, want)
+		}
+	}
+	advice := row[tableColumnIndex(t, result.Table.Columns, "advice")].(string)
+	if !strings.Contains(advice, "deduplicated exact TableSearch results") {
+		t.Fatalf("advice = %q, want mergeset TableSearch recommendation", advice)
+	}
+}
+
 func TestDecodePathStringListJSONRoundTrip(t *testing.T) {
 	type payload struct {
 		MergeFiles DecodePathStringList `json:"merge_files,omitempty"`
