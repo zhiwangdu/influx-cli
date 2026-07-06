@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/zhiwangdu/influx-cli/internal/history"
 	"github.com/zhiwangdu/influx-cli/internal/schema"
 )
 
@@ -16,15 +18,6 @@ func replaceTrailingPrefix(value, prefix, candidate string) string {
 		return value + candidate
 	}
 	return value[:len(value)-len(prefix)] + candidate
-}
-
-func limitStrings(values []string, limit int) []string {
-	if limit <= 0 || len(values) <= limit {
-		return values
-	}
-	out := append([]string(nil), values[:limit]...)
-	out = append(out, "...")
-	return out
 }
 
 func inferMeasurement(query string) string {
@@ -162,4 +155,31 @@ func formatDuration(value time.Duration) string {
 		return value.String()
 	}
 	return value.Truncate(time.Millisecond).String()
+}
+
+func clampIndex(index, length int) int {
+	if length <= 0 {
+		return 0
+	}
+	if index < 0 {
+		return 0
+	}
+	if index >= length {
+		return length - 1
+	}
+	return index
+}
+
+func historyDetail(entry history.Entry) string {
+	parts := make([]string, 0, 3)
+	if !entry.Time.IsZero() {
+		parts = append(parts, entry.Time.Local().Format("2006-01-02 15:04:05"))
+	}
+	if entry.Database != "" || entry.RetentionPolicy != "" {
+		parts = append(parts, fmt.Sprintf("%s/%s", printValue(entry.Database), printValue(entry.RetentionPolicy)))
+	}
+	if entry.Dialect != "" {
+		parts = append(parts, entry.Dialect)
+	}
+	return strings.Join(parts, " | ")
 }

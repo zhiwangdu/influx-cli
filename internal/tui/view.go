@@ -34,6 +34,11 @@ func (m Model) View() string {
 		builder.WriteString("\n\n")
 	}
 
+	if m.overlay.Active() {
+		builder.WriteString(m.overlayView(width))
+		builder.WriteString("\n\n")
+	}
+
 	resultPanel := m.resultPanel()
 	if m.schemaVisible && width >= wideLayoutWidth && !m.fullscreen {
 		builder.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, resultPanel, strings.Repeat(" ", 2), m.contextPanel(contextPanelWidth)))
@@ -71,8 +76,15 @@ func (m *Model) resize(width, height int) {
 	if m.fullscreen {
 		mainHeight = height - 5
 	}
-	if mainHeight < 6 {
-		mainHeight = 6
+	minMainHeight := 6
+	minResultHeight := 4
+	if overlayLines := m.overlayLineCount(); overlayLines > 0 {
+		mainHeight -= overlayLines + 2
+		minMainHeight = 3
+		minResultHeight = 2
+	}
+	if mainHeight < minMainHeight {
+		mainHeight = minMainHeight
 	}
 
 	resultWidth := width
@@ -95,8 +107,8 @@ func (m *Model) resize(width, height int) {
 
 	m.resultView.Width = resultWidth
 	m.resultView.Height = mainHeight - 1
-	if m.resultView.Height < 4 {
-		m.resultView.Height = 4
+	if m.resultView.Height < minResultHeight {
+		m.resultView.Height = minResultHeight
 	}
 	m.renderOptions.Width = resultWidth
 	m.rerender()
@@ -206,6 +218,71 @@ func (m Model) footerView(width int) string {
 		return footer
 	}
 	return dimStyle.Render(footer)
+}
+
+func (m Model) overlayView(width int) string {
+	if width < 24 {
+		width = 24
+	}
+	title := m.overlay.Title
+	if m.overlay.Kind == overlayHistory && m.overlay.Filter != "" {
+		title += " filter: " + m.overlay.Filter
+	}
+	if len(m.overlay.Items) == 0 {
+		lines := fitLines([]string{
+			title,
+			"no matches",
+		}, width)
+		lines[0] = titleStyle.Render(lines[0])
+		return strings.Join(lines, "\n")
+	}
+
+	const maxVisible = 8
+	selected := clampIndex(m.overlay.Selected, len(m.overlay.Items))
+	start := selected - maxVisible/2
+	if start < 0 {
+		start = 0
+	}
+	if start+maxVisible > len(m.overlay.Items) {
+		start = len(m.overlay.Items) - maxVisible
+		if start < 0 {
+			start = 0
+		}
+	}
+	end := start + maxVisible
+	if end > len(m.overlay.Items) {
+		end = len(m.overlay.Items)
+	}
+
+	lines := []string{fmt.Sprintf("%s %d/%d", title, selected+1, len(m.overlay.Items))}
+	for i := start; i < end; i++ {
+		item := m.overlay.Items[i]
+		marker := " "
+		if i == selected {
+			marker = ">"
+		}
+		line := marker + " " + item.Label
+		if item.Detail != "" {
+			line += "  " + item.Detail
+		}
+		lines = append(lines, line)
+	}
+	lines = fitLines(lines, width)
+	lines[0] = titleStyle.Render(lines[0])
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) overlayLineCount() int {
+	if !m.overlay.Active() {
+		return 0
+	}
+	if len(m.overlay.Items) == 0 {
+		return 2
+	}
+	if len(m.overlay.Items) > 8 {
+		return 9
+	}
+	return len(m.overlay.Items) + 1
 }
 
 func (m Model) resultSummary() string {

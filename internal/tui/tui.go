@@ -41,6 +41,34 @@ const (
 	modeHistory    tuiMode = "history"
 )
 
+type overlayKind string
+
+const (
+	overlayNone       overlayKind = ""
+	overlayCompletion overlayKind = "completion"
+	overlayHistory    overlayKind = "history"
+)
+
+type overlayItem struct {
+	Label  string
+	Detail string
+	Value  string
+}
+
+type listOverlay struct {
+	Kind       overlayKind
+	Title      string
+	Items      []overlayItem
+	Selected   int
+	Filter     string
+	Prefix     string
+	ReturnMode tuiMode
+}
+
+func (o listOverlay) Active() bool {
+	return o.Kind != overlayNone
+}
+
 type Options struct {
 	Render        render.Options
 	History       *history.Store
@@ -79,10 +107,10 @@ type Model struct {
 
 	history        *history.Store
 	historyEntries []history.Entry
-	historyIndex   int
 
 	queryTimeout  time.Duration
 	watchInterval time.Duration
+	overlay       listOverlay
 
 	schemaLoading     bool
 	schemaMeasurement string
@@ -198,7 +226,6 @@ func NewModel(executor *app.Executor, options Options) Model {
 		statusMessage: "ready",
 		schemaVisible: true,
 		history:       options.History,
-		historyIndex:  -1,
 		queryTimeout:  queryTimeout,
 		watchInterval: watchInterval,
 	}
@@ -223,7 +250,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.historyEntries = msg.entries
-		m.historyIndex = -1
 		return m, nil
 	case queryResultMsg:
 		return m.handleQueryResult(msg)
@@ -269,10 +295,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEditKey(msg)
 	case modeResult:
 		return m.handleResultKey(msg)
-	case modeCompletion, modeHistory:
-		cmd := m.setMode(modeCommand)
-		m.statusMessage = "command mode"
-		return m, cmd
+	case modeCompletion:
+		return m.handleCompletionKey(msg)
+	case modeHistory:
+		return m.handleHistoryKey(msg)
 	default:
 		return m.handleCommandKey(msg)
 	}
@@ -283,8 +309,7 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+j", "ctrl+enter":
 		return m.startQuery(strings.TrimSpace(m.editor.Value()), false)
 	case "ctrl+r":
-		m.recallHistory()
-		return m, nil
+		return m.openHistoryPanel()
 	case "ctrl+l":
 		m.clearEditor()
 		return m, nil
@@ -318,8 +343,7 @@ func (m Model) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+j", "ctrl+enter":
 		return m.startQuery(strings.TrimSpace(m.editor.Value()), false)
 	case "ctrl+r":
-		m.recallHistory()
-		return m, nil
+		return m.openHistoryPanel()
 	case "ctrl+l":
 		m.clearEditor()
 		return m, nil
@@ -341,6 +365,11 @@ func (m Model) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "ctrl+r":
+		return m.openHistoryPanel()
+	case "ctrl+l":
+		m.clearEditor()
+		return m, nil
 	case "esc":
 		cmd := m.setMode(modeCommand)
 		m.statusMessage = "command mode"
@@ -373,6 +402,89 @@ func (m Model) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 	}
 
+	return m, nil
+}
+
+func (m Model) handleCompletionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		cmd := m.closeOverlay()
+		m.statusMessage = "completion cancelled"
+		return m, cmd
+	case "enter":
+		return m.acceptCompletion()
+	case "tab", "down":
+		m.moveOverlaySelection(1)
+		return m, nil
+	case "shift+tab", "up":
+		m.moveOverlaySelection(-1)
+		return m, nil
+	case "pgdown":
+		m.moveOverlaySelection(8)
+		return m, nil
+	case "pgup":
+		m.moveOverlaySelection(-8)
+		return m, nil
+	case "home":
+		m.overlay.Selected = 0
+		return m, nil
+	case "end":
+		if len(m.overlay.Items) > 0 {
+			m.overlay.Selected = len(m.overlay.Items) - 1
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) handleHistoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		cmd := m.closeOverlay()
+		m.statusMessage = "history cancelled"
+		return m, cmd
+	case "enter":
+		return m.acceptHistory()
+	case "down":
+		m.moveOverlaySelection(1)
+		return m, nil
+	case "up":
+		m.moveOverlaySelection(-1)
+		return m, nil
+	case "pgdown":
+		m.moveOverlaySelection(8)
+		return m, nil
+	case "pgup":
+		m.moveOverlaySelection(-8)
+		return m, nil
+	case "home":
+		m.overlay.Selected = 0
+		return m, nil
+	case "end":
+		if len(m.overlay.Items) > 0 {
+			m.overlay.Selected = len(m.overlay.Items) - 1
+		}
+		return m, nil
+	case "backspace", "ctrl+h":
+		if m.overlay.Filter != "" {
+			runes := []rune(m.overlay.Filter)
+			m.overlay.Filter = string(runes[:len(runes)-1])
+			m.rebuildHistoryOverlay()
+			m.resize(m.width, m.height)
+		}
+		return m, nil
+	case "ctrl+u":
+		m.overlay.Filter = ""
+		m.rebuildHistoryOverlay()
+		m.resize(m.width, m.height)
+		return m, nil
+	}
+	if len(msg.Runes) > 0 {
+		m.overlay.Filter += string(msg.Runes)
+		m.rebuildHistoryOverlay()
+		m.resize(m.width, m.height)
+		return m, nil
+	}
 	return m, nil
 }
 
@@ -444,8 +556,17 @@ func (m *Model) setMode(mode tuiMode) tea.Cmd {
 
 func (m *Model) clearEditor() {
 	m.editor.Reset()
-	m.historyIndex = -1
 	m.statusMessage = "editor cleared"
+}
+
+func (m *Model) closeOverlay() tea.Cmd {
+	returnMode := m.overlay.ReturnMode
+	if returnMode == "" || returnMode == modeCompletion || returnMode == modeHistory {
+		returnMode = modeEdit
+	}
+	m.overlay = listOverlay{}
+	m.resize(m.width, m.height)
+	return m.setMode(returnMode)
 }
 
 func (m Model) startQuery(query string, fromWatch bool) (tea.Model, tea.Cmd) {
@@ -577,7 +698,6 @@ func (m Model) handleQueryResult(msg queryResultMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.persisted != nil {
 		m.historyEntries = append([]history.Entry{*msg.persisted}, m.historyEntries...)
-		m.historyIndex = -1
 	}
 
 	var cmds []tea.Cmd
@@ -632,9 +752,9 @@ func (m Model) toggleWatch() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) manualRefresh() (tea.Model, tea.Cmd) {
-	query := strings.TrimSpace(m.lastQuery)
+	query := strings.TrimSpace(m.editor.Value())
 	if query == "" {
-		query = strings.TrimSpace(m.editor.Value())
+		query = strings.TrimSpace(m.lastQuery)
 	}
 	if query == "" {
 		m.statusMessage = "refresh: no query"
@@ -720,6 +840,15 @@ func (m Model) completeCmd(line string) tea.Cmd {
 }
 
 func (m Model) handleCompletion(msg completionMsg) Model {
+	if m.overlay.Active() && m.overlay.Kind != overlayCompletion {
+		return m
+	}
+	if msg.line != m.editor.Value() {
+		return m
+	}
+	if m.loading || (m.mode != modeEdit && m.mode != modeCompletion) {
+		return m
+	}
 	if msg.err != nil {
 		m.statusMessage = "completion: " + oneLine(msg.err.Error())
 		return m
@@ -728,16 +857,126 @@ func (m Model) handleCompletion(msg completionMsg) Model {
 		m.statusMessage = "completion: no matches"
 		return m
 	}
-	candidate := msg.candidates[0]
-	value := replaceTrailingPrefix(m.editor.Value(), msg.prefix, candidate)
-	m.editor.SetValue(value)
-	m.editor.CursorEnd()
 	if len(msg.candidates) == 1 {
+		candidate := msg.candidates[0]
+		value := replaceTrailingPrefix(m.editor.Value(), msg.prefix, candidate)
+		m.editor.SetValue(value)
+		m.editor.CursorEnd()
 		m.statusMessage = "completion: " + candidate
 		return m
 	}
-	m.statusMessage = "completion: " + strings.Join(limitStrings(msg.candidates, 6), " ")
+	items := make([]overlayItem, 0, len(msg.candidates))
+	for _, candidate := range msg.candidates {
+		items = append(items, overlayItem{Label: candidate, Value: candidate})
+	}
+	returnMode := m.mode
+	if returnMode == modeCompletion || returnMode == modeHistory {
+		returnMode = modeEdit
+	}
+	m.overlay = listOverlay{
+		Kind:       overlayCompletion,
+		Title:      "Completion",
+		Items:      items,
+		Prefix:     msg.prefix,
+		ReturnMode: returnMode,
+	}
+	m.setMode(modeCompletion)
+	m.resize(m.width, m.height)
+	m.statusMessage = fmt.Sprintf("completion: %d matches", len(msg.candidates))
 	return m
+}
+
+func (m Model) acceptCompletion() (tea.Model, tea.Cmd) {
+	if m.overlay.Kind != overlayCompletion || len(m.overlay.Items) == 0 {
+		cmd := m.closeOverlay()
+		return m, cmd
+	}
+	selected := clampIndex(m.overlay.Selected, len(m.overlay.Items))
+	candidate := m.overlay.Items[selected].Value
+	value := replaceTrailingPrefix(m.editor.Value(), m.overlay.Prefix, candidate)
+	m.editor.SetValue(value)
+	m.editor.CursorEnd()
+	cmd := m.closeOverlay()
+	m.statusMessage = "completion: " + candidate
+	return m, cmd
+}
+
+func (m Model) openHistoryPanel() (tea.Model, tea.Cmd) {
+	if len(m.historyEntries) == 0 {
+		m.statusMessage = "history: empty"
+		return m, nil
+	}
+	returnMode := m.mode
+	if returnMode == modeCompletion || returnMode == modeHistory {
+		returnMode = modeEdit
+	}
+	m.overlay = listOverlay{
+		Kind:       overlayHistory,
+		Title:      "History",
+		ReturnMode: returnMode,
+	}
+	m.rebuildHistoryOverlay()
+	m.setMode(modeHistory)
+	m.resize(m.width, m.height)
+	m.statusMessage = fmt.Sprintf("history: %d entries", len(m.overlay.Items))
+	return m, nil
+}
+
+func (m *Model) rebuildHistoryOverlay() {
+	filter := strings.ToLower(strings.TrimSpace(m.overlay.Filter))
+	items := make([]overlayItem, 0, len(m.historyEntries))
+	for _, entry := range m.historyEntries {
+		haystack := strings.ToLower(strings.Join([]string{
+			entry.Query,
+			entry.Database,
+			entry.RetentionPolicy,
+			entry.Dialect,
+		}, " "))
+		if filter != "" && !strings.Contains(haystack, filter) {
+			continue
+		}
+		items = append(items, overlayItem{
+			Label:  oneLine(entry.Query),
+			Detail: historyDetail(entry),
+			Value:  entry.Query,
+		})
+	}
+	m.overlay.Items = items
+	if len(items) == 0 {
+		m.overlay.Selected = 0
+		return
+	}
+	m.overlay.Selected = clampIndex(m.overlay.Selected, len(items))
+}
+
+func (m Model) acceptHistory() (tea.Model, tea.Cmd) {
+	if m.overlay.Kind != overlayHistory || len(m.overlay.Items) == 0 {
+		m.statusMessage = "history: no matches"
+		return m, nil
+	}
+	selected := clampIndex(m.overlay.Selected, len(m.overlay.Items))
+	query := m.overlay.Items[selected].Value
+	m.editor.SetValue(query)
+	m.editor.CursorEnd()
+	m.overlay.ReturnMode = modeEdit
+	cmd := m.closeOverlay()
+	m.statusMessage = "history loaded"
+	return m, cmd
+}
+
+func (m *Model) moveOverlaySelection(delta int) {
+	if len(m.overlay.Items) == 0 {
+		m.overlay.Selected = 0
+		return
+	}
+	next := m.overlay.Selected + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(m.overlay.Items) {
+		next = len(m.overlay.Items) - 1
+	}
+	m.overlay.Selected = next
 }
 
 func (m Model) loadSchemaCmd(measurement string) tea.Cmd {
@@ -791,21 +1030,6 @@ func (m Model) scheduleWatchCmd() tea.Cmd {
 	return tea.Tick(m.watchInterval, func(t time.Time) tea.Msg {
 		return watchTickMsg(t)
 	})
-}
-
-func (m *Model) recallHistory() {
-	if len(m.historyEntries) == 0 {
-		m.statusMessage = "history: empty"
-		return
-	}
-	m.historyIndex++
-	if m.historyIndex >= len(m.historyEntries) {
-		m.historyIndex = 0
-	}
-	entry := m.historyEntries[m.historyIndex]
-	m.editor.SetValue(entry.Query)
-	m.editor.CursorEnd()
-	m.statusMessage = fmt.Sprintf("history: %d/%d", m.historyIndex+1, len(m.historyEntries))
 }
 
 func (m *Model) setRenderMode(format string) {

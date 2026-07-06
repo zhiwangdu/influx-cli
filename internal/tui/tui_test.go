@@ -436,15 +436,152 @@ func TestModelCompletesSelectFieldsBeforeFrom(t *testing.T) {
 
 	msg := model.completeCmd(model.editor.Value())().(completionMsg)
 	model = model.handleCompletion(msg)
+	if model.mode == modeCompletion {
+		updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+		model = updated.(Model)
+		if cmd != nil {
+			_ = cmd()
+		}
+	}
 	if got := model.editor.Value(); got != "select usage_idle" {
 		t.Fatalf("editor value = %q, want select usage_idle", got)
+	}
+}
+
+func TestCompletionMenuAcceptsSelectedCandidate(t *testing.T) {
+	model := newTestModel(&fakeAdapter{schemaSnapshot: cpuSnapshot()})
+	model.editor.SetValue("select us")
+
+	msg := model.completeCmd(model.editor.Value())().(completionMsg)
+	model = model.handleCompletion(msg)
+	if model.mode != modeCompletion {
+		t.Fatalf("mode = %q, want completion", model.mode)
+	}
+	if model.overlay.Kind != overlayCompletion {
+		t.Fatalf("overlay kind = %q, want completion", model.overlay.Kind)
+	}
+	if len(model.overlay.Items) < 2 {
+		t.Fatalf("expected multiple completion candidates, got %d", len(model.overlay.Items))
+	}
+	if got := model.editor.Value(); got != "select us" {
+		t.Fatalf("editor value changed before accept: %q", got)
+	}
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(Model)
+	selected := model.overlay.Items[model.overlay.Selected].Value
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	if model.mode != modeEdit || !model.editor.Focused() {
+		t.Fatalf("mode/focus = %q/%v, want edit/focused", model.mode, model.editor.Focused())
+	}
+	if !strings.HasSuffix(model.editor.Value(), selected) {
+		t.Fatalf("editor value = %q, want suffix %q", model.editor.Value(), selected)
+	}
+}
+
+func TestCompletionMenuCancelKeepsEditorValue(t *testing.T) {
+	model := newTestModel(&fakeAdapter{schemaSnapshot: cpuSnapshot()})
+	model.editor.SetValue("select us")
+
+	msg := model.completeCmd(model.editor.Value())().(completionMsg)
+	model = model.handleCompletion(msg)
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	if model.mode != modeEdit {
+		t.Fatalf("mode = %q, want edit", model.mode)
+	}
+	if got := model.editor.Value(); got != "select us" {
+		t.Fatalf("editor value = %q, want unchanged", got)
+	}
+}
+
+func TestStaleCompletionDoesNotClobberHistoryOverlay(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.editor.SetValue("select us")
+	model.historyEntries = []history.Entry{{Query: "select * from cpu"}}
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(Model)
+	if model.mode != modeHistory {
+		t.Fatalf("mode = %q, want history", model.mode)
+	}
+
+	model = model.handleCompletion(completionMsg{
+		line:       "select us",
+		prefix:     "us",
+		candidates: []string{"usage_idle", "usage_user"},
+	})
+	if model.mode != modeHistory || model.overlay.Kind != overlayHistory {
+		t.Fatalf("late completion changed mode/overlay to %q/%q", model.mode, model.overlay.Kind)
+	}
+	if got := model.editor.Value(); got != "select us" {
+		t.Fatalf("editor value = %q, want unchanged", got)
+	}
+}
+
+func TestStaleCompletionForChangedLineIsIgnored(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.editor.SetValue("select usage")
+
+	model = model.handleCompletion(completionMsg{
+		line:       "select us",
+		prefix:     "us",
+		candidates: []string{"usage_idle", "usage_user"},
+	})
+	if model.overlay.Active() {
+		t.Fatalf("expected stale completion to be ignored, got overlay %q", model.overlay.Kind)
+	}
+	if got := model.editor.Value(); got != "select usage" {
+		t.Fatalf("editor value = %q, want unchanged", got)
+	}
+}
+
+func TestLateCompletionDoesNotOpenDuringOrAfterQuery(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.editor.SetValue("select us")
+
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	model = updated.(Model)
+	if cmd == nil || !model.loading {
+		t.Fatal("expected running query")
+	}
+
+	model = model.handleCompletion(completionMsg{
+		line:       "select us",
+		prefix:     "us",
+		candidates: []string{"usage_idle", "usage_user"},
+	})
+	if model.overlay.Active() || model.mode == modeCompletion {
+		t.Fatalf("late completion opened overlay while loading: mode=%q overlay=%q", model.mode, model.overlay.Kind)
+	}
+
+	msg := cmd().(queryResultMsg)
+	updated, _ = model.handleQueryResult(msg)
+	model = updated.(Model)
+	if model.mode != modeCommand {
+		t.Fatalf("mode = %q, want command after query", model.mode)
+	}
+
+	model = model.handleCompletion(completionMsg{
+		line:       "select us",
+		prefix:     "us",
+		candidates: []string{"usage_idle", "usage_user"},
+	})
+	if model.overlay.Active() || model.mode == modeCompletion {
+		t.Fatalf("late completion opened overlay after query: mode=%q overlay=%q", model.mode, model.overlay.Kind)
 	}
 }
 
 func TestClearEditorKeepsEditMode(t *testing.T) {
 	model := newTestModel(&fakeAdapter{})
 	model.editor.SetValue("select * from cpu")
-	model.historyIndex = 3
 
 	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlL})
 	model = updated.(Model)
@@ -453,9 +590,6 @@ func TestClearEditorKeepsEditMode(t *testing.T) {
 	}
 	if got := model.editor.Value(); got != "" {
 		t.Fatalf("editor value = %q, want empty", got)
-	}
-	if model.historyIndex != -1 {
-		t.Fatalf("history index = %d, want -1", model.historyIndex)
 	}
 	if model.mode != modeEdit || !model.editor.Focused() {
 		t.Fatalf("mode/focus = %q/%v, want edit/focused", model.mode, model.editor.Focused())
@@ -504,20 +638,141 @@ func TestRefreshSchemaRequiresMeasurement(t *testing.T) {
 	}
 }
 
-func TestModelRecallsHistory(t *testing.T) {
+func TestHistoryPanelFiltersAndLoadsQuery(t *testing.T) {
 	model := newTestModel(&fakeAdapter{})
+	model.historyEntries = []history.Entry{
+		{Time: time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC), Database: "metrics", RetentionPolicy: "autogen", Query: "select * from cpu"},
+		{Time: time.Date(2026, 7, 6, 10, 1, 0, 0, time.UTC), Database: "metrics", RetentionPolicy: "autogen", Query: "select * from mem"},
+	}
+
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("expected history panel to open synchronously")
+	}
+	if model.mode != modeHistory || model.overlay.Kind != overlayHistory {
+		t.Fatalf("mode/overlay = %q/%q, want history/history", model.mode, model.overlay.Kind)
+	}
+	if len(model.overlay.Items) != 2 {
+		t.Fatalf("history items = %d, want 2", len(model.overlay.Items))
+	}
+
+	for _, r := range []rune("mem") {
+		updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = updated.(Model)
+	}
+	if model.overlay.Filter != "mem" {
+		t.Fatalf("filter = %q, want mem", model.overlay.Filter)
+	}
+	if len(model.overlay.Items) != 1 {
+		t.Fatalf("filtered items = %d, want 1", len(model.overlay.Items))
+	}
+
+	updated, cmd = model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	if model.mode != modeEdit {
+		t.Fatalf("mode = %q, want edit", model.mode)
+	}
+	if got := model.editor.Value(); got != "select * from mem" {
+		t.Fatalf("editor value = %q, want mem query", got)
+	}
+	if model.statusMessage != "history loaded" {
+		t.Fatalf("status = %q, want history loaded", model.statusMessage)
+	}
+}
+
+func TestHistoryPanelCanFilterWithJAndK(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.historyEntries = []history.Entry{
+		{Query: "select * from jvm"},
+		{Query: "select * from cpu"},
+	}
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(Model)
+	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = updated.(Model)
+
+	if model.overlay.Filter != "j" {
+		t.Fatalf("filter = %q, want j", model.overlay.Filter)
+	}
+	if len(model.overlay.Items) != 1 || model.overlay.Items[0].Value != "select * from jvm" {
+		t.Fatalf("filtered history items = %#v, want jvm only", model.overlay.Items)
+	}
+}
+
+func TestHistoryLoadedFromResultReturnsToEditAndRefreshUsesEditor(t *testing.T) {
+	var ran string
+	model := newTestModel(&fakeAdapter{
+		queryFunc: func(ctx context.Context, q query.Query) (result.Result, error) {
+			ran = q.Raw
+			return tableResult(), nil
+		},
+	})
+	model.lastQuery = "select * from old"
+	model.historyEntries = []history.Entry{{Query: "select * from mem"}}
+	model.setMode(modeResult)
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(Model)
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	if model.mode != modeEdit || !model.editor.Focused() {
+		t.Fatalf("mode/focus = %q/%v, want edit/focused", model.mode, model.editor.Focused())
+	}
+
+	updated, cmd = model.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	updated, cmd = model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected manual refresh command")
+	}
+	_ = cmd()
+	if ran != "select * from mem" {
+		t.Fatalf("ran query = %q, want loaded history query", ran)
+	}
+}
+
+func TestOverlayReducesResultViewportHeight(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.resize(100, 30)
+	before := model.resultView.Height
 	model.historyEntries = []history.Entry{
 		{Query: "select * from cpu"},
 		{Query: "select * from mem"},
+		{Query: "select * from disk"},
 	}
 
-	model.recallHistory()
-	if got := model.editor.Value(); got != "select * from cpu" {
-		t.Fatalf("first recalled query = %q", got)
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(Model)
+	if model.resultView.Height >= before {
+		t.Fatalf("result height = %d, want less than %d while overlay is open", model.resultView.Height, before)
 	}
-	model.recallHistory()
-	if got := model.editor.Value(); got != "select * from mem" {
-		t.Fatalf("second recalled query = %q", got)
+}
+
+func TestHistoryPanelEmptyShowsStatus(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("expected empty history to be synchronous")
+	}
+	if model.mode != modeEdit {
+		t.Fatalf("mode = %q, want edit", model.mode)
+	}
+	if model.statusMessage != "history: empty" {
+		t.Fatalf("status = %q, want history empty", model.statusMessage)
 	}
 }
 
