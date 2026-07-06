@@ -378,6 +378,7 @@ type DecodePathSummary struct {
 	Samples                      []DecodePathBlockDecision `json:"samples,omitempty"`
 	CursorWindows                []DecodePathCursorWindow  `json:"cursor_windows,omitempty"`
 	CursorOutputSamples          []DecodePathCursorOutput  `json:"cursor_output_samples,omitempty"`
+	CursorFinalOutputSamples     []DecodePathCursorOutput  `json:"cursor_final_output_samples,omitempty"`
 	Recommendations              []string                  `json:"recommendations,omitempty"`
 	mergesetSeekResults          map[string]mergesetSeekResult
 	mergesetScanItems            [][]byte

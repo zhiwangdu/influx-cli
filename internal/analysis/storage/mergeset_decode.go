@@ -312,14 +312,17 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 	var groupFiles []string
 	var groupSampleIndexes []int
 	finishGroup := func() {
-		if groupSize <= 1 {
+		if groupSize == 0 {
 			return
 		}
 		files := uniqueStringsPreserveOrder(groupFiles)
-		for _, index := range groupSampleIndexes {
-			summary.CursorOutputSamples[index].RequiresDedup = true
+		if groupSize > 1 {
+			for _, index := range groupSampleIndexes {
+				summary.CursorOutputSamples[index].RequiresDedup = true
+			}
 		}
-		if len(files) > 1 {
+		requiresMerge := len(files) > 1
+		if requiresMerge {
 			duplicateGroups++
 			appendMergesetDuplicateMergeWindow(summary, DecodePathCursorWindow{
 				Key:            string(previous),
@@ -333,6 +336,23 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 				summary.CursorOutputSamples[index].MergeFiles = newDecodePathStringList(files)
 				summary.CursorOutputSamples[index].RequiresMerge = true
 			}
+		}
+		if options.BlockSampleLimit > 0 && len(summary.CursorFinalOutputSamples) < options.BlockSampleLimit {
+			output := DecodePathCursorOutput{
+				Key:            string(previous),
+				Type:           "mergeset-table-final-output-item",
+				OptimizedValue: string(previous),
+				Matches:        true,
+				RequiresDedup:  groupSize > 1,
+				RequiresMerge:  requiresMerge,
+			}
+			if len(groupFiles) > 0 {
+				output.File = groupFiles[0]
+			}
+			if requiresMerge {
+				output.MergeFiles = newDecodePathStringList(files)
+			}
+			summary.CursorFinalOutputSamples = append(summary.CursorFinalOutputSamples, output)
 		}
 	}
 	for cursorHeap.Len() > 0 {
@@ -494,6 +514,9 @@ func mergesetFileSetScanRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(summary.CursorOutputSamples) > 0 {
 		recommendations = append(recommendations, "file-set scan output samples follow TableSearch heap cursor order")
+	}
+	if len(summary.CursorFinalOutputSamples) > 0 {
+		recommendations = append(recommendations, "final file-set scan output samples show deduplicated TableSearch cursor output")
 	}
 	if len(recommendations) == 0 {
 		recommendations = append(recommendations, "mergeset file-set table scan has no decoded item payload candidates")
