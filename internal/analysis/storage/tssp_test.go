@@ -2119,6 +2119,152 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "00000001-0001-00000000.tssp")
+	path2 := filepath.Join(dir, "00000002-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTestTSSPWithMultiColumnRecordData(path2); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QuerySeriesIDs:   []uint64{7},
+		QueryFields:      []FieldFilter{{Key: "status", Value: "true"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level TSSP decode path summary")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 2; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordSamples, 2; got != want {
+		t.Fatalf("data block probe record samples = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 6; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, wantFile := range []string{path1, path1, path1, path2, path2, path2} {
+		if got := decode.CursorOutputSamples[i].File; got != wantFile {
+			t.Fatalf("cursor output sample[%d] file = %q, want %q", i, got, wantFile)
+		}
+		if !decode.CursorOutputSamples[i].Matches {
+			t.Fatalf("cursor output sample[%d] should match", i)
+		}
+	}
+	if got, want := len(decode.CursorFinalOutputSamples), 3; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "sid:7/record", Time: times[0], Type: "record", File: path1, OptimizedValue: "status=true,value=1.25", Matches: true, RequiresDedup: true, RequiresMerge: true, MergeFiles: newDecodePathStringList([]string{path1, path2})},
+		{Key: "sid:7/status", Time: times[0], Type: "boolean-full", File: path1, OptimizedValue: "true", Matches: true, RequiresDedup: true, RequiresMerge: true, MergeFiles: newDecodePathStringList([]string{path1, path2})},
+		{Key: "sid:7/value", Time: times[0], Type: "float-full", File: path1, OptimizedValue: "1.25", Matches: true, RequiresDedup: true, RequiresMerge: true, MergeFiles: newDecodePathStringList([]string{path1, path2})},
+	} {
+		got := decode.CursorFinalOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor final output sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "final TSSP file-set output samples") {
+		t.Fatalf("recommendations = %v, want final file-set output recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPFileSetFinalOutputSamplesUseUntruncatedFileSamples(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "00000001-0001-00000000.tssp")
+	path2 := filepath.Join(dir, "00000002-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTestTSSPWithMultiColumnRecordData(path2); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QuerySeriesIDs:   []uint64{7},
+		QueryFields:      []FieldFilter{{Key: "status", Value: "true"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level TSSP decode path summary")
+	}
+	if got, want := len(decode.CursorOutputSamples), 2; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i := range decode.CursorOutputSamples {
+		if got := decode.CursorOutputSamples[i].File; got != path1 {
+			t.Fatalf("cursor output sample[%d] file = %q, want %q from display cap", i, got, path1)
+		}
+	}
+	if got, want := len(decode.CursorFinalOutputSamples), 2; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	wantMergeFiles := newDecodePathStringList([]string{path1, path2})
+	for i, got := range decode.CursorFinalOutputSamples {
+		if got.MergeFiles != wantMergeFiles {
+			t.Fatalf("cursor final output sample[%d] merge files = %q, want %q", i, got.MergeFiles, wantMergeFiles)
+		}
+		if !got.RequiresDedup || !got.RequiresMerge {
+			t.Fatalf("cursor final output sample[%d] = %+v, want dedup and merge despite display cap", i, got)
+		}
+	}
+}
+
+func TestTSSPFileSetFinalOutputSamplesSkipMissesAndMarkSingleFileDedup(t *testing.T) {
+	outputGroups := newTSSPFileSetOutputSampleGroups()
+	for _, output := range []DecodePathCursorOutput{
+		{Key: "sid:7/value", Time: 333, Type: "float-full", File: "a.tssp", OptimizedValue: "1.25", Matches: true},
+		{Key: "sid:7/value", Time: 333, Type: "float-full", File: "a.tssp", OptimizedValue: "1.25", Matches: true},
+		{Key: "sid:7/value", Time: 444, Type: "float-full", File: "a.tssp", OptimizedValue: "2.5", Matches: false},
+	} {
+		outputGroups.add(output)
+	}
+	summary := &DecodePathSummary{}
+	populateTSSPFileSetFinalOutputSamples(summary, outputGroups, 4)
+
+	if got, want := len(summary.CursorFinalOutputSamples), 1; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	sample := summary.CursorFinalOutputSamples[0]
+	if got, want := sample.OptimizedValue, "1.25"; got != want {
+		t.Fatalf("cursor final output value = %q, want %q", got, want)
+	}
+	if !sample.RequiresDedup {
+		t.Fatal("expected repeated same-file output to require dedup")
+	}
+	if sample.RequiresMerge || sample.MergeFiles != "" {
+		t.Fatalf("cursor final output sample = %+v, want same-file dedup without merge", sample)
+	}
+}
+
 func TestAnalyzeTSSPFileSetColumnProjectionReportsMissingColumns(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "00000001-0001-00000000.tssp")

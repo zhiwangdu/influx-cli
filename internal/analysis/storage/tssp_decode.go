@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -160,10 +161,11 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	matchedSeriesIDs := map[uint64]struct{}{}
 	matchedColumns := map[string]struct{}{}
 	matchedFields := map[string]struct{}{}
+	outputGroups := newTSSPFileSetOutputSampleGroups()
 	included := false
 	for _, file := range tsspFilesForCursor(files, options.CursorDescending) {
 		included = true
-		addTSSPFileDecodePathSummary(summary, file.DecodePath, file.Path, options.BlockSampleLimit)
+		addTSSPFileDecodePathSummary(summary, file.DecodePath, file.Path, options.BlockSampleLimit, outputGroups)
 		for _, id := range file.DecodePath.MatchedSeriesIDs {
 			matchedSeriesIDs[id] = struct{}{}
 		}
@@ -179,6 +181,7 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	}
 	populateTSSPFileSetColumnProjectionMatches(summary, options.QueryColumns, matchedColumns)
 	populateTSSPFileSetFieldFilterMatches(summary, options.QueryFields, matchedFields)
+	populateTSSPFileSetFinalOutputSamples(summary, outputGroups, options.BlockSampleLimit)
 
 	if len(summary.QuerySeriesIDs) > 0 {
 		for _, id := range summary.QuerySeriesIDs {
@@ -258,7 +261,7 @@ func tsspFilesForCursor(files []FileReport, descending bool) []FileReport {
 	return ordered
 }
 
-func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, sampleLimit int) {
+func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, sampleLimit int, outputGroups *tsspFileSetOutputSampleGroups) {
 	dst.BaselineDecodeBlocks += src.BaselineDecodeBlocks
 	dst.OptimizedDecodeBlocks += src.OptimizedDecodeBlocks
 	dst.BaselineDecodeBytes += src.BaselineDecodeBytes
@@ -294,7 +297,7 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.CursorWindowCount += src.CursorWindowCount
 	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
 	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
-	appendTSSPFileDecodePathSamples(dst, src, path, sampleLimit)
+	appendTSSPFileDecodePathSamples(dst, src, path, sampleLimit, outputGroups)
 }
 
 func addTSSPDecodePathCounts(dst, src map[string]int) {
@@ -303,7 +306,7 @@ func addTSSPDecodePathCounts(dst, src map[string]int) {
 	}
 }
 
-func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, sampleLimit int) {
+func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, sampleLimit int, outputGroups *tsspFileSetOutputSampleGroups) {
 	if sampleLimit <= 0 {
 		return
 	}
@@ -326,10 +329,89 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 		dst.CursorWindows = append(dst.CursorWindows, window)
 	}
 	for _, output := range src.CursorOutputSamples {
-		if len(dst.CursorOutputSamples) >= sampleLimit {
-			break
+		if output.File == "" {
+			output.File = path
 		}
-		dst.CursorOutputSamples = append(dst.CursorOutputSamples, output)
+		if outputGroups != nil {
+			outputGroups.add(output)
+		}
+		if len(dst.CursorOutputSamples) < sampleLimit {
+			dst.CursorOutputSamples = append(dst.CursorOutputSamples, output)
+		}
+	}
+}
+
+type tsspFileSetOutputSampleKey struct {
+	key   string
+	time  int64
+	typ   string
+	value string
+}
+
+type tsspFileSetOutputSampleGroup struct {
+	output DecodePathCursorOutput
+	files  []string
+	count  int
+}
+
+type tsspFileSetOutputSampleGroups struct {
+	groups map[tsspFileSetOutputSampleKey]*tsspFileSetOutputSampleGroup
+	order  []tsspFileSetOutputSampleKey
+}
+
+func newTSSPFileSetOutputSampleGroups() *tsspFileSetOutputSampleGroups {
+	return &tsspFileSetOutputSampleGroups{
+		groups: map[tsspFileSetOutputSampleKey]*tsspFileSetOutputSampleGroup{},
+	}
+}
+
+func (g *tsspFileSetOutputSampleGroups) add(output DecodePathCursorOutput) {
+	if g == nil {
+		return
+	}
+	if !output.Matches {
+		return
+	}
+	key := tsspFileSetOutputSampleKey{
+		key:   output.Key,
+		time:  output.Time,
+		typ:   output.Type,
+		value: output.OptimizedValue,
+	}
+	group, ok := g.groups[key]
+	if !ok {
+		output.RequiresDedup = false
+		output.RequiresMerge = false
+		output.MergeFiles = ""
+		group = &tsspFileSetOutputSampleGroup{output: output}
+		g.groups[key] = group
+		g.order = append(g.order, key)
+	}
+	group.count++
+	if output.File != "" && !slices.Contains(group.files, output.File) {
+		group.files = append(group.files, output.File)
+	}
+}
+
+func populateTSSPFileSetFinalOutputSamples(summary *DecodePathSummary, outputGroups *tsspFileSetOutputSampleGroups, sampleLimit int) {
+	if sampleLimit <= 0 || outputGroups == nil || len(outputGroups.order) == 0 {
+		return
+	}
+	for _, key := range outputGroups.order {
+		if len(summary.CursorFinalOutputSamples) >= sampleLimit {
+			return
+		}
+		group := outputGroups.groups[key]
+		output := group.output
+		output.RequiresDedup = group.count > 1
+		output.RequiresMerge = len(group.files) > 1
+		if len(group.files) > 0 {
+			output.File = group.files[0]
+		}
+		if output.RequiresMerge {
+			output.MergeFiles = newDecodePathStringList(group.files)
+		}
+		summary.CursorFinalOutputSamples = append(summary.CursorFinalOutputSamples, output)
 	}
 }
 
@@ -589,6 +671,9 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			"materialized %d TSSP record sample(s) from decoded column blocks",
 			summary.DataBlockProbeRecordSamples,
 		))
+	}
+	if len(summary.CursorFinalOutputSamples) > 0 {
+		recommendations = append(recommendations, "final TSSP file-set output samples include local exact-dedup status")
 	}
 	recordSamplesInOutput := summary.DataBlockProbeRecordSamples
 	if recordSamplesInOutput > len(summary.CursorOutputSamples) {
