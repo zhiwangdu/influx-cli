@@ -26,6 +26,9 @@ type tsspAttachedDataProbe struct {
 	ValueUnknownReasons map[string]int
 	NullValues          int
 	RecordSamples       int
+	FilterRows          int
+	FilterMatches       int
+	FilterRejects       int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
 	chunkFailureReason  map[uint64]string
@@ -160,6 +163,11 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 					chunkAvailable = false
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
 					continue
+				}
+				if len(options.QueryFields) > 0 {
+					probe.FilterRows += segmentRows
+					probe.FilterMatches += matchedRows
+					probe.FilterRejects += segmentRows - matchedRows
 				}
 				chunkOutputPoints += matchedRows
 				appendTSSPAttachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, matchingRows, options.QueryRange, options.BlockSampleLimit)

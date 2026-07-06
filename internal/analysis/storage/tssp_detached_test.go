@@ -702,6 +702,15 @@ func TestAnalyzeTSSPDetachedFieldFilterSuppressesNonMatchingRows(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_output_points"], "0"; got != want {
 		t.Fatalf("data block probe output points = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_filter_rows"], "1"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "0"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("decode path is nil")
@@ -718,6 +727,15 @@ func TestAnalyzeTSSPDetachedFieldFilterSuppressesNonMatchingRows(t *testing.T) {
 	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
 		t.Fatalf("optimized value output points = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeFilterRows, 1; got != want {
+		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterMatches, 0; got != want {
+		t.Fatalf("data block probe filter matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRejects, 1; got != want {
+		t.Fatalf("data block probe filter rejects = %d, want %d", got, want)
+	}
 	if got, want := len(decode.CursorOutputSamples), 0; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
 	}
@@ -726,6 +744,9 @@ func TestAnalyzeTSSPDetachedFieldFilterSuppressesNonMatchingRows(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "applied 1 detached TSSP field filter") {
 		t.Fatalf("recommendations = %v, want detached field filter recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP field filters matched 0 of 1 decoded record row") {
+		t.Fatalf("recommendations = %v, want detached field filter row-count recommendation", decode.Recommendations)
 	}
 }
 

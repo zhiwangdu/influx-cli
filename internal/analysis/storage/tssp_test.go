@@ -634,6 +634,15 @@ func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
 		t.Fatalf("data block probe output points = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("decode path is nil")
@@ -653,6 +662,15 @@ func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	if got, want := decode.DataBlockProbeRecordSamples, 1; got != want {
 		t.Fatalf("data block probe record samples = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeFilterRows, 2; got != want {
+		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterMatches, 1; got != want {
+		t.Fatalf("data block probe filter matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRejects, 1; got != want {
+		t.Fatalf("data block probe filter rejects = %d, want %d", got, want)
+	}
 	if got, want := len(decode.CursorOutputSamples), 3; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
 	}
@@ -668,6 +686,9 @@ func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	}
 	if !containsStringWithPrefix(decode.Recommendations, "applied 1 TSSP field filter") {
 		t.Fatalf("recommendations = %v, want field filter recommendation", decode.Recommendations)
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "TSSP field filters matched 1 of 2 decoded record row") {
+		t.Fatalf("recommendations = %v, want field filter row-count recommendation", decode.Recommendations)
 	}
 }
 
@@ -2309,6 +2330,15 @@ func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) 
 	}
 	if got, want := decode.DataBlockProbeRecordSamples, 2; got != want {
 		t.Fatalf("data block probe record samples = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRows, 4; got != want {
+		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterMatches, 2; got != want {
+		t.Fatalf("data block probe filter matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRejects, 2; got != want {
+		t.Fatalf("data block probe filter rejects = %d, want %d", got, want)
 	}
 	if got, want := len(decode.CursorOutputSamples), 6; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
