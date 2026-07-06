@@ -76,6 +76,9 @@ type opengeminiTextIndexAnalysis struct {
 	BlockHeaders          []opengeminiTextIndexBlockHeader
 	DeclaredBlockCount    int64
 	ItemCount             int64
+	KeysPayloadSizeBytes  int64
+	PostPayloadSizeBytes  int64
+	PayloadSizeBytes      int64
 	PartTrailingBytes     int64
 	HeaderOutOfBounds     int
 	DataOutOfBounds       int
@@ -118,6 +121,9 @@ func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, options Options) 
 		"declared_block_headers":  fmt.Sprint(analysis.DeclaredBlockCount),
 		"decoded_block_headers":   fmt.Sprint(len(analysis.BlockHeaders)),
 		"item_count":              fmt.Sprint(analysis.ItemCount),
+		"keys_payload_size_bytes": fmt.Sprint(analysis.KeysPayloadSizeBytes),
+		"post_payload_size_bytes": fmt.Sprint(analysis.PostPayloadSizeBytes),
+		"payload_size_bytes":      fmt.Sprint(analysis.PayloadSizeBytes),
 		"local_only":              "true",
 	}
 
@@ -140,6 +146,7 @@ func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, options Options) 
 			BlockCount:             analysis.DeclaredBlockCount,
 			PartCount:              int64(len(analysis.PartHeaders)),
 			ItemCount:              analysis.ItemCount,
+			PayloadSizeBytes:       analysis.PayloadSizeBytes,
 			DataSizeBytes:          analysis.DataSizeBytes,
 			HeaderSizeBytes:        analysis.HeadSizeBytes,
 			PartHeaderSizeBytes:    analysis.PartSizeBytes,
@@ -258,6 +265,9 @@ func parseOpenGeminiTextIndex(paths opengeminiTextIndexPaths) (opengeminiTextInd
 	}
 	for _, block := range blocks {
 		analysis.ItemCount += int64(block.ItemsCount)
+		analysis.KeysPayloadSizeBytes += int64(block.KeysPackSize)
+		analysis.PostPayloadSizeBytes += int64(block.PostPackSize)
+		analysis.PayloadSizeBytes += int64(block.KeysPackSize) + int64(block.PostPackSize)
 		if block.DataOutOfBounds {
 			analysis.DataOutOfBounds++
 		}

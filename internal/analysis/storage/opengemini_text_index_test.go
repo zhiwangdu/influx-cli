@@ -83,8 +83,20 @@ func TestAnalyzeOpenGeminiTextIndexTriplet(t *testing.T) {
 	if got, want := file.SecondaryIndex.ItemCount, int64(5); got != want {
 		t.Fatalf("item count = %d, want %d", got, want)
 	}
+	if got, want := file.SecondaryIndex.PayloadSizeBytes, int64(30); got != want {
+		t.Fatalf("payload size = %d, want %d", got, want)
+	}
 	if got := file.SecondaryIndex.DataOutOfBoundsBlocks; got != 0 {
 		t.Fatalf("data out-of-bounds blocks = %d, want 0", got)
+	}
+	for key, want := range map[string]string{
+		"keys_payload_size_bytes": "14",
+		"post_payload_size_bytes": "16",
+		"payload_size_bytes":      "30",
+	} {
+		if got := file.Extra[key]; got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
 	}
 	if got, want := len(file.Blocks), 2; got != want {
 		t.Fatalf("sample count = %d, want %d", got, want)
