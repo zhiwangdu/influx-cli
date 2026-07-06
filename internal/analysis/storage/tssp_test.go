@@ -708,6 +708,75 @@ func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterMatchesDecodedTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryColumns:     []string{"value"},
+		QueryFields:      []FieldFilter{{Key: "time", Op: ">=", Value: fmt.Sprint(times[1])}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryColumns, []string{"value"}; !equalStrings(got, want) {
+		t.Fatalf("query columns = %v, want %v", got, want)
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "time", Op: ">=", Value: fmt.Sprint(times[1])}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedFields, []FieldFilter{{Key: "time", Op: ">=", Value: fmt.Sprint(times[1])}}; !equalFieldFilters(got, want) {
+		t.Fatalf("matched fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.Samples[0].OptimizedReadAtRanges), 2; got != want {
+		t.Fatalf("optimized ReadAt ranges = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].OptimizedReadAtRanges[0].Column, "value"; got != want {
+		t.Fatalf("first ReadAt range column = %q, want %q", got, want)
+	}
+	if got, want := decode.Samples[0].OptimizedReadAtRanges[1].Column, "time"; got != want {
+		t.Fatalf("second ReadAt range column = %q, want %q", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "sid:7/value",
+		Time:           times[1],
+		Type:           "float-full",
+		OptimizedValue: "2.5",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
+	}
+}
+
 func TestAnalyzeTSSPAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)
@@ -758,6 +827,72 @@ func TestAnalyzeTSSPAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	}
 	if !containsStringWithPrefix(decode.Recommendations, "applied 2 TSSP OR field filter") {
 		t.Fatalf("recommendations = %v, want OR field filter recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPAnyAndNoneFieldFiltersMatchDecodedTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryColumns:     []string{"value"},
+		QueryAnyFields:   []FieldFilter{{Key: "time", Value: fmt.Sprint(times[0])}, {Key: "value", Value: "2.5"}},
+		QueryNoneFields:  []FieldFilter{{Key: "time", Value: fmt.Sprint(times[1])}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	wantAny := []FieldFilter{{Key: "time", Value: fmt.Sprint(times[0])}, {Key: "value", Value: "2.5"}}
+	if got := decode.QueryAnyFields; !equalFieldFilters(got, wantAny) {
+		t.Fatalf("query any fields = %v, want %v", got, wantAny)
+	}
+	if got := decode.MatchedAnyFields; !equalFieldFilters(got, wantAny) {
+		t.Fatalf("matched any fields = %v, want %v", got, wantAny)
+	}
+	wantNone := []FieldFilter{{Key: "time", Value: fmt.Sprint(times[1])}}
+	if got := decode.QueryNoneFields; !equalFieldFilters(got, wantNone) {
+		t.Fatalf("query none fields = %v, want %v", got, wantNone)
+	}
+	if got := decode.MatchedNoneFields; !equalFieldFilters(got, wantNone) {
+		t.Fatalf("matched none fields = %v, want %v", got, wantNone)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "sid:7/value",
+		Time:           times[0],
+		Type:           "float-full",
+		OptimizedValue: "1.25",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
 	}
 }
 
