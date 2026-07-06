@@ -79,6 +79,7 @@ type opengeminiTextIndexAnalysis struct {
 	KeysPayloadSizeBytes  int64
 	PostPayloadSizeBytes  int64
 	PayloadSizeBytes      int64
+	ValidPayloadSizeBytes int64
 	PartTrailingBytes     int64
 	HeaderOutOfBounds     int
 	DataOutOfBounds       int
@@ -105,26 +106,27 @@ func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, options Options) 
 	keySamples := openGeminiTextIndexKeySamples(paths, options.KeySampleLimit)
 	blocks := openGeminiTextIndexBlockSamples(analysis, options.BlockSampleLimit)
 	extra := map[string]string{
-		"layout":                  opengeminiTextIndexLayout,
-		"field":                   paths.Field,
-		"input_component":         paths.InputComponent,
-		"data_path":               paths.DataPath,
-		"head_path":               paths.HeadPath,
-		"part_path":               paths.PartPath,
-		"data_file_present":       fmt.Sprint(analysis.DataFilePresent),
-		"head_file_present":       fmt.Sprint(analysis.HeadFilePresent),
-		"data_size_bytes":         fmt.Sprint(analysis.DataSizeBytes),
-		"head_size_bytes":         fmt.Sprint(analysis.HeadSizeBytes),
-		"part_size_bytes":         fmt.Sprint(analysis.PartSizeBytes),
-		"part_header_record_size": fmt.Sprint(opengeminiTextIndexPartSize),
-		"segments_per_part":       fmt.Sprint(opengeminiTextIndexSegmentSize),
-		"declared_block_headers":  fmt.Sprint(analysis.DeclaredBlockCount),
-		"decoded_block_headers":   fmt.Sprint(len(analysis.BlockHeaders)),
-		"item_count":              fmt.Sprint(analysis.ItemCount),
-		"keys_payload_size_bytes": fmt.Sprint(analysis.KeysPayloadSizeBytes),
-		"post_payload_size_bytes": fmt.Sprint(analysis.PostPayloadSizeBytes),
-		"payload_size_bytes":      fmt.Sprint(analysis.PayloadSizeBytes),
-		"local_only":              "true",
+		"layout":                   opengeminiTextIndexLayout,
+		"field":                    paths.Field,
+		"input_component":          paths.InputComponent,
+		"data_path":                paths.DataPath,
+		"head_path":                paths.HeadPath,
+		"part_path":                paths.PartPath,
+		"data_file_present":        fmt.Sprint(analysis.DataFilePresent),
+		"head_file_present":        fmt.Sprint(analysis.HeadFilePresent),
+		"data_size_bytes":          fmt.Sprint(analysis.DataSizeBytes),
+		"head_size_bytes":          fmt.Sprint(analysis.HeadSizeBytes),
+		"part_size_bytes":          fmt.Sprint(analysis.PartSizeBytes),
+		"part_header_record_size":  fmt.Sprint(opengeminiTextIndexPartSize),
+		"segments_per_part":        fmt.Sprint(opengeminiTextIndexSegmentSize),
+		"declared_block_headers":   fmt.Sprint(analysis.DeclaredBlockCount),
+		"decoded_block_headers":    fmt.Sprint(len(analysis.BlockHeaders)),
+		"item_count":               fmt.Sprint(analysis.ItemCount),
+		"keys_payload_size_bytes":  fmt.Sprint(analysis.KeysPayloadSizeBytes),
+		"post_payload_size_bytes":  fmt.Sprint(analysis.PostPayloadSizeBytes),
+		"payload_size_bytes":       fmt.Sprint(analysis.PayloadSizeBytes),
+		"valid_payload_size_bytes": fmt.Sprint(analysis.ValidPayloadSizeBytes),
+		"local_only":               "true",
 	}
 
 	report := FileReport{
@@ -150,6 +152,7 @@ func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, options Options) 
 			DataSizeBytes:          analysis.DataSizeBytes,
 			HeaderSizeBytes:        analysis.HeadSizeBytes,
 			PartHeaderSizeBytes:    analysis.PartSizeBytes,
+			ValidBytes:             analysis.ValidPayloadSizeBytes,
 			TrailingBytes:          analysis.PartTrailingBytes,
 			HeaderOutOfBoundsParts: analysis.HeaderOutOfBounds,
 			DataOutOfBoundsBlocks:  analysis.DataOutOfBounds,
@@ -268,6 +271,9 @@ func parseOpenGeminiTextIndex(paths opengeminiTextIndexPaths) (opengeminiTextInd
 		analysis.KeysPayloadSizeBytes += int64(block.KeysPackSize)
 		analysis.PostPayloadSizeBytes += int64(block.PostPackSize)
 		analysis.PayloadSizeBytes += int64(block.KeysPackSize) + int64(block.PostPackSize)
+		if analysis.DataFilePresent && !block.DataOutOfBounds {
+			analysis.ValidPayloadSizeBytes += int64(block.KeysPackSize) + int64(block.PostPackSize)
+		}
 		if block.DataOutOfBounds {
 			analysis.DataOutOfBounds++
 		}
