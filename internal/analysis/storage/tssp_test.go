@@ -277,6 +277,7 @@ func TestAnalyzeTSSPSamplesAttachedFloatFullBlocks(t *testing.T) {
 		want   []string
 	}{
 		{name: "raw", codec: 0, values: []float64{1.25, 2.5}, want: []string{"1.25", "2.5"}},
+		{name: "old-gorilla", codec: 1, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
 		{name: "snappy", codec: 2, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
 		{name: "gorilla", codec: 3, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
 		{name: "same", codec: 4, values: []float64{7.5, 7.5, 7.5}, want: []string{"7.5", "7.5", "7.5"}},
@@ -1922,6 +1923,9 @@ func testTSSPFloatFullEncodedPayload(values []float64, codec byte) ([]byte, erro
 	switch codec {
 	case 0:
 		payload.Write(raw)
+	case 1:
+		writeUint32(&payload, uint32(len(values)))
+		payload.Write(testTSMFloatValueBlock(values)[1:])
 	case 2:
 		payload.Write(snappy.Encode(nil, raw))
 	case 3:

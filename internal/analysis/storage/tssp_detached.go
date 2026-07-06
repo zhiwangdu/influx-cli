@@ -710,6 +710,8 @@ func decodeTSSPFloatFullValues(encoded []byte, rows int) ([]string, bool) {
 	switch encoded[0] >> 4 {
 	case 0:
 		return decodeTSSPFloatFullRawValues(encoded[1:], rows)
+	case 1:
+		return decodeTSSPFloatFullOldGorillaValues(encoded[1:], rows)
 	case 2:
 		decoded, err := gsnappy.Decode(nil, encoded[1:])
 		if err != nil {
@@ -737,6 +739,24 @@ func decodeTSSPFloatFullValues(encoded []byte, rows int) ([]string, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func decodeTSSPFloatFullOldGorillaValues(encoded []byte, rows int) ([]string, bool) {
+	if rows < 0 || len(encoded) < 4 {
+		return nil, false
+	}
+	count := int(binary.BigEndian.Uint32(encoded[:4]))
+	if count != rows {
+		return nil, false
+	}
+	tsmEncoded := make([]byte, 1, len(encoded)-3)
+	tsmEncoded[0] = tsmFloatCompressedGorilla << 4
+	tsmEncoded = append(tsmEncoded, encoded[4:]...)
+	values, err := decodeTSMFloatValues(tsmEncoded)
+	if err != nil || len(values) != rows {
+		return nil, false
+	}
+	return formatTSSPFloatValues(values), true
 }
 
 func decodeTSSPFloatFullRawValues(raw []byte, rows int) ([]string, bool) {
