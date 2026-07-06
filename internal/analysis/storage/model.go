@@ -25,6 +25,7 @@ const (
 	FormatOpenGeminiPKMeta  Format = "opengemini-pk-meta"
 	FormatOpenGeminiPKIndex Format = "opengemini-pk-index"
 	FormatOpenGeminiBloom   Format = "opengemini-bloom-filter"
+	FormatOpenGeminiText    Format = "opengemini-text-index"
 )
 
 type Options struct {
@@ -146,20 +147,30 @@ type PrimaryKeyColumnReport struct {
 }
 
 type SecondaryIndexSummary struct {
-	Type             string `json:"type,omitempty"`
-	Layout           string `json:"layout,omitempty"`
-	Field            string `json:"field,omitempty"`
-	Version          uint32 `json:"version,omitempty"`
-	BlockCount       int64  `json:"block_count,omitempty"`
-	GroupCount       int64  `json:"group_count,omitempty"`
-	PieceCount       int64  `json:"piece_count,omitempty"`
-	PayloadSizeBytes int64  `json:"payload_size_bytes,omitempty"`
-	BlockSizeBytes   int64  `json:"block_size_bytes,omitempty"`
-	PieceSizeBytes   int64  `json:"piece_size_bytes,omitempty"`
-	GroupSizeBytes   int64  `json:"group_size_bytes,omitempty"`
-	ValidBytes       int64  `json:"valid_bytes,omitempty"`
-	TrailingBytes    int64  `json:"trailing_bytes,omitempty"`
-	CRCMismatches    int    `json:"crc_mismatches,omitempty"`
+	Type                   string `json:"type,omitempty"`
+	Layout                 string `json:"layout,omitempty"`
+	Field                  string `json:"field,omitempty"`
+	Version                uint32 `json:"version,omitempty"`
+	BlockCount             int64  `json:"block_count,omitempty"`
+	GroupCount             int64  `json:"group_count,omitempty"`
+	PieceCount             int64  `json:"piece_count,omitempty"`
+	PartCount              int64  `json:"part_count,omitempty"`
+	ItemCount              int64  `json:"item_count,omitempty"`
+	PayloadSizeBytes       int64  `json:"payload_size_bytes,omitempty"`
+	BlockSizeBytes         int64  `json:"block_size_bytes,omitempty"`
+	PieceSizeBytes         int64  `json:"piece_size_bytes,omitempty"`
+	GroupSizeBytes         int64  `json:"group_size_bytes,omitempty"`
+	DataSizeBytes          int64  `json:"data_size_bytes,omitempty"`
+	HeaderSizeBytes        int64  `json:"header_size_bytes,omitempty"`
+	PartHeaderSizeBytes    int64  `json:"part_header_size_bytes,omitempty"`
+	ValidBytes             int64  `json:"valid_bytes,omitempty"`
+	TrailingBytes          int64  `json:"trailing_bytes,omitempty"`
+	HeaderOutOfBoundsParts int    `json:"header_out_of_bounds_parts,omitempty"`
+	DataOutOfBoundsBlocks  int    `json:"data_out_of_bounds_blocks,omitempty"`
+	InvalidOffsetBlocks    int    `json:"invalid_offset_blocks,omitempty"`
+	InvalidSizeBlocks      int    `json:"invalid_size_blocks,omitempty"`
+	SegmentRangeOverflows  int    `json:"segment_range_overflows,omitempty"`
+	CRCMismatches          int    `json:"crc_mismatches,omitempty"`
 }
 
 type FieldIndexSummary struct {

@@ -276,6 +276,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeOpenGeminiPKIndex(path, info, options)
 	case FormatOpenGeminiBloom:
 		return analyzeOpenGeminiBloomFilter(path, info, options)
+	case FormatOpenGeminiText:
+		return analyzeOpenGeminiTextIndex(path, info, options)
 	default:
 		return FileReport{}, fmt.Errorf("unsupported storage format %q", format)
 	}
@@ -299,6 +301,9 @@ func detectFormat(path string) (Format, error) {
 	}
 	if isOpenGeminiBloomFilterPath(path) {
 		return FormatOpenGeminiBloom, nil
+	}
+	if isOpenGeminiTextIndexPath(path) {
+		return FormatOpenGeminiText, nil
 	}
 	if isSeriesFilePath(path) {
 		return FormatSeriesFile, nil
@@ -353,7 +358,7 @@ func isStorageCandidate(path string, format Format) bool {
 	case FormatWAL:
 		return isWALPath(path)
 	case FormatTSSP:
-		return strings.Contains(lower, ".tssp")
+		return isTSSPFileCandidatePath(path)
 	case FormatTSSPDetachedIndex:
 		return isTSSPDetachedMetaIndexPath(path)
 	case FormatTSI:
@@ -374,9 +379,18 @@ func isStorageCandidate(path string, format Format) bool {
 		return isOpenGeminiPKIndexCandidatePath(path)
 	case FormatOpenGeminiBloom:
 		return isOpenGeminiBloomFilterPath(path)
+	case FormatOpenGeminiText:
+		return isOpenGeminiTextIndexPartPath(path)
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path) || isOpenGeminiBloomFilterPath(path) || isOpenGeminiPKIndexCandidatePath(path)
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || isTSSPFileCandidatePath(path) || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path) || isOpenGeminiBloomFilterPath(path) || isOpenGeminiTextIndexPartPath(path) || isOpenGeminiPKIndexCandidatePath(path)
 	}
+}
+
+func isTSSPFileCandidatePath(path string) bool {
+	if isOpenGeminiTextIndexPath(path) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(filepath.Base(path)), ".tssp")
 }
 
 func isOpenGeminiMetaPath(path string) bool {
