@@ -7,7 +7,7 @@ type tsspColumnProjection struct {
 	selected map[string]struct{}
 }
 
-func newTSSPColumnProjection(chunk tsspChunkMeta, queryColumns []string, queryFields []FieldFilter, queryAnyFields []FieldFilter) tsspColumnProjection {
+func newTSSPColumnProjection(chunk tsspChunkMeta, queryColumns []string, queryFields []FieldFilter, queryAnyFields []FieldFilter, queryNoneFields []FieldFilter) tsspColumnProjection {
 	if len(queryColumns) == 0 {
 		return tsspColumnProjection{}
 	}
@@ -18,6 +18,11 @@ func newTSSPColumnProjection(chunk tsspChunkMeta, queryColumns []string, queryFi
 		}
 	}
 	for _, filter := range queryAnyFields {
+		if filter.Key != "" {
+			want[filter.Key] = struct{}{}
+		}
+	}
+	for _, filter := range queryNoneFields {
 		if filter.Key != "" {
 			want[filter.Key] = struct{}{}
 		}
@@ -145,6 +150,36 @@ func populateTSSPAnyFieldFilterMatches(summary *DecodePathSummary, chunks []tssp
 	}
 }
 
+func populateTSSPNoneFieldFilterMatches(summary *DecodePathSummary, chunks []tsspChunkMeta, queryFields []FieldFilter) {
+	if summary == nil || len(queryFields) == 0 {
+		return
+	}
+	queryFields = normalizeFieldFilters(queryFields)
+	if len(queryFields) == 0 {
+		return
+	}
+	summary.QueryNoneFields = append([]FieldFilter(nil), queryFields...)
+	want := map[string]struct{}{}
+	for _, filter := range queryFields {
+		want[filter.Key] = struct{}{}
+	}
+	matchedKeys := map[string]struct{}{}
+	for _, chunk := range chunks {
+		for _, column := range chunk.Columns {
+			if _, ok := want[column.Name]; ok {
+				matchedKeys[column.Name] = struct{}{}
+			}
+		}
+	}
+	for _, filter := range queryFields {
+		if _, ok := matchedKeys[filter.Key]; ok {
+			summary.MatchedNoneFields = append(summary.MatchedNoneFields, filter)
+		} else {
+			summary.MissingNoneFields = append(summary.MissingNoneFields, filter)
+		}
+	}
+}
+
 func populateTSSPFileSetColumnProjectionMatches(summary *DecodePathSummary, queryColumns []string, matchedSet map[string]struct{}) {
 	if summary == nil || len(queryColumns) == 0 {
 		return
@@ -195,6 +230,24 @@ func populateTSSPFileSetAnyFieldFilterMatches(summary *DecodePathSummary, queryF
 			summary.MatchedAnyFields = append(summary.MatchedAnyFields, filter)
 		} else {
 			summary.MissingAnyFields = append(summary.MissingAnyFields, filter)
+		}
+	}
+}
+
+func populateTSSPFileSetNoneFieldFilterMatches(summary *DecodePathSummary, queryFields []FieldFilter, matchedSet map[string]struct{}) {
+	if summary == nil || len(queryFields) == 0 {
+		return
+	}
+	queryFields = normalizeFieldFilters(queryFields)
+	if len(queryFields) == 0 {
+		return
+	}
+	summary.QueryNoneFields = append([]FieldFilter(nil), queryFields...)
+	for _, filter := range queryFields {
+		if _, ok := matchedSet[filter.Key]; ok {
+			summary.MatchedNoneFields = append(summary.MatchedNoneFields, filter)
+		} else {
+			summary.MissingNoneFields = append(summary.MissingNoneFields, filter)
 		}
 	}
 }
