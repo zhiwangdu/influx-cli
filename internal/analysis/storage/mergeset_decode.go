@@ -26,7 +26,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	}
 	matchedKeys := map[string]struct{}{}
 	matchedKeyFiles := map[string][]string{}
-	tableSeekResults := map[string]mergesetSeekResult{}
+	tableSeekCandidates := map[string][]mergesetSeekResult{}
 	included := false
 	for _, file := range files {
 		if file.Format != FormatMergeset || file.DecodePath == nil {
@@ -40,10 +40,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 		}
 		for key, result := range file.DecodePath.mergesetSeekResults {
 			result.File = file.Path
-			current, ok := tableSeekResults[key]
-			if !ok || mergesetPreferSeekResult(result, current, options.CursorDescending) {
-				tableSeekResults[key] = result
-			}
+			tableSeekCandidates[key] = append(tableSeekCandidates[key], result)
 		}
 	}
 	if !included {
@@ -56,10 +53,14 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 			summary.MissingKeys = append(summary.MissingKeys, key)
 		}
 	}
+	tableSeekResults, heapInserts, heapPops := mergeMergesetFileSetSearchCandidates(tableSeekCandidates, options.CursorDescending)
 	summary.BaselineOutputValues = len(options.QueryKeys)
 	summary.OptimizedOutputValues = countMergesetMatchedItemFiles(matchedKeyFiles)
 	summary.DeduplicatedOutputValues = len(summary.MatchedKeys)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
+	summary.TableSearchHeapCandidates = heapInserts
+	summary.TableSearchHeapInserts = heapInserts
+	summary.TableSearchHeapPops = heapPops
 	summary.TableSearchOutputValues = len(tableSeekResults)
 	summary.TableSearchExactMisses = len(summary.MissingKeys)
 	populateMergesetFileSetCursorWindows(summary, matchedKeyFiles, options)
@@ -75,12 +76,64 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	return summary
 }
 
-func mergesetPreferSeekResult(candidate, current mergesetSeekResult, descending bool) bool {
-	cmp := bytes.Compare(candidate.Item, current.Item)
-	if descending {
+func mergeMergesetFileSetSearchCandidates(candidates map[string][]mergesetSeekResult, descending bool) (map[string]mergesetSeekResult, int, int) {
+	results := map[string]mergesetSeekResult{}
+	heapInserts := 0
+	heapPops := 0
+	for key, group := range candidates {
+		if len(group) == 0 {
+			continue
+		}
+		candidateHeap := mergesetFileSetSearchHeap{
+			candidates: append([]mergesetSeekResult(nil), group...),
+			descending: descending,
+		}
+		heapInserts += len(candidateHeap.candidates)
+		heap.Init(&candidateHeap)
+		if candidateHeap.Len() > 0 {
+			result := heap.Pop(&candidateHeap).(mergesetSeekResult)
+			heapPops++
+			results[key] = result
+		}
+	}
+	return results, heapInserts, heapPops
+}
+
+type mergesetFileSetSearchHeap struct {
+	candidates []mergesetSeekResult
+	descending bool
+}
+
+func (h mergesetFileSetSearchHeap) Len() int {
+	return len(h.candidates)
+}
+
+func (h mergesetFileSetSearchHeap) Less(i, j int) bool {
+	left := h.candidates[i]
+	right := h.candidates[j]
+	cmp := bytes.Compare(left.Item, right.Item)
+	if cmp == 0 {
+		return left.File < right.File
+	}
+	if h.descending {
 		return cmp > 0
 	}
 	return cmp < 0
+}
+
+func (h mergesetFileSetSearchHeap) Swap(i, j int) {
+	h.candidates[i], h.candidates[j] = h.candidates[j], h.candidates[i]
+}
+
+func (h *mergesetFileSetSearchHeap) Push(x any) {
+	h.candidates = append(h.candidates, x.(mergesetSeekResult))
+}
+
+func (h *mergesetFileSetSearchHeap) Pop() any {
+	candidates := h.candidates
+	candidate := candidates[len(candidates)-1]
+	h.candidates = candidates[:len(candidates)-1]
+	return candidate
 }
 
 func buildMergesetFileSetScanSummary(files []FileReport, options Options) *DecodePathSummary {

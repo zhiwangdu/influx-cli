@@ -1425,6 +1425,12 @@ func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	if got, want := decode.TableSearchHeapCandidates, 5; got != want {
 		t.Fatalf("table search heap candidates = %d, want %d", got, want)
 	}
+	if got, want := decode.TableSearchHeapInserts, 5; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 3; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
+	}
 	if got, want := decode.TableSearchOutputValues, 3; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
 	}
@@ -1489,6 +1495,12 @@ func TestAnalyzeMergesetFileSetQueryKeySearchDescending(t *testing.T) {
 	}
 	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
 		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapInserts, 2; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 1; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
 	}
 	if got, want := decode.TableSearchOutputValues, 1; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
@@ -1582,6 +1594,12 @@ func TestAnalyzeMergesetFileSetQueryKeySearchDescendingDuplicateExact(t *testing
 	}
 	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
 		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapInserts, 2; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 1; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
 	}
 	if got, want := decode.TableSearchOutputValues, 1; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
@@ -1708,6 +1726,12 @@ func TestAnalyzeMergesetFileSetDuplicateKeyMergeWindow(t *testing.T) {
 	}
 	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
 		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapInserts, 2; got != want {
+		t.Fatalf("table search heap inserts = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 1; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
 	}
 	if got, want := decode.TableSearchOutputValues, 1; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
