@@ -520,6 +520,201 @@ func TestAnalyzeTSSPMaterializesAttachedRecordSamples(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "status", Value: "true"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "status", Value: "true"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedFields, []FieldFilter{{Key: "status", Value: "true"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("matched fields = %v, want %v", got, want)
+	}
+	if len(decode.MissingFields) != 0 {
+		t.Fatalf("missing fields = %v, want none", decode.MissingFields)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordSamples, 1; got != want {
+		t.Fatalf("data block probe record samples = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 3; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "sid:7/record", Time: times[0], Type: "record", OptimizedValue: "status=true,value=1.25", Matches: true},
+		{Key: "sid:7/status", Time: times[0], Type: "boolean-full", OptimizedValue: "true", Matches: true},
+		{Key: "sid:7/value", Time: times[0], Type: "float-full", OptimizedValue: "1.25", Matches: true},
+	} {
+		got := decode.CursorOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+		}
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "applied 1 TSSP field filter") {
+		t.Fatalf("recommendations = %v, want field filter recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPFieldFilterWithColumnProjectionReadsPredicateColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryColumns:     []string{"value"},
+		QueryFields:      []FieldFilter{{Key: "status", Value: "true"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryColumns, []string{"value"}; !equalStrings(got, want) {
+		t.Fatalf("query columns = %v, want %v", got, want)
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "status", Value: "true"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if !readAtRangesContainColumn(decode.Samples[0].OptimizedReadAtRanges, "status") {
+		t.Fatalf("optimized ReadAt ranges = %v, want predicate column status", decode.Samples[0].OptimizedReadAtRanges)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordSamples, 1; got != want {
+		t.Fatalf("data block probe record samples = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeTSSPFieldFilterMissingColumnReturnsZeroRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "missing", Value: "true"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "0"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if len(decode.MatchedFields) != 0 {
+		t.Fatalf("matched fields = %v, want none", decode.MatchedFields)
+	}
+	if got, want := decode.MissingFields, []FieldFilter{{Key: "missing", Value: "true"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("missing fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 0; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if !decode.Samples[0].ValueOutputAvailable {
+		t.Fatalf("value output available = false, want true for a decoded zero-row filter result")
+	}
+	if got, want := decode.Samples[0].Reason, "segment_overlap"; got != want {
+		t.Fatalf("sample reason = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSSPFieldFilterMatchesFloatEquivalentText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Value: "1.250"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].Time, times[0]; got != want {
+		t.Fatalf("first cursor output sample time = %d, want %d", got, want)
+	}
+}
+
 func TestAnalyzeTSSPColumnProjectionLimitsAttachedReadAtAndSamples(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)
@@ -1542,6 +1737,7 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 		QueryRange:       queryRange,
 		QuerySeriesIDs:   []uint64{7},
 		QueryColumns:     []string{"missing", "value"},
+		QueryFields:      []FieldFilter{{Key: "value", Value: "99"}, {Key: "missing_field", Value: "x"}},
 		KeySampleLimit:   3,
 		BlockSampleLimit: 5,
 	})
@@ -1572,6 +1768,15 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 	}
 	if got, want := decode.MissingColumns, []string{"missing"}; !equalStrings(got, want) {
 		t.Fatalf("missing columns = %v, want %v", got, want)
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "missing_field", Value: "x"}, {Key: "value", Value: "99"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedFields, []FieldFilter{{Key: "value", Value: "99"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("matched fields = %v, want %v", got, want)
+	}
+	if got, want := decode.MissingFields, []FieldFilter{{Key: "missing_field", Value: "x"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("missing fields = %v, want %v", got, want)
 	}
 	if len(decode.MissingSeriesIDs) != 0 {
 		t.Fatalf("missing series ids = %v, want none", decode.MissingSeriesIDs)
@@ -1929,6 +2134,16 @@ func TestAnalyzeQueryColumnsRequireRange(t *testing.T) {
 	}
 }
 
+func TestAnalyzeQueryFieldsRequireRange(t *testing.T) {
+	_, err := Analyze(context.Background(), []string{"missing.tssp"}, Options{
+		Format:      FormatTSSP,
+		QueryFields: []FieldFilter{{Key: "value", Value: "99"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "field filter requires query range") {
+		t.Fatalf("error = %v, want field range requirement", err)
+	}
+}
+
 func writeTestTSSP(path string) error {
 	return writeTestTSSPWithCompression(path, tsspChunkMetaCompressNone)
 }
@@ -1943,6 +2158,27 @@ func equalUint64s(a, b []uint64) bool {
 		}
 	}
 	return true
+}
+
+func equalFieldFilters(a, b []FieldFilter) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func readAtRangesContainColumn(ranges []DecodePathReadAtRange, column string) bool {
+	for _, readAtRange := range ranges {
+		if readAtRange.Column == column {
+			return true
+		}
+	}
+	return false
 }
 
 func containsStringWithPrefix(values []string, prefix string) bool {

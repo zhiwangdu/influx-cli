@@ -192,6 +192,7 @@ type storageAnalyzeFlags struct {
 	seriesIDs    []string
 	metaIndexIDs []string
 	columns      []string
+	fields       []string
 	measurements []string
 	tags         []string
 	cursorOrder  string
@@ -240,6 +241,13 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if hasNonEmptyValues(analyzeFlags.columns) && !queryRange.Set {
 				return fmt.Errorf("--column requires --from and --to because TSSP data ReadAt planning needs a query range")
 			}
+			fieldFilters, err := parseStorageFieldFilters(analyzeFlags.fields)
+			if err != nil {
+				return err
+			}
+			if len(fieldFilters) > 0 && !queryRange.Set {
+				return fmt.Errorf("--field requires --from and --to because TSSP record filtering needs a query range")
+			}
 			tagFilters, err := parseStorageTagFilters(analyzeFlags.tags)
 			if err != nil {
 				return err
@@ -258,6 +266,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				QuerySeriesIDs:    seriesIDs,
 				QueryMetaIndexIDs: metaIndexIDs,
 				QueryColumns:      analyzeFlags.columns,
+				QueryFields:       fieldFilters,
 				QueryMeasurements: analyzeFlags.measurements,
 				QueryTags:         tagFilters,
 				CursorDescending:  cursorDescending,
@@ -313,6 +322,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field equality predicate as key=value for local record filtering; repeat for multiple fields; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.cursorOrder, "cursor-order", "asc", "TSM/openGemini TSSP cursor order for decode-path planning: asc or desc")
@@ -419,6 +429,32 @@ func parseStorageTagFilters(values []string) ([]storage.TagFilter, error) {
 			return nil, fmt.Errorf("parse --tag %q: key cannot be empty", value)
 		}
 		filters = append(filters, filter)
+	}
+	return filters, nil
+}
+
+func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	filters := make([]storage.FieldFilter, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key, filterValue, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			return nil, fmt.Errorf("parse --field %q: use key=value", value)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, fmt.Errorf("parse --field %q: key cannot be empty", value)
+		}
+		filters = append(filters, storage.FieldFilter{
+			Key:   key,
+			Value: strings.TrimSpace(filterValue),
+		})
 	}
 	return filters, nil
 }

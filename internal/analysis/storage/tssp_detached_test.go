@@ -669,6 +669,66 @@ func TestAnalyzeTSSPDetachedColumnProjectionReportsMissingColumn(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedFieldFilterSuppressesNonMatchingRows(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 42, minTime: 333, maxTime: 333, offset: 1000, size: 13, timeSize: 13},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedOneRowData(filepath.Join(dir, tsspDetachedDataFileName), 1200, chunks[0], 99, 333); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 333)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Value: "100"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "0"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Value: "100"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedFields, []FieldFilter{{Key: "value", Value: "100"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("matched fields = %v, want %v", got, want)
+	}
+	if len(decode.MissingFields) != 0 {
+		t.Fatalf("missing fields = %v, want none", decode.MissingFields)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 0; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if !decode.Samples[0].ValueOutputAvailable {
+		t.Fatal("expected filtered zero-row output to remain available")
+	}
+	if !containsString(decode.Recommendations, "applied 1 detached TSSP field filter") {
+		t.Fatalf("recommendations = %v, want detached field filter recommendation", decode.Recommendations)
+	}
+}
+
 func TestInspectTSSPDetachedDataBlockEmptyRows(t *testing.T) {
 	payload := make([]byte, 5)
 	payload[0] = 42 // openGemini encoding.BlockIntegerEmpty.

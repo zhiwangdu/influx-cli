@@ -86,6 +86,31 @@ func TestParseStorageTagFiltersRejectsMalformedValues(t *testing.T) {
 	}
 }
 
+func TestParseStorageFieldFilters(t *testing.T) {
+	got, err := parseStorageFieldFilters([]string{" value = 99 ", "", "status=true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("field filters = %d, want 2", len(got))
+	}
+	if got[0].Key != "value" || got[0].Value != "99" {
+		t.Fatalf("first field filter = %+v, want value=99", got[0])
+	}
+	if got[1].Key != "status" || got[1].Value != "true" {
+		t.Fatalf("second field filter = %+v, want status=true", got[1])
+	}
+}
+
+func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
+	if _, err := parseStorageFieldFilters([]string{"value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want key=value guidance", err)
+	}
+	if _, err := parseStorageFieldFilters([]string{"=99"}); err == nil || !strings.Contains(err.Error(), "key cannot be empty") {
+		t.Fatalf("error = %v, want empty key guidance", err)
+	}
+}
+
 func TestParseStorageSeriesIDs(t *testing.T) {
 	got, err := parseStorageSeriesIDs([]string{" 9 ", "", "42"})
 	if err != nil {
@@ -151,6 +176,9 @@ func TestStorageAnalyzeColumnFlagRegistered(t *testing.T) {
 	if flag := found.Flags().Lookup("column"); flag == nil {
 		t.Fatal("storage analyze --column flag is not registered")
 	}
+	if flag := found.Flags().Lookup("field"); flag == nil {
+		t.Fatal("storage analyze --field flag is not registered")
+	}
 }
 
 func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
@@ -198,5 +226,14 @@ func TestStorageAnalyzeColumnRequiresRange(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--column requires --from and --to") {
 		t.Fatalf("error = %v, want column range requirement", err)
+	}
+}
+
+func TestStorageAnalyzeFieldRequiresRange(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--field", "value=99", "missing.tssp"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--field requires --from and --to") {
+		t.Fatalf("error = %v, want field range requirement", err)
 	}
 }

@@ -2,8 +2,11 @@ package storage
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 type tsspAttachedDataProbe struct {
@@ -58,7 +61,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 		if !tsspQuerySeriesSelected(chunk.SID, seriesSet) {
 			continue
 		}
-		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns)
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields)
 		chunkChecked := false
 		chunkAvailable := true
 		chunkFailureReason := ""
@@ -152,8 +155,14 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				chunkOutputPoints += segmentRows
-				appendTSSPAttachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, options.QueryRange, options.BlockSampleLimit)
+				matchingRows, matchedRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, segmentRows)
+				if !ok {
+					chunkAvailable = false
+					chunkFailureReason = "segment_overlap_data_filter_unavailable"
+					continue
+				}
+				chunkOutputPoints += matchedRows
+				appendTSSPAttachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, matchingRows, options.QueryRange, options.BlockSampleLimit)
 			}
 		}
 		if chunkChecked {
@@ -194,12 +203,12 @@ func (p *tsspAttachedDataProbe) chunkOutputPointsFor(chunk tsspChunkMeta) int {
 	return p.chunkOutputPoints[chunk.SID]
 }
 
-func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, queryRange TimeRange, sampleLimit int) {
+func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int) {
 	if probe == nil || sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
 		return
 	}
 	var recordSamples int
-	probe.valueSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, queryRange, sampleLimit)
+	probe.valueSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit)
 	probe.RecordSamples += recordSamples
 	if len(probe.valueSamples) >= sampleLimit {
 		return
@@ -215,6 +224,9 @@ func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk
 			continue
 		}
 		for i, value := range block.Values {
+			if !tsspDataBlockRowMatches(matchingRows, i) {
+				continue
+			}
 			if len(block.ValuePresent) > 0 && !block.ValuePresent[i] {
 				continue
 			}
@@ -243,4 +255,83 @@ func sortedTSSPDataBlockColumns(blocks map[string]tsspDetachedDataBlockInfo) []s
 	}
 	sort.Strings(columnNames)
 	return columnNames
+}
+
+func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, rows int) ([]bool, int, bool) {
+	if len(filters) == 0 {
+		return nil, rows, true
+	}
+	if rows <= 0 {
+		return nil, 0, true
+	}
+	type fieldFilterBlock struct {
+		filter FieldFilter
+		block  tsspDetachedDataBlockInfo
+	}
+	filterBlocks := make([]fieldFilterBlock, 0, len(filters))
+	for _, filter := range filters {
+		block, ok := blocks[filter.Key]
+		if !ok {
+			return make([]bool, rows), 0, true
+		}
+		if !block.RowsKnown || !block.ValueKnown || block.Rows != rows {
+			return nil, 0, false
+		}
+		if !block.ValueNull && len(block.Values) != rows {
+			return nil, 0, false
+		}
+		filterBlocks = append(filterBlocks, fieldFilterBlock{filter: filter, block: block})
+	}
+	matchingRows := make([]bool, rows)
+	matched := 0
+	for row := 0; row < rows; row++ {
+		match := true
+		for _, filterBlock := range filterBlocks {
+			if !tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter.Value) {
+				match = false
+				break
+			}
+		}
+		if match {
+			matchingRows[row] = true
+			matched++
+		}
+	}
+	return matchingRows, matched, true
+}
+
+func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, want string) bool {
+	got := tsspDataProbeRecordValue(block, row)
+	if got == want {
+		return true
+	}
+	if got == "null" || want == "null" {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(block.Type, "float"):
+		gotFloat, gotErr := strconv.ParseFloat(got, 64)
+		wantFloat, wantErr := strconv.ParseFloat(want, 64)
+		if gotErr != nil || wantErr != nil {
+			return false
+		}
+		return gotFloat == wantFloat || (math.IsNaN(gotFloat) && math.IsNaN(wantFloat))
+	case strings.HasPrefix(block.Type, "integer"):
+		gotInt, gotErr := strconv.ParseInt(got, 10, 64)
+		wantInt, wantErr := strconv.ParseInt(want, 10, 64)
+		return gotErr == nil && wantErr == nil && gotInt == wantInt
+	case strings.HasPrefix(block.Type, "boolean"):
+		gotBool, gotErr := strconv.ParseBool(got)
+		wantBool, wantErr := strconv.ParseBool(want)
+		return gotErr == nil && wantErr == nil && gotBool == wantBool
+	default:
+		return false
+	}
+}
+
+func tsspDataBlockRowMatches(matchingRows []bool, row int) bool {
+	if len(matchingRows) == 0 {
+		return true
+	}
+	return row >= 0 && row < len(matchingRows) && matchingRows[row]
 }

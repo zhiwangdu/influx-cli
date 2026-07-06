@@ -28,6 +28,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	options.QuerySeriesIDs = normalizeQuerySeriesIDs(options.QuerySeriesIDs)
 	options.QueryMetaIndexIDs = normalizeQuerySeriesIDs(options.QueryMetaIndexIDs)
 	options.QueryColumns = normalizeQueryKeys(options.QueryColumns)
+	options.QueryFields = normalizeFieldFilters(options.QueryFields)
 	options.QueryMeasurements = normalizeQueryKeys(options.QueryMeasurements)
 	options.QueryTags = normalizeTagFilters(options.QueryTags)
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set && options.Format != FormatMergeset {
@@ -41,6 +42,9 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	}
 	if len(options.QueryColumns) > 0 && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query column filter requires query range")
+	}
+	if len(options.QueryFields) > 0 && !options.QueryRange.Set {
+		return Report{}, fmt.Errorf("query field filter requires query range")
 	}
 
 	files, err := expandPaths(ctx, paths, options)
@@ -154,6 +158,36 @@ func normalizeTagFilters(values []TagFilter) []TagFilter {
 	filters := make([]TagFilter, 0, len(values))
 	for _, value := range values {
 		filter := TagFilter{
+			Key:   strings.TrimSpace(value.Key),
+			Value: strings.TrimSpace(value.Value),
+		}
+		if filter.Key == "" {
+			continue
+		}
+		id := filter.Key + "\x00" + filter.Value
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		filters = append(filters, filter)
+	}
+	sort.Slice(filters, func(i, j int) bool {
+		if filters[i].Key == filters[j].Key {
+			return filters[i].Value < filters[j].Value
+		}
+		return filters[i].Key < filters[j].Key
+	})
+	return filters
+}
+
+func normalizeFieldFilters(values []FieldFilter) []FieldFilter {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	filters := make([]FieldFilter, 0, len(values))
+	for _, value := range values {
+		filter := FieldFilter{
 			Key:   strings.TrimSpace(value.Key),
 			Value: strings.TrimSpace(value.Value),
 		}

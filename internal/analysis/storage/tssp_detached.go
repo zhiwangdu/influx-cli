@@ -488,7 +488,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 			probe.chunkFailureReason[chunk.SID] = "segment_overlap_data_range_unavailable"
 			continue
 		}
-		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns)
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields)
 		chunkChecked := false
 		chunkAvailable := true
 		chunkFailureReason := ""
@@ -584,8 +584,14 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				chunkOutputPoints += segmentRows
-				appendTSSPDetachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, options.QueryRange, options.BlockSampleLimit)
+				matchingRows, matchedRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, segmentRows)
+				if !ok {
+					chunkAvailable = false
+					chunkFailureReason = "segment_overlap_data_filter_unavailable"
+					continue
+				}
+				chunkOutputPoints += matchedRows
+				appendTSSPDetachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, matchingRows, options.QueryRange, options.BlockSampleLimit)
 			}
 		}
 		if chunkChecked {
@@ -1941,12 +1947,12 @@ func (p *tsspDetachedDataProbe) chunkOutputPointsFor(chunk tsspChunkMeta) int {
 	return p.chunkOutputPoints[chunk.SID]
 }
 
-func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, queryRange TimeRange, sampleLimit int) {
+func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int) {
 	if probe == nil || sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
 		return
 	}
 	var recordSamples int
-	probe.valueSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "meta-index-id", chunk.SID, timeRange, blocks, queryRange, sampleLimit)
+	probe.valueSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "meta-index-id", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit)
 	probe.RecordSamples += recordSamples
 	if len(probe.valueSamples) >= sampleLimit {
 		return
@@ -1962,6 +1968,9 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 			continue
 		}
 		for i, value := range block.Values {
+			if !tsspDataBlockRowMatches(matchingRows, i) {
+				continue
+			}
 			if len(block.ValuePresent) > 0 && !block.ValuePresent[i] {
 				continue
 			}
@@ -1983,7 +1992,7 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 	}
 }
 
-func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefix string, id uint64, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, queryRange TimeRange, sampleLimit int) ([]DecodePathCursorOutput, int) {
+func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefix string, id uint64, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int) ([]DecodePathCursorOutput, int) {
 	if sampleLimit <= 0 || len(samples) >= sampleLimit {
 		return samples, 0
 	}
@@ -2012,6 +2021,9 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 	}
 	recordSamples := 0
 	for row := 0; row < rows; row++ {
+		if !tsspDataBlockRowMatches(matchingRows, row) {
+			continue
+		}
 		timestamp := timestamps[row]
 		if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
 			continue
@@ -2106,6 +2118,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		DecodeBlocksByType:   map[string]int{},
 	}
 	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
+	populateTSSPFieldFilterMatches(summary, chunks, options.QueryFields)
 	idSet := queryMetaIndexIDSet(options.QueryMetaIndexIDs)
 	if len(idSet) > 0 {
 		summary.QueryMetaIndexIDs = append([]uint64(nil), options.QueryMetaIndexIDs...)
@@ -2141,7 +2154,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		}
 		minTime, maxTime := chunk.minMaxTime()
 		segmentCount := len(chunk.TimeRanges)
-		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns)
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields)
 		outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange, columnProjection)
 		baselineBytes := tsspChunkSegmentBytes(chunk)
 		baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0, tsspColumnProjection{})
@@ -2495,6 +2508,12 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			len(summary.MissingColumns),
 		))
 	}
+	if len(summary.MissingFields) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"%d query field filter(s) were not found in analyzed detached TSSP chunk metadata",
+			len(summary.MissingFields),
+		))
+	}
 	if len(summary.QueryColumns) > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"column projection requested for %d detached TSSP column(s) before data ReadAt",
@@ -2505,6 +2524,12 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 		recommendations = append(recommendations, fmt.Sprintf(
 			"column projection excludes %d in-range detached TSSP chunk(s) before data ReadAt",
 			summary.SkippedByProjectionBlocks,
+		))
+	}
+	if len(summary.QueryFields) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"applied %d detached TSSP field filter(s) to decoded record rows",
+			len(summary.QueryFields),
 		))
 	}
 	if summary.SkippedByKeyBlocks > 0 {
