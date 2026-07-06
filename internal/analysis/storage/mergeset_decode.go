@@ -401,6 +401,8 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 	// bulk-loaded before heap.Init and subsequent re-insertions after advance.
 	heapInserts := len(cursorHeap.streams)
 	heapPops := 0
+	cursorAdvances := 0
+	cursorExhaustions := 0
 	heap.Init(&cursorHeap)
 
 	total := 0
@@ -486,11 +488,16 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 		if stream.advance(options.CursorDescending) {
 			heap.Push(&cursorHeap, stream)
 			heapInserts++
+			cursorAdvances++
+		} else {
+			cursorExhaustions++
 		}
 	}
 	finishGroup()
 	summary.TableSearchHeapInserts = heapInserts
 	summary.TableSearchHeapPops = heapPops
+	summary.TableSearchCursorAdvances = cursorAdvances
+	summary.TableSearchCursorExhaustions = cursorExhaustions
 	summary.TableSearchOutputValues = total
 	summary.DeduplicatedOutputValues = unique
 	summary.DuplicateOutputValues = duplicates
@@ -587,6 +594,13 @@ func mergesetFileSetScanRecommendations(summary *DecodePathSummary) []string {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"merge %d analyzed mergeset part cursor(s) with TableSearch-style heap ordering",
 			summary.MergeWindowBlocks,
+		))
+	}
+	if summary.TableSearchCursorAdvances > 0 || summary.TableSearchCursorExhaustions > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"advanced %d local mergeset part cursor step(s) and exhausted %d part cursor(s)",
+			summary.TableSearchCursorAdvances,
+			summary.TableSearchCursorExhaustions,
 		))
 	}
 	if summary.DuplicateOutputValues > 0 {

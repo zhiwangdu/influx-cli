@@ -358,6 +358,8 @@ type DecodePathSummary struct {
 	TableSearchHeapCandidates    int                       `json:"table_search_heap_candidates,omitempty"`
 	TableSearchHeapInserts       int                       `json:"table_search_heap_inserts,omitempty"`
 	TableSearchHeapPops          int                       `json:"table_search_heap_pops,omitempty"`
+	TableSearchCursorAdvances    int                       `json:"table_search_cursor_advances,omitempty"`
+	TableSearchCursorExhaustions int                       `json:"table_search_cursor_exhaustions,omitempty"`
 	TableSearchOutputValues      int                       `json:"table_search_output_values,omitempty"`
 	TableSearchExactMisses       int                       `json:"table_search_exact_misses,omitempty"`
 	BaselineReadAtCalls          int                       `json:"baseline_read_at_calls,omitempty"`
@@ -580,6 +582,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.TableSearchHeapInserts > 0 || summary.TableSearchHeapPops > 0 {
 		parts = append(parts, fmt.Sprintf("table_search_heap inserts=%d pops=%d", summary.TableSearchHeapInserts, summary.TableSearchHeapPops))
+	}
+	if summary.TableSearchCursorAdvances > 0 || summary.TableSearchCursorExhaustions > 0 {
+		parts = append(parts, fmt.Sprintf("table_search_cursor advances=%d exhaustions=%d", summary.TableSearchCursorAdvances, summary.TableSearchCursorExhaustions))
 	}
 	if summary.TableSearchSeekCalls > 0 || summary.TableSearchHeapCandidates > 0 || summary.TableSearchOutputValues > 0 || summary.TableSearchExactMisses > 0 {
 		parts = append(parts, fmt.Sprintf("table_search seeks=%d candidates=%d outputs=%d exact_misses=%d", summary.TableSearchSeekCalls, summary.TableSearchHeapCandidates, summary.TableSearchOutputValues, summary.TableSearchExactMisses))

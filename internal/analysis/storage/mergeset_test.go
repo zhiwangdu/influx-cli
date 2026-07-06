@@ -282,6 +282,12 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 	if got, want := decode.TableSearchHeapPops, 5; got != want {
 		t.Fatalf("table search heap pops = %d, want %d", got, want)
 	}
+	if got, want := decode.TableSearchCursorAdvances, 3; got != want {
+		t.Fatalf("table search cursor advances = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchCursorExhaustions, 2; got != want {
+		t.Fatalf("table search cursor exhaustions = %d, want %d", got, want)
+	}
 	if got, want := decode.TableSearchOutputValues, 5; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
 	}
@@ -360,6 +366,9 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 	if !containsString(decode.Recommendations, "deduplicated TableSearch cursor output") {
 		t.Fatalf("recommendations = %v, want final output recommendation", decode.Recommendations)
 	}
+	if !containsString(decode.Recommendations, "advanced 3 local mergeset part cursor step") {
+		t.Fatalf("recommendations = %v, want cursor advance recommendation", decode.Recommendations)
+	}
 }
 
 func TestAnalyzeMergesetFileSetTableScanSingleStreamHeapAccounting(t *testing.T) {
@@ -393,6 +402,12 @@ func TestAnalyzeMergesetFileSetTableScanSingleStreamHeapAccounting(t *testing.T)
 	}
 	if got, want := decode.TableSearchHeapPops, 3; got != want {
 		t.Fatalf("table search heap pops = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchCursorAdvances, 2; got != want {
+		t.Fatalf("table search cursor advances = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchCursorExhaustions, 1; got != want {
+		t.Fatalf("table search cursor exhaustions = %d, want %d", got, want)
 	}
 	if got, want := decode.TableSearchOutputValues, 3; got != want {
 		t.Fatalf("table search output values = %d, want %d", got, want)
