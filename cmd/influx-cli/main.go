@@ -193,6 +193,7 @@ type storageAnalyzeFlags struct {
 	metaIndexIDs []string
 	columns      []string
 	fields       []string
+	anyFields    []string
 	measurements []string
 	tags         []string
 	cursorOrder  string
@@ -248,6 +249,13 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if len(fieldFilters) > 0 && !queryRange.Set {
 				return fmt.Errorf("--field requires --from and --to because TSSP record filtering needs a query range")
 			}
+			anyFieldFilters, err := parseStorageFieldFilters(analyzeFlags.anyFields)
+			if err != nil {
+				return err
+			}
+			if len(anyFieldFilters) > 0 && !queryRange.Set {
+				return fmt.Errorf("--field-any requires --from and --to because TSSP record filtering needs a query range")
+			}
 			tagFilters, err := parseStorageTagFilters(analyzeFlags.tags)
 			if err != nil {
 				return err
@@ -267,6 +275,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				QueryMetaIndexIDs: metaIndexIDs,
 				QueryColumns:      analyzeFlags.columns,
 				QueryFields:       fieldFilters,
+				QueryAnyFields:    anyFieldFilters,
 				QueryMeasurements: analyzeFlags.measurements,
 				QueryTags:         tagFilters,
 				CursorDescending:  cursorDescending,
@@ -323,6 +332,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key!=value, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2) for local record filtering; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.anyFields, "field-any", nil, "TSSP decoded field predicate using the same syntax as --field; at least one repeated --field-any predicate must match; combines with --field as required AND predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.cursorOrder, "cursor-order", "asc", "TSM/openGemini TSSP cursor order for decode-path planning: asc or desc")

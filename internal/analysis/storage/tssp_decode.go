@@ -22,6 +22,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	}
 	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	populateTSSPFieldFilterMatches(summary, chunks, options.QueryFields)
+	populateTSSPAnyFieldFilterMatches(summary, chunks, options.QueryAnyFields)
 	seriesSet := querySeriesIDSet(options.QuerySeriesIDs)
 	if len(seriesSet) > 0 {
 		summary.QuerySeriesIDs = append([]uint64(nil), options.QuerySeriesIDs...)
@@ -69,7 +70,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		for _, chunk := range tsspChunksForCursor(sidChunks, options.CursorDescending) {
 			minTime, maxTime := chunk.minMaxTime()
 			segmentCount := len(chunk.TimeRanges)
-			columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields)
+			columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields, options.QueryAnyFields)
 			outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange, columnProjection)
 			baselineBytes := tsspChunkSegmentBytes(chunk)
 			baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0, tsspColumnProjection{})
@@ -164,6 +165,7 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	matchedSeriesIDs := map[uint64]struct{}{}
 	matchedColumns := map[string]struct{}{}
 	matchedFields := map[string]struct{}{}
+	matchedAnyFields := map[string]struct{}{}
 	outputGroups := newTSSPFileSetOutputSampleGroups()
 	included := false
 	for _, file := range tsspFilesForCursor(files, options.CursorDescending) {
@@ -178,12 +180,16 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 		for _, field := range file.DecodePath.MatchedFields {
 			matchedFields[field.Key] = struct{}{}
 		}
+		for _, field := range file.DecodePath.MatchedAnyFields {
+			matchedAnyFields[field.Key] = struct{}{}
+		}
 	}
 	if !included {
 		return nil
 	}
 	populateTSSPFileSetColumnProjectionMatches(summary, options.QueryColumns, matchedColumns)
 	populateTSSPFileSetFieldFilterMatches(summary, options.QueryFields, matchedFields)
+	populateTSSPFileSetAnyFieldFilterMatches(summary, options.QueryAnyFields, matchedAnyFields)
 	populateTSSPFileSetFinalOutputSamples(summary, outputGroups, options.BlockSampleLimit)
 
 	if len(summary.QuerySeriesIDs) > 0 {
@@ -610,6 +616,12 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			len(summary.MissingFields),
 		))
 	}
+	if len(summary.MissingAnyFields) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"%d query OR field filter(s) were not found in analyzed TSSP chunk metadata",
+			len(summary.MissingAnyFields),
+		))
+	}
 	if len(summary.QueryColumns) > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"column projection requested for %d TSSP column(s) before data ReadAt",
@@ -626,6 +638,12 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"applied %d TSSP field filter(s) to decoded record rows",
 			len(summary.QueryFields),
+		))
+	}
+	if len(summary.QueryAnyFields) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"applied %d TSSP OR field filter(s) to decoded record rows",
+			len(summary.QueryAnyFields),
 		))
 	}
 	if summary.DataBlockProbeFilterRows > 0 {

@@ -246,6 +246,9 @@ func TestStorageAnalyzeColumnFlagRegistered(t *testing.T) {
 	if flag := found.Flags().Lookup("field"); flag == nil {
 		t.Fatal("storage analyze --field flag is not registered")
 	}
+	if flag := found.Flags().Lookup("field-any"); flag == nil {
+		t.Fatal("storage analyze --field-any flag is not registered")
+	}
 }
 
 func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
@@ -302,5 +305,14 @@ func TestStorageAnalyzeFieldRequiresRange(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--field requires --from and --to") {
 		t.Fatalf("error = %v, want field range requirement", err)
+	}
+}
+
+func TestStorageAnalyzeAnyFieldRequiresRange(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--field-any", "value=99", "missing.tssp"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--field-any requires --from and --to") {
+		t.Fatalf("error = %v, want OR field range requirement", err)
 	}
 }

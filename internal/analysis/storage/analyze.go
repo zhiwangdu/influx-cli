@@ -32,6 +32,10 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	if err := validateFieldFilters(options.QueryFields); err != nil {
 		return Report{}, err
 	}
+	options.QueryAnyFields = normalizeFieldFilters(options.QueryAnyFields)
+	if err := validateFieldFilters(options.QueryAnyFields); err != nil {
+		return Report{}, err
+	}
 	options.QueryMeasurements = normalizeQueryKeys(options.QueryMeasurements)
 	options.QueryTags = normalizeTagFilters(options.QueryTags)
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set && options.Format != FormatMergeset {
@@ -46,7 +50,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	if len(options.QueryColumns) > 0 && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query column filter requires query range")
 	}
-	if len(options.QueryFields) > 0 && !options.QueryRange.Set {
+	if (len(options.QueryFields) > 0 || len(options.QueryAnyFields) > 0) && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query field filter requires query range")
 	}
 

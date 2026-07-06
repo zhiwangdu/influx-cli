@@ -64,7 +64,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 		if !tsspQuerySeriesSelected(chunk.SID, seriesSet) {
 			continue
 		}
-		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields)
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields, options.QueryAnyFields)
 		chunkChecked := false
 		chunkAvailable := true
 		chunkFailureReason := ""
@@ -158,13 +158,13 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				matchingRows, matchedRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, segmentRows)
+				matchingRows, matchedRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, segmentRows)
 				if !ok {
 					chunkAvailable = false
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
 					continue
 				}
-				if len(options.QueryFields) > 0 {
+				if len(options.QueryFields) > 0 || len(options.QueryAnyFields) > 0 {
 					probe.FilterRows += segmentRows
 					probe.FilterMatches += matchedRows
 					probe.FilterRejects += segmentRows - matchedRows
@@ -265,30 +265,26 @@ func sortedTSSPDataBlockColumns(blocks map[string]tsspDetachedDataBlockInfo) []s
 	return columnNames
 }
 
-func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, rows int) ([]bool, int, bool) {
-	if len(filters) == 0 {
+func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, anyFilters []FieldFilter, rows int) ([]bool, int, bool) {
+	if len(filters) == 0 && len(anyFilters) == 0 {
 		return nil, rows, true
 	}
 	if rows <= 0 {
 		return nil, 0, true
 	}
-	type fieldFilterBlock struct {
-		filter FieldFilter
-		block  tsspDetachedDataBlockInfo
+	filterBlocks, ok := tsspDataBlockRequiredFilterBlocks(blocks, filters, rows)
+	if !ok {
+		return nil, 0, false
 	}
-	filterBlocks := make([]fieldFilterBlock, 0, len(filters))
-	for _, filter := range filters {
-		block, ok := blocks[filter.Key]
-		if !ok {
-			return make([]bool, rows), 0, true
-		}
-		if !block.RowsKnown || !block.ValueKnown || block.Rows != rows {
-			return nil, 0, false
-		}
-		if !block.ValueNull && len(block.Values) != rows {
-			return nil, 0, false
-		}
-		filterBlocks = append(filterBlocks, fieldFilterBlock{filter: filter, block: block})
+	if filterBlocks == nil && len(filters) > 0 {
+		return make([]bool, rows), 0, true
+	}
+	anyFilterBlocks, ok := tsspDataBlockAnyFilterBlocks(blocks, anyFilters, rows)
+	if !ok {
+		return nil, 0, false
+	}
+	if len(anyFilters) > 0 && len(anyFilterBlocks) == 0 {
+		return make([]bool, rows), 0, true
 	}
 	matchingRows := make([]bool, rows)
 	matched := 0
@@ -300,12 +296,62 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 				break
 			}
 		}
+		if match && len(anyFilterBlocks) > 0 {
+			match = false
+			for _, filterBlock := range anyFilterBlocks {
+				if tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter) {
+					match = true
+					break
+				}
+			}
+		}
 		if match {
 			matchingRows[row] = true
 			matched++
 		}
 	}
 	return matchingRows, matched, true
+}
+
+type tsspDataBlockFieldFilterBlock struct {
+	filter FieldFilter
+	block  tsspDetachedDataBlockInfo
+}
+
+func tsspDataBlockRequiredFilterBlocks(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, rows int) ([]tsspDataBlockFieldFilterBlock, bool) {
+	filterBlocks := make([]tsspDataBlockFieldFilterBlock, 0, len(filters))
+	for _, filter := range filters {
+		block, ok := blocks[filter.Key]
+		if !ok {
+			return nil, true
+		}
+		if !block.RowsKnown || !block.ValueKnown || block.Rows != rows {
+			return nil, false
+		}
+		if !block.ValueNull && len(block.Values) != rows {
+			return nil, false
+		}
+		filterBlocks = append(filterBlocks, tsspDataBlockFieldFilterBlock{filter: filter, block: block})
+	}
+	return filterBlocks, true
+}
+
+func tsspDataBlockAnyFilterBlocks(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, rows int) ([]tsspDataBlockFieldFilterBlock, bool) {
+	filterBlocks := make([]tsspDataBlockFieldFilterBlock, 0, len(filters))
+	for _, filter := range filters {
+		block, ok := blocks[filter.Key]
+		if !ok {
+			continue
+		}
+		if !block.RowsKnown || !block.ValueKnown || block.Rows != rows {
+			return nil, false
+		}
+		if !block.ValueNull && len(block.Values) != rows {
+			return nil, false
+		}
+		filterBlocks = append(filterBlocks, tsspDataBlockFieldFilterBlock{filter: filter, block: block})
+	}
+	return filterBlocks, true
 }
 
 func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter FieldFilter) bool {

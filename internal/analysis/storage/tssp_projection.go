@@ -7,12 +7,17 @@ type tsspColumnProjection struct {
 	selected map[string]struct{}
 }
 
-func newTSSPColumnProjection(chunk tsspChunkMeta, queryColumns []string, queryFields []FieldFilter) tsspColumnProjection {
+func newTSSPColumnProjection(chunk tsspChunkMeta, queryColumns []string, queryFields []FieldFilter, queryAnyFields []FieldFilter) tsspColumnProjection {
 	if len(queryColumns) == 0 {
 		return tsspColumnProjection{}
 	}
 	want := queryKeySet(queryColumns)
 	for _, filter := range queryFields {
+		if filter.Key != "" {
+			want[filter.Key] = struct{}{}
+		}
+	}
+	for _, filter := range queryAnyFields {
 		if filter.Key != "" {
 			want[filter.Key] = struct{}{}
 		}
@@ -110,6 +115,36 @@ func populateTSSPFieldFilterMatches(summary *DecodePathSummary, chunks []tsspChu
 	}
 }
 
+func populateTSSPAnyFieldFilterMatches(summary *DecodePathSummary, chunks []tsspChunkMeta, queryFields []FieldFilter) {
+	if summary == nil || len(queryFields) == 0 {
+		return
+	}
+	queryFields = normalizeFieldFilters(queryFields)
+	if len(queryFields) == 0 {
+		return
+	}
+	summary.QueryAnyFields = append([]FieldFilter(nil), queryFields...)
+	want := map[string]struct{}{}
+	for _, filter := range queryFields {
+		want[filter.Key] = struct{}{}
+	}
+	matchedKeys := map[string]struct{}{}
+	for _, chunk := range chunks {
+		for _, column := range chunk.Columns {
+			if _, ok := want[column.Name]; ok {
+				matchedKeys[column.Name] = struct{}{}
+			}
+		}
+	}
+	for _, filter := range queryFields {
+		if _, ok := matchedKeys[filter.Key]; ok {
+			summary.MatchedAnyFields = append(summary.MatchedAnyFields, filter)
+		} else {
+			summary.MissingAnyFields = append(summary.MissingAnyFields, filter)
+		}
+	}
+}
+
 func populateTSSPFileSetColumnProjectionMatches(summary *DecodePathSummary, queryColumns []string, matchedSet map[string]struct{}) {
 	if summary == nil || len(queryColumns) == 0 {
 		return
@@ -142,6 +177,24 @@ func populateTSSPFileSetFieldFilterMatches(summary *DecodePathSummary, queryFiel
 			summary.MatchedFields = append(summary.MatchedFields, filter)
 		} else {
 			summary.MissingFields = append(summary.MissingFields, filter)
+		}
+	}
+}
+
+func populateTSSPFileSetAnyFieldFilterMatches(summary *DecodePathSummary, queryFields []FieldFilter, matchedSet map[string]struct{}) {
+	if summary == nil || len(queryFields) == 0 {
+		return
+	}
+	queryFields = normalizeFieldFilters(queryFields)
+	if len(queryFields) == 0 {
+		return
+	}
+	summary.QueryAnyFields = append([]FieldFilter(nil), queryFields...)
+	for _, filter := range queryFields {
+		if _, ok := matchedSet[filter.Key]; ok {
+			summary.MatchedAnyFields = append(summary.MatchedAnyFields, filter)
+		} else {
+			summary.MissingAnyFields = append(summary.MissingAnyFields, filter)
 		}
 	}
 }

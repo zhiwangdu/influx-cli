@@ -494,7 +494,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 			probe.chunkFailureReason[chunk.SID] = "segment_overlap_data_range_unavailable"
 			continue
 		}
-		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields)
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields, options.QueryAnyFields)
 		chunkChecked := false
 		chunkAvailable := true
 		chunkFailureReason := ""
@@ -590,13 +590,13 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				matchingRows, matchedRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, segmentRows)
+				matchingRows, matchedRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, segmentRows)
 				if !ok {
 					chunkAvailable = false
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
 					continue
 				}
-				if len(options.QueryFields) > 0 {
+				if len(options.QueryFields) > 0 || len(options.QueryAnyFields) > 0 {
 					probe.FilterRows += segmentRows
 					probe.FilterMatches += matchedRows
 					probe.FilterRejects += segmentRows - matchedRows
@@ -2130,6 +2130,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 	}
 	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	populateTSSPFieldFilterMatches(summary, chunks, options.QueryFields)
+	populateTSSPAnyFieldFilterMatches(summary, chunks, options.QueryAnyFields)
 	idSet := queryMetaIndexIDSet(options.QueryMetaIndexIDs)
 	if len(idSet) > 0 {
 		summary.QueryMetaIndexIDs = append([]uint64(nil), options.QueryMetaIndexIDs...)
@@ -2165,7 +2166,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		}
 		minTime, maxTime := chunk.minMaxTime()
 		segmentCount := len(chunk.TimeRanges)
-		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields)
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields, options.QueryAnyFields)
 		outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange, columnProjection)
 		baselineBytes := tsspChunkSegmentBytes(chunk)
 		baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0, tsspColumnProjection{})
@@ -2528,6 +2529,12 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			len(summary.MissingFields),
 		))
 	}
+	if len(summary.MissingAnyFields) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"%d query OR field filter(s) were not found in analyzed detached TSSP chunk metadata",
+			len(summary.MissingAnyFields),
+		))
+	}
 	if len(summary.QueryColumns) > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"column projection requested for %d detached TSSP column(s) before data ReadAt",
@@ -2544,6 +2551,12 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 		recommendations = append(recommendations, fmt.Sprintf(
 			"applied %d detached TSSP field filter(s) to decoded record rows",
 			len(summary.QueryFields),
+		))
+	}
+	if len(summary.QueryAnyFields) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"applied %d detached TSSP OR field filter(s) to decoded record rows",
+			len(summary.QueryAnyFields),
 		))
 	}
 	if summary.DataBlockProbeFilterRows > 0 {

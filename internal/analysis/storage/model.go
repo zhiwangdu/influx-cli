@@ -40,6 +40,7 @@ type Options struct {
 	QueryMetaIndexIDs []uint64
 	QueryColumns      []string
 	QueryFields       []FieldFilter
+	QueryAnyFields    []FieldFilter
 	QueryMeasurements []string
 	QueryTags         []TagFilter
 	CursorDescending  bool
@@ -310,6 +311,9 @@ type DecodePathSummary struct {
 	QueryFields                  []FieldFilter             `json:"query_fields,omitempty"`
 	MatchedFields                []FieldFilter             `json:"matched_fields,omitempty"`
 	MissingFields                []FieldFilter             `json:"missing_fields,omitempty"`
+	QueryAnyFields               []FieldFilter             `json:"query_any_fields,omitempty"`
+	MatchedAnyFields             []FieldFilter             `json:"matched_any_fields,omitempty"`
+	MissingAnyFields             []FieldFilter             `json:"missing_any_fields,omitempty"`
 	MatchedKeys                  []string                  `json:"matched_keys,omitempty"`
 	MissingKeys                  []string                  `json:"missing_keys,omitempty"`
 	MatchedSeriesIDs             []uint64                  `json:"matched_series_ids,omitempty"`

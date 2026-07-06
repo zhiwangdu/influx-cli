@@ -751,6 +751,64 @@ func TestAnalyzeTSSPDetachedFieldFilterSuppressesNonMatchingRows(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 42, minTime: 333, maxTime: 333, offset: 1000, size: 13, timeSize: 13},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedOneRowData(filepath.Join(dir, tsspDetachedDataFileName), 1200, chunks[0], 99, 333); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 333)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+		QueryAnyFields:   []FieldFilter{{Key: "value", Value: "100"}, {Key: "value", Value: "99"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "1"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	wantAny := []FieldFilter{{Key: "value", Value: "100"}, {Key: "value", Value: "99"}}
+	if got := decode.QueryAnyFields; !equalFieldFilters(got, wantAny) {
+		t.Fatalf("query any fields = %v, want %v", got, wantAny)
+	}
+	if got := decode.MatchedAnyFields; !equalFieldFilters(got, wantAny) {
+		t.Fatalf("matched any fields = %v, want %v", got, wantAny)
+	}
+	if len(decode.MissingAnyFields) != 0 {
+		t.Fatalf("missing any fields = %v, want none", decode.MissingAnyFields)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "applied 2 detached TSSP OR field filter") {
+		t.Fatalf("recommendations = %v, want detached OR field filter recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPDetachedFieldFilterMatchesIntegerComparison(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
