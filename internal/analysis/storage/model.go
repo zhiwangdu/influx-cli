@@ -22,6 +22,7 @@ const (
 	FormatFieldsIndex       Format = "fields-index"
 	FormatMergeset          Format = "mergeset"
 	FormatOpenGeminiMeta    Format = "opengemini-meta"
+	FormatOpenGeminiPKMeta  Format = "opengemini-pk-meta"
 )
 
 type Options struct {
@@ -102,8 +103,39 @@ type FileReport struct {
 	MetaIndexID        SeriesIDSummary    `json:"meta_index_id,omitempty"`
 	Index              *IndexSummary      `json:"index,omitempty"`
 	Fields             *FieldIndexSummary `json:"fields,omitempty"`
+	PrimaryKey         *PrimaryKeySummary `json:"primary_key,omitempty"`
 	Extra              map[string]string  `json:"extra,omitempty"`
 	Notices            []string           `json:"notices,omitempty"`
+}
+
+type PrimaryKeySummary struct {
+	Type                    string                   `json:"type"`
+	Version                 uint32                   `json:"version"`
+	Schema                  []PrimaryKeyColumnReport `json:"schema,omitempty"`
+	ColumnCount             int                      `json:"column_count"`
+	TimeClusterLocation     int                      `json:"time_cluster_location"`
+	MetaBlockCount          int                      `json:"meta_block_count"`
+	RowCount                uint64                   `json:"row_count"`
+	DataSizeBytes           int64                    `json:"data_size_bytes"`
+	DataFilePresent         bool                     `json:"data_file_present"`
+	DataFileSizeBytes       int64                    `json:"data_file_size_bytes"`
+	CRCMismatches           int                      `json:"crc_mismatches"`
+	DataOutOfBoundsBlocks   int                      `json:"data_out_of_bounds_blocks"`
+	ColumnOutOfBoundsBlocks int                      `json:"column_out_of_bounds_blocks"`
+	ColumnUnorderedBlocks   int                      `json:"column_unordered_blocks"`
+	BlockIDRangeSet         bool                     `json:"block_id_range_set"`
+	MinBlockID              uint64                   `json:"min_block_id"`
+	MaxBlockID              uint64                   `json:"max_block_id"`
+	PublicInfoSizeBytes     int64                    `json:"public_info_size_bytes"`
+	ValidMetaBytes          int64                    `json:"valid_meta_bytes"`
+	TrailingMetaBytes       int64                    `json:"trailing_meta_bytes"`
+	MetaRecordSizeBytes     int                      `json:"meta_record_size_bytes"`
+	ColumnOffsetCount       int                      `json:"column_offset_count"`
+}
+
+type PrimaryKeyColumnReport struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 type FieldIndexSummary struct {

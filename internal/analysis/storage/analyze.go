@@ -270,6 +270,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeMergesetPart(path, info, options)
 	case FormatOpenGeminiMeta:
 		return analyzeOpenGeminiMeta(path, info, options)
+	case FormatOpenGeminiPKMeta:
+		return analyzeOpenGeminiPKMeta(path, info, options)
 	default:
 		return FileReport{}, fmt.Errorf("unsupported storage format %q", format)
 	}
@@ -287,6 +289,9 @@ func detectFormat(path string) (Format, error) {
 	}
 	if isOpenGeminiMetaPath(path) {
 		return FormatOpenGeminiMeta, nil
+	}
+	if isOpenGeminiPKMetaPath(path) {
+		return FormatOpenGeminiPKMeta, nil
 	}
 	if isSeriesFilePath(path) {
 		return FormatSeriesFile, nil
@@ -353,8 +358,10 @@ func isStorageCandidate(path string, format Format) bool {
 		return isMergesetPartPath(path)
 	case FormatOpenGeminiMeta:
 		return isOpenGeminiMetaPath(path)
+	case FormatOpenGeminiPKMeta:
+		return isOpenGeminiPKMetaPath(path)
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path)
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path)
 	}
 }
 
@@ -366,6 +373,10 @@ func isOpenGeminiMetaPath(path string) bool {
 	default:
 		return strings.HasSuffix(lower, ".ogmeta")
 	}
+}
+
+func isOpenGeminiPKMetaPath(path string) bool {
+	return strings.EqualFold(filepath.Base(path), opengeminiPKMetaFileName)
 }
 
 func isTSILogPath(path string) bool {
