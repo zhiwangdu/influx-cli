@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -391,6 +392,16 @@ func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter 
 
 func tsspDataBlockLiteralMatches(block tsspDetachedDataBlockInfo, row int, op, want string) bool {
 	got := tsspDataProbeRecordValue(block, row)
+	if op == "=~" || op == "!~" {
+		matches, err := regexp.MatchString(want, got)
+		if err != nil {
+			return false
+		}
+		if op == "!~" {
+			return !matches
+		}
+		return matches
+	}
 	// null is a reserved decoded-row sentinel even when it came from a quoted literal.
 	if got == "null" || want == "null" {
 		return compareTSSPEqualValues(got, want, op)

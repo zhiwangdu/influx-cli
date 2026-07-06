@@ -340,7 +340,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
-	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key!=value, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2) for local record filtering; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key!=value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2) for local record filtering; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.anyFields, "field-any", nil, "TSSP decoded field predicate using the same syntax as --field; at least one repeated --field-any predicate must match; combines with --field as required AND predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.noneFields, "field-none", nil, "TSSP decoded field predicate using the same syntax as --field; no repeated --field-none predicate may match; combines after required AND and OR predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
@@ -465,7 +465,7 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key!=value, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2)", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key!=value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2)", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -488,11 +488,20 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 }
 
 func splitStorageFieldFilter(value string) (string, string, string, bool) {
-	for _, op := range []string{">=", "<=", "!=", "=", ">", "<"} {
-		key, filterValue, ok := strings.Cut(value, op)
-		if ok {
-			return key, op, filterValue, true
+	bestIndex := len(value) + 1
+	bestOp := ""
+	for _, op := range []string{">=", "<=", "!=", "=~", "!~", "=", ">", "<"} {
+		index := strings.Index(value, op)
+		if index < 0 {
+			continue
 		}
+		if index < bestIndex || index == bestIndex && len(op) > len(bestOp) {
+			bestIndex = index
+			bestOp = op
+		}
+	}
+	if bestOp != "" {
+		return value[:bestIndex], bestOp, value[bestIndex+len(bestOp):], true
 	}
 	for _, operator := range []struct {
 		text string

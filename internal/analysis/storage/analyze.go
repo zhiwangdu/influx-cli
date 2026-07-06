@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -249,7 +250,7 @@ func fieldFilterOperator(filter FieldFilter) string {
 
 func validFieldFilterOperator(op string) bool {
 	switch normalizeFieldFilterOperator(op) {
-	case "", "!=", ">", ">=", "<", "<=", "in", "not-in":
+	case "", "!=", ">", ">=", "<", "<=", "in", "not-in", "=~", "!~":
 		return true
 	default:
 		return false
@@ -270,6 +271,11 @@ func validateFieldFilters(filters []FieldFilter) error {
 		}
 		if filter.Value == "" && op != "=" && op != "!=" {
 			return fmt.Errorf("query field filter %q requires a value for operator %q", filter.Key, op)
+		}
+		if op == "=~" || op == "!~" {
+			if _, err := regexp.Compile(fieldFilterScalarValue(filter.Value)); err != nil {
+				return fmt.Errorf("query field filter %q has invalid regex for operator %q: %w", filter.Key, op, err)
+			}
 		}
 	}
 	return nil
