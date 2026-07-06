@@ -723,6 +723,87 @@ func TestAnalyzeTSMDecodePathComparesIntegerValueOutput(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMDecodePathComparesUnsignedValueOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	unsignedHigh := uint64(1) << 63
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "bytes,host=a value", typ: tsmBlockUnsigned, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}, unsignedValues: []uint64{unsignedHigh + 1, unsignedHigh + 2, unsignedHigh + 3}},
+		{key: "bytes,host=a value", typ: tsmBlockUnsigned, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}, unsignedValues: []uint64{unsignedHigh + 20, unsignedHigh + 30, unsignedHigh + 40}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if got, want := decode.BaselineValueOutputPoints, 4; got != want {
+		t.Fatalf("baseline value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 4; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ComparedValueOutputPoints, 2; got != want {
+		t.Fatalf("compared value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputMismatches, 0; got != want {
+		t.Fatalf("value output mismatches = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].ValueOutputPoints, 2; got != want {
+		t.Fatalf("first sample value output points = %d, want %d", got, want)
+	}
+	if !decode.Samples[0].ValueOutputAvailable {
+		t.Fatal("expected first sample value output to be available")
+	}
+	if got, want := len(decode.CursorFinalOutputSamples), 2; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "bytes,host=a value", Time: 20, Type: "unsigned", OptimizedValue: "9223372036854775828", Matches: true},
+		{Key: "bytes,host=a value", Time: 30, Type: "unsigned", OptimizedValue: "9223372036854775838", Matches: true},
+	} {
+		got := decode.CursorFinalOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor final output sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+
+	data, err := readTSMFileStoreData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := map[tsmOutputPointKey]tsmPoint{}
+	for _, entry := range data.entries {
+		points, ok := tsmOutputPoints(entry, nil, queryRange)
+		if !ok {
+			t.Fatalf("points unavailable for entry %+v", entry)
+		}
+		addTSMOutputPoints(baseline, entry.Key, points)
+	}
+	for timestamp, want := range map[int64]string{20: "9223372036854775828", 30: "9223372036854775838"} {
+		point, ok := baseline[tsmOutputPointKey{key: "bytes,host=a value", timestamp: timestamp, typ: tsmBlockUnsigned}]
+		if !ok {
+			t.Fatalf("missing merged point at %d", timestamp)
+		}
+		if point.Value != want {
+			t.Fatalf("merged point at %d = %q, want %q", timestamp, point.Value, want)
+		}
+	}
+}
+
 func TestAnalyzeTSMDecodePathComparesFloatValueOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
 	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
@@ -1292,15 +1373,16 @@ func equalStrings(a, b []string) bool {
 }
 
 type testTSMBlockSpec struct {
-	key          string
-	typ          byte
-	minTime      int64
-	maxTime      int64
-	timestamps   []int64
-	floatValues  []float64
-	values       []int64
-	boolValues   []bool
-	stringValues []string
+	key            string
+	typ            byte
+	minTime        int64
+	maxTime        int64
+	timestamps     []int64
+	floatValues    []float64
+	values         []int64
+	unsignedValues []uint64
+	boolValues     []bool
+	stringValues   []string
 }
 
 func writeTestTSMWithBlocks(path string, specs []testTSMBlockSpec) error {
@@ -1413,6 +1495,8 @@ func testTSMBlock(spec testTSMBlockSpec) []byte {
 		block.Write(testTSMFloatValueBlock(spec.floatValues))
 	case spec.typ == tsmBlockInteger && len(spec.values) > 0:
 		block.Write(testTSMIntegerValueBlock(spec.values))
+	case spec.typ == tsmBlockUnsigned && len(spec.unsignedValues) > 0:
+		block.Write(testTSMUnsignedValueBlock(spec.unsignedValues))
 	case spec.typ == tsmBlockBoolean && len(spec.boolValues) > 0:
 		block.Write(testTSMBooleanValueBlock(spec.boolValues))
 	case spec.typ == tsmBlockString && len(spec.stringValues) > 0:
