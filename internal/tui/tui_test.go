@@ -441,6 +441,69 @@ func TestModelCompletesSelectFieldsBeforeFrom(t *testing.T) {
 	}
 }
 
+func TestClearEditorKeepsEditMode(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.editor.SetValue("select * from cpu")
+	model.historyIndex = 3
+
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlL})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("expected clear editor to be synchronous")
+	}
+	if got := model.editor.Value(); got != "" {
+		t.Fatalf("editor value = %q, want empty", got)
+	}
+	if model.historyIndex != -1 {
+		t.Fatalf("history index = %d, want -1", model.historyIndex)
+	}
+	if model.mode != modeEdit || !model.editor.Focused() {
+		t.Fatalf("mode/focus = %q/%v, want edit/focused", model.mode, model.editor.Focused())
+	}
+	if model.statusMessage != "editor cleared" {
+		t.Fatalf("status = %q, want editor cleared", model.statusMessage)
+	}
+}
+
+func TestCommandModeRefreshesCurrentSchema(t *testing.T) {
+	model := newTestModel(&fakeAdapter{schemaSnapshot: cpuSnapshot()})
+	model.schemaMeasurement = "cpu"
+	model.schemaSnapshot = nil
+	model.setMode(modeCommand)
+
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected schema load command")
+	}
+	if !model.schemaVisible || !model.schemaLoading {
+		t.Fatalf("schema visible/loading = %v/%v, want true/true", model.schemaVisible, model.schemaLoading)
+	}
+	if model.statusMessage != "schema refresh: cpu" {
+		t.Fatalf("status = %q, want schema refresh: cpu", model.statusMessage)
+	}
+
+	msg := cmd().(schemaLoadedMsg)
+	model = model.handleSchema(msg)
+	if model.schemaSnapshot == nil {
+		t.Fatal("expected schema snapshot after refresh")
+	}
+}
+
+func TestRefreshSchemaRequiresMeasurement(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.setMode(modeCommand)
+
+	updated, cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	model = updated.(Model)
+	if cmd != nil {
+		t.Fatal("expected no schema command without measurement")
+	}
+	if model.statusMessage != "schema refresh: no measurement" {
+		t.Fatalf("status = %q, want no measurement", model.statusMessage)
+	}
+}
+
 func TestModelRecallsHistory(t *testing.T) {
 	model := newTestModel(&fakeAdapter{})
 	model.historyEntries = []history.Entry{

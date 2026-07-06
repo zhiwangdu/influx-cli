@@ -285,6 +285,9 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+r":
 		m.recallHistory()
 		return m, nil
+	case "ctrl+l":
+		m.clearEditor()
+		return m, nil
 	case "tab":
 		if m.loading {
 			m.statusMessage = "query is running"
@@ -316,6 +319,9 @@ func (m Model) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.startQuery(strings.TrimSpace(m.editor.Value()), false)
 	case "ctrl+r":
 		m.recallHistory()
+		return m, nil
+	case "ctrl+l":
+		m.clearEditor()
 		return m, nil
 	case "tab":
 		if m.loading {
@@ -394,6 +400,9 @@ func (m Model) handleCommandShortcut(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) 
 			return m, m.loadSchemaCmd(m.schemaMeasurement), true
 		}
 		return m, nil, true
+	case "l", "L":
+		updated, cmd := m.refreshSchema()
+		return updated, cmd, true
 	case "w", "W":
 		updated, cmd := m.toggleWatch()
 		return updated, cmd, true
@@ -431,6 +440,12 @@ func (m *Model) setMode(mode tuiMode) tea.Cmd {
 	}
 	m.editor.Blur()
 	return nil
+}
+
+func (m *Model) clearEditor() {
+	m.editor.Reset()
+	m.historyIndex = -1
+	m.statusMessage = "editor cleared"
 }
 
 func (m Model) startQuery(query string, fromWatch bool) (tea.Model, tea.Cmd) {
@@ -626,6 +641,26 @@ func (m Model) manualRefresh() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.startQuery(query, false)
+}
+
+func (m Model) refreshSchema() (tea.Model, tea.Cmd) {
+	measurement := strings.TrimSpace(m.schemaMeasurement)
+	if measurement == "" {
+		measurement = inferMeasurement(m.lastQuery)
+	}
+	if measurement == "" {
+		measurement = inferMeasurement(m.editor.Value())
+	}
+	if measurement == "" {
+		m.statusMessage = "schema refresh: no measurement"
+		return m, nil
+	}
+	m.schemaVisible = true
+	m.schemaMeasurement = measurement
+	m.schemaLoading = true
+	m.schemaErr = nil
+	m.statusMessage = "schema refresh: " + measurement
+	return m, m.loadSchemaCmd(measurement)
 }
 
 func (m *Model) adjustWatchInterval(delta time.Duration) {

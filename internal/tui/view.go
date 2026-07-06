@@ -200,7 +200,7 @@ func (m Model) schemaLines() []string {
 }
 
 func (m Model) footerView(width int) string {
-	footer := string(m.mode) + " | Ctrl+J run | Ctrl+C cancel/quit | Ctrl+R history | Tab complete | Esc mode | Enter/V result | 0 auto | 1 table | 2 spark | 3 chart | 4 json | R refresh | +/- interval | S schema | W watch | F fullscreen | Q quit"
+	footer := string(m.mode) + " | Ctrl+J run | Ctrl+C cancel/quit | Ctrl+L clear | Ctrl+R history | Tab complete | Esc mode | Enter/V result | 0 auto | 1 table | 2 spark | 3 chart | 4 json | R refresh | +/- interval | S schema | L schema refresh | W watch | F fullscreen | Q quit"
 	footer = truncateRunes(footer, width)
 	if !m.renderOptions.Color {
 		return footer
