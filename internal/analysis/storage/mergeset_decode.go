@@ -64,6 +64,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	summary.TableSearchExactMisses = len(summary.MissingKeys)
 	populateMergesetFileSetCursorWindows(summary, matchedKeyFiles, options)
 	populateMergesetFileSetCursorOutputSamples(summary, tableSeekResults, options)
+	populateMergesetFileSetFinalSearchOutputSamples(summary, tableSeekResults, matchedKeyFiles, options)
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
@@ -209,6 +210,36 @@ func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tabl
 			OptimizedValue: string(result.Item),
 			Matches:        result.Matches,
 		})
+	}
+}
+
+func populateMergesetFileSetFinalSearchOutputSamples(summary *DecodePathSummary, tableSeekResults map[string]mergesetSeekResult, matchedKeyFiles map[string][]string, options Options) {
+	if options.BlockSampleLimit <= 0 {
+		return
+	}
+	for _, key := range options.QueryKeys {
+		if len(summary.CursorFinalOutputSamples) >= options.BlockSampleLimit {
+			return
+		}
+		result, ok := tableSeekResults[key]
+		if !ok || !result.Matches {
+			continue
+		}
+		files := uniqueStringsPreserveOrder(matchedKeyFiles[key])
+		requiresDedup := len(files) > 1
+		output := DecodePathCursorOutput{
+			Key:            key,
+			Type:           "mergeset-table-search-final-output-item",
+			File:           result.File,
+			OptimizedValue: string(result.Item),
+			Matches:        true,
+			RequiresDedup:  requiresDedup,
+			RequiresMerge:  requiresDedup,
+		}
+		if requiresDedup {
+			output.MergeFiles = newDecodePathStringList(files)
+		}
+		summary.CursorFinalOutputSamples = append(summary.CursorFinalOutputSamples, output)
 	}
 }
 
@@ -534,6 +565,9 @@ func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Op
 	}
 	if summary.TableSearchHeapCandidates > summary.TableSearchOutputValues {
 		recommendations = append(recommendations, fmt.Sprintf("table search heap compares %d part candidate item(s) for %d table output seek(s)", summary.TableSearchHeapCandidates, summary.TableSearchOutputValues))
+	}
+	if len(summary.CursorFinalOutputSamples) > 0 {
+		recommendations = append(recommendations, "final item-search output samples show deduplicated exact TableSearch results")
 	}
 	if summary.SavedDecodeBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("sorted item lookup skips %d mergeset block(s) across analyzed part(s)", summary.SavedDecodeBlocks))

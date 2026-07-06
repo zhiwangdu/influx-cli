@@ -1265,6 +1265,31 @@ func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	if got, want := decode.CursorOutputSamples[2].File, partPath2; got != want {
 		t.Fatalf("third cursor output sample file = %q, want %q", got, want)
 	}
+	if got, want := len(decode.CursorFinalOutputSamples), 2; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		key   string
+		value string
+		file  string
+	}{
+		{key: "aa", value: "aa", file: partPath1},
+		{key: "za", value: "za", file: partPath2},
+	} {
+		got := decode.CursorFinalOutputSamples[i]
+		if got.Key != want.key {
+			t.Fatalf("cursor final output sample[%d] key = %q, want %q", i, got.Key, want.key)
+		}
+		if got.OptimizedValue != want.value {
+			t.Fatalf("cursor final output sample[%d] value = %q, want %q", i, got.OptimizedValue, want.value)
+		}
+		if got.File != want.file {
+			t.Fatalf("cursor final output sample[%d] file = %q, want %q", i, got.File, want.file)
+		}
+		if got.RequiresDedup || got.RequiresMerge || got.MergeFiles != "" {
+			t.Fatalf("cursor final output sample[%d] = %+v, want no dedup/merge", i, got)
+		}
+	}
 	if got, want := decode.TableSearchSeekCalls, 6; got != want {
 		t.Fatalf("table search seek calls = %d, want %d", got, want)
 	}
@@ -1380,8 +1405,27 @@ func TestAnalyzeMergesetFileSetDuplicateKeyMergeWindow(t *testing.T) {
 	if got, want := window.Files, []string{partPath1, partPath2}; !equalStrings(got, want) {
 		t.Fatalf("cursor window files = %v, want %v", got, want)
 	}
+	if got, want := len(decode.CursorFinalOutputSamples), 1; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	finalOutput := decode.CursorFinalOutputSamples[0]
+	if got, want := finalOutput.Key, "aa"; got != want {
+		t.Fatalf("cursor final output key = %q, want %q", got, want)
+	}
+	if got, want := finalOutput.OptimizedValue, "aa"; got != want {
+		t.Fatalf("cursor final output value = %q, want %q", got, want)
+	}
+	if got, want := finalOutput.MergeFiles, newDecodePathStringList([]string{partPath1, partPath2}); got != want {
+		t.Fatalf("cursor final output merge files = %q, want %q", got, want)
+	}
+	if !finalOutput.RequiresDedup || !finalOutput.RequiresMerge {
+		t.Fatalf("cursor final output = %+v, want dedup and merge", finalOutput)
+	}
 	if !containsString(decode.Recommendations, "merge/dedup") {
 		t.Fatalf("recommendations = %v, want merge/dedup recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "deduplicated exact TableSearch results") {
+		t.Fatalf("recommendations = %v, want final output recommendation", decode.Recommendations)
 	}
 }
 
