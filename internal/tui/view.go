@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -104,7 +105,7 @@ func (m *Model) resize(width, height int) {
 func (m Model) statusView(width int) string {
 	watch := "off"
 	if m.watch {
-		watch = "on"
+		watch = "on/" + formatDuration(m.watchInterval)
 	}
 	state := m.statusMessage
 	if m.loading {
@@ -128,10 +129,16 @@ func (m Model) resultPanel() string {
 	if m.renderer != "" {
 		title += " [" + m.renderer + "]"
 	}
+	if summary := m.resultSummary(); summary != "" {
+		title += " | " + summary
+	}
+	if latency := m.executor.Session.Snapshot().LastLatency; latency > 0 {
+		title += " | latency " + formatDuration(latency)
+	}
 	if m.loading {
 		title += " running"
 	}
-	return titleStyle.Render(title) + "\n" + m.resultView.View()
+	return titleStyle.Render(truncateRunes(title, m.resultView.Width)) + "\n" + m.resultView.View()
 }
 
 func (m Model) contextPanel(width int) string {
@@ -145,6 +152,13 @@ func (m Model) contextPanel(width int) string {
 		"rp: " + printValue(snapshot.RP),
 		"adapter: " + printValue(snapshot.AdapterName),
 		"measurement: " + printValue(m.schemaMeasurement),
+		"format: " + printValue(m.renderMode),
+		"result: " + printValue(m.resultSummary()),
+		"latency: " + formatDuration(snapshot.LastLatency),
+		"watch: " + m.watchSummary(),
+	}
+	if timeRange := m.resultTimeRange(); timeRange != "" {
+		lines = append(lines, "time: "+timeRange)
 	}
 	lines = append(lines, m.schemaLines()...)
 	return strings.Join(fitLines(lines, width), "\n")
@@ -186,16 +200,84 @@ func (m Model) schemaLines() []string {
 }
 
 func (m Model) footerView(width int) string {
-	mode := "edit"
-	if !m.editor.Focused() {
-		mode = "command"
-	}
-	footer := mode + " | Ctrl+J run | Ctrl+R history | Tab complete | Esc mode | 1 table | 2 sparkline | 3 chart | S schema | W watch | F fullscreen | Q quit"
+	footer := string(m.mode) + " | Ctrl+J run | Ctrl+C cancel/quit | Ctrl+R history | Tab complete | Esc mode | Enter/V result | 0 auto | 1 table | 2 spark | 3 chart | 4 json | R refresh | +/- interval | S schema | W watch | F fullscreen | Q quit"
 	footer = truncateRunes(footer, width)
 	if !m.renderOptions.Color {
 		return footer
 	}
 	return dimStyle.Render(footer)
+}
+
+func (m Model) resultSummary() string {
+	if m.lastResult.Kind == "" {
+		return ""
+	}
+	rowCount := m.lastResult.Metadata.RowCount
+	if rowCount == 0 && m.lastResult.Table != nil {
+		rowCount = m.lastResult.Table.RowCount()
+	}
+	pointCount := m.lastResult.Metadata.PointCount
+	if pointCount == 0 {
+		for _, series := range m.lastResult.Series {
+			pointCount += len(series.Points)
+		}
+	}
+	seriesCount := m.lastResult.Metadata.SeriesCount
+	if seriesCount == 0 && len(m.lastResult.Series) > 0 {
+		seriesCount = len(m.lastResult.Series)
+	}
+
+	parts := make([]string, 0, 3)
+	if rowCount > 0 || m.lastResult.Table != nil {
+		if m.renderOptions.MaxRows > 0 && rowCount > m.renderOptions.MaxRows {
+			parts = append(parts, fmt.Sprintf("rows %d shown %d", rowCount, m.renderOptions.MaxRows))
+		} else {
+			parts = append(parts, fmt.Sprintf("rows %d", rowCount))
+		}
+	}
+	if pointCount > 0 {
+		parts = append(parts, fmt.Sprintf("points %d", pointCount))
+	}
+	if seriesCount > 0 {
+		parts = append(parts, fmt.Sprintf("series %d", seriesCount))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (m Model) resultTimeRange() string {
+	var minTime time.Time
+	var maxTime time.Time
+	for _, series := range m.lastResult.Series {
+		for _, point := range series.Points {
+			if point.Time.IsZero() {
+				continue
+			}
+			if minTime.IsZero() || point.Time.Before(minTime) {
+				minTime = point.Time
+			}
+			if maxTime.IsZero() || point.Time.After(maxTime) {
+				maxTime = point.Time
+			}
+		}
+	}
+	if minTime.IsZero() || maxTime.IsZero() {
+		return ""
+	}
+	return minTime.Format(time.RFC3339) + " .. " + maxTime.Format(time.RFC3339)
+}
+
+func (m Model) watchSummary() string {
+	if !m.watch {
+		return "off"
+	}
+	summary := "on " + formatDuration(m.watchInterval)
+	if !m.lastRefresh.IsZero() {
+		summary += " last " + m.lastRefresh.Format("15:04:05")
+	}
+	if m.lastErr != nil {
+		summary += " error " + oneLine(m.lastErr.Error())
+	}
+	return summary
 }
 
 func divider(width int) string {

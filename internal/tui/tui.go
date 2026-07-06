@@ -22,11 +22,23 @@ import (
 const (
 	defaultQueryTimeout  = 30 * time.Second
 	defaultWatchInterval = 5 * time.Second
+	minWatchInterval     = time.Second
+	maxWatchInterval     = time.Hour
 	defaultWidth         = 100
 	defaultHeight        = 30
 	queryEditorHeight    = 4
 	contextPanelWidth    = 34
 	wideLayoutWidth      = 96
+)
+
+type tuiMode string
+
+const (
+	modeEdit       tuiMode = "edit"
+	modeCommand    tuiMode = "command"
+	modeResult     tuiMode = "result"
+	modeCompletion tuiMode = "completion"
+	modeHistory    tuiMode = "history"
 )
 
 type Options struct {
@@ -47,6 +59,7 @@ type Model struct {
 
 	width  int
 	height int
+	mode   tuiMode
 
 	lastResult result.Result
 	rendered   string
@@ -56,7 +69,11 @@ type Model struct {
 
 	statusMessage string
 	loading       bool
+	activeCancel  context.CancelFunc
+	activeWatch   bool
+	cancelAsked   bool
 	watch         bool
+	lastRefresh   time.Time
 	fullscreen    bool
 	schemaVisible bool
 
@@ -83,6 +100,7 @@ type queryResultMsg struct {
 	fromWatch  bool
 	result     result.Result
 	err        error
+	finishedAt time.Time
 	persisted  *history.Entry
 	historyErr error
 }
@@ -175,6 +193,7 @@ func NewModel(executor *app.Executor, options Options) Model {
 		renderMode:    format,
 		width:         defaultWidth,
 		height:        defaultHeight,
+		mode:          modeEdit,
 		rendered:      "no result yet",
 		statusMessage: "ready",
 		schemaVisible: true,
@@ -217,7 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.loading {
-			return m, m.scheduleWatchCmd()
+			return m, nil
 		}
 		query := strings.TrimSpace(m.lastQuery)
 		if query == "" {
@@ -226,9 +245,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if query == "" {
 			return m, m.scheduleWatchCmd()
 		}
-		m.loading = true
+		updated, cmd := m.startQuery(query, true)
+		m = updated.(Model)
 		m.statusMessage = "watch refresh running"
-		return m, m.runQueryCmd(query, true)
+		return m, cmd
 	default:
 		updated, cmd := m.resultView.Update(msg)
 		m.resultView = updated
@@ -237,9 +257,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
+	if msg.String() == "ctrl+c" {
+		if m.cancelActiveQuery() {
+			return m, nil
+		}
 		return m, tea.Quit
+	}
+
+	switch m.mode {
+	case modeEdit:
+		return m.handleEditKey(msg)
+	case modeResult:
+		return m.handleResultKey(msg)
+	case modeCompletion, modeHistory:
+		cmd := m.setMode(modeCommand)
+		m.statusMessage = "command mode"
+		return m, cmd
+	default:
+		return m.handleCommandKey(msg)
+	}
+}
+
+func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
 	case "ctrl+j", "ctrl+enter":
 		return m.startQuery(strings.TrimSpace(m.editor.Value()), false)
 	case "ctrl+r":
@@ -250,82 +290,147 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "query is running"
 			return m, nil
 		}
-		var focusCmd tea.Cmd
-		if !m.editor.Focused() {
-			focusCmd = m.editor.Focus()
-		}
-		line := m.editor.Value()
-		return m, tea.Batch(focusCmd, m.completeCmd(line))
+		return m, m.completeCmd(m.editor.Value())
 	case "esc":
-		if m.editor.Focused() {
-			m.editor.Blur()
-			m.statusMessage = "command mode"
-		} else {
-			cmd := m.editor.Focus()
-			m.statusMessage = "edit mode"
-			return m, cmd
-		}
-		return m, nil
-	}
-
-	if m.editor.Focused() {
-		updated, cmd := m.editor.Update(msg)
-		m.editor = updated
+		cmd := m.setMode(modeCommand)
+		m.statusMessage = "command mode"
 		return m, cmd
 	}
 
+	updated, cmd := m.editor.Update(msg)
+	m.editor = updated
+	return m, cmd
+}
+
+func (m Model) handleCommandKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "1":
-		m.setRenderMode(render.FormatTable)
+	case "esc":
+		cmd := m.setMode(modeEdit)
+		m.statusMessage = "edit mode"
+		return m, cmd
+	case "enter", "v", "V":
+		cmd := m.setMode(modeResult)
+		m.statusMessage = "result mode"
+		return m, cmd
+	case "ctrl+j", "ctrl+enter":
+		return m.startQuery(strings.TrimSpace(m.editor.Value()), false)
+	case "ctrl+r":
+		m.recallHistory()
 		return m, nil
-	case "2":
-		m.setRenderMode(render.FormatSparkline)
-		return m, nil
-	case "3":
-		m.setRenderMode(render.FormatChart)
-		return m, nil
-	case "s", "S":
-		m.schemaVisible = !m.schemaVisible
-		if m.schemaVisible && m.schemaSnapshot == nil && m.schemaMeasurement != "" {
-			m.schemaLoading = true
-			return m, m.loadSchemaCmd(m.schemaMeasurement)
-		}
-		return m, nil
-	case "w", "W":
-		m.watch = !m.watch
-		if !m.watch {
-			m.statusMessage = "watch off"
+	case "tab":
+		if m.loading {
+			m.statusMessage = "query is running"
 			return m, nil
 		}
-		query := strings.TrimSpace(m.editor.Value())
-		if query == "" {
-			m.statusMessage = "watch on; no query"
-			return m, m.scheduleWatchCmd()
-		}
-		m.lastQuery = query
-		if m.loading {
-			m.statusMessage = "watch on"
-			return m, m.scheduleWatchCmd()
-		}
-		m.loading = true
-		m.statusMessage = "watch on"
-		return m, m.runQueryCmd(query, true)
-	case "f", "F":
-		m.fullscreen = !m.fullscreen
-		m.resize(m.width, m.height)
-		return m, nil
-	case "q", "Q":
-		return m, tea.Quit
+		cmd := m.setMode(modeEdit)
+		return m, tea.Batch(cmd, m.completeCmd(m.editor.Value()))
+	}
+
+	if updated, cmd, ok := m.handleCommandShortcut(msg); ok {
+		return updated, cmd
 	}
 
 	return m.focusEditor(msg)
 }
 
+func (m Model) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		cmd := m.setMode(modeCommand)
+		m.statusMessage = "command mode"
+		return m, cmd
+	case "i", "I":
+		cmd := m.setMode(modeEdit)
+		m.statusMessage = "edit mode"
+		return m, cmd
+	case "up", "k":
+		m.resultView.LineUp(1)
+		return m, nil
+	case "down", "j":
+		m.resultView.LineDown(1)
+		return m, nil
+	case "pgup", "b":
+		m.resultView.PageUp()
+		return m, nil
+	case "pgdown", " ":
+		m.resultView.PageDown()
+		return m, nil
+	case "home", "g":
+		m.resultView.GotoTop()
+		return m, nil
+	case "end", "G":
+		m.resultView.GotoBottom()
+		return m, nil
+	}
+
+	if updated, cmd, ok := m.handleCommandShortcut(msg); ok {
+		return updated, cmd
+	}
+
+	return m, nil
+}
+
+func (m Model) handleCommandShortcut(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch msg.String() {
+	case "1":
+		m.setRenderMode(render.FormatTable)
+		return m, nil, true
+	case "2":
+		m.setRenderMode(render.FormatSparkline)
+		return m, nil, true
+	case "3":
+		m.setRenderMode(render.FormatChart)
+		return m, nil, true
+	case "4":
+		m.setRenderMode(render.FormatJSON)
+		return m, nil, true
+	case "0", "a", "A":
+		m.setRenderMode(render.FormatAuto)
+		return m, nil, true
+	case "s", "S":
+		m.schemaVisible = !m.schemaVisible
+		if m.schemaVisible && m.schemaSnapshot == nil && m.schemaMeasurement != "" {
+			m.schemaLoading = true
+			return m, m.loadSchemaCmd(m.schemaMeasurement), true
+		}
+		return m, nil, true
+	case "w", "W":
+		updated, cmd := m.toggleWatch()
+		return updated, cmd, true
+	case "r", "R":
+		updated, cmd := m.manualRefresh()
+		return updated, cmd, true
+	case "+", "=":
+		m.adjustWatchInterval(time.Second)
+		return m, nil, true
+	case "-", "_":
+		m.adjustWatchInterval(-time.Second)
+		return m, nil, true
+	case "f", "F":
+		m.fullscreen = !m.fullscreen
+		m.resize(m.width, m.height)
+		return m, nil, true
+	case "q", "Q":
+		return m, tea.Quit, true
+	}
+
+	return m, nil, false
+}
+
 func (m Model) focusEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	focusCmd := m.editor.Focus()
+	focusCmd := m.setMode(modeEdit)
 	updated, updateCmd := m.editor.Update(msg)
 	m.editor = updated
 	return m, tea.Batch(focusCmd, updateCmd)
+}
+
+func (m *Model) setMode(mode tuiMode) tea.Cmd {
+	m.mode = mode
+	if mode == modeEdit {
+		return m.editor.Focus()
+	}
+	m.editor.Blur()
+	return nil
 }
 
 func (m Model) startQuery(query string, fromWatch bool) (tea.Model, tea.Cmd) {
@@ -338,33 +443,43 @@ func (m Model) startQuery(query string, fromWatch bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.loading = true
+	m.activeWatch = fromWatch
+	m.cancelAsked = false
 	m.lastQuery = query
-	m.editor.Blur()
+	if !fromWatch {
+		m.setMode(modeCommand)
+	}
 	m.statusMessage = "query running"
-	return m, m.runQueryCmd(query, fromWatch)
+	ctx, cancel := m.queryContext()
+	m.activeCancel = cancel
+	return m, m.runQueryCmd(ctx, cancel, query, fromWatch)
 }
 
-func (m Model) runQueryCmd(query string, fromWatch bool) tea.Cmd {
+func (m Model) queryContext() (context.Context, context.CancelFunc) {
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if m.queryTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, m.queryTimeout)
+}
+
+func (m Model) runQueryCmd(ctx context.Context, cancel context.CancelFunc, query string, fromWatch bool) tea.Cmd {
 	executor := m.executor
-	timeout := m.queryTimeout
-	baseCtx := m.ctx
 	store := m.history
 	return func() tea.Msg {
-		ctx := baseCtx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		var cancel context.CancelFunc
-		if timeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, timeout)
+		if cancel != nil {
 			defer cancel()
 		}
 		res, err := executor.Execute(ctx, query)
 		msg := queryResultMsg{
-			query:     query,
-			fromWatch: fromWatch,
-			result:    res,
-			err:       err,
+			query:      query,
+			fromWatch:  fromWatch,
+			result:     res,
+			err:        err,
+			finishedAt: time.Now(),
 		}
 		if err != nil || fromWatch || !shouldPersistQuery(query) || store == nil {
 			return msg
@@ -386,13 +501,45 @@ func (m Model) runQueryCmd(query string, fromWatch bool) tea.Cmd {
 }
 
 func (m Model) handleQueryResult(msg queryResultMsg) (tea.Model, tea.Cmd) {
+	cancelAsked := m.cancelAsked
 	m.loading = false
+	m.activeCancel = nil
+	m.activeWatch = false
+	m.cancelAsked = false
 	m.lastQuery = msg.query
 	m.lastErr = msg.err
 	if msg.err != nil {
-		m.rendered = "error: " + oneLine(msg.err.Error())
-		m.resultView.SetContent(m.rendered)
-		m.statusMessage = "query failed"
+		if errors.Is(msg.err, context.Canceled) && cancelAsked {
+			m.lastErr = nil
+			if msg.fromWatch {
+				if m.watch {
+					m.statusMessage = "watch refresh cancelled"
+				} else {
+					m.statusMessage = "watch off"
+				}
+			} else {
+				m.rendered = "query cancelled"
+				m.resultView.SetContent(m.rendered)
+				m.statusMessage = "query cancelled"
+			}
+			if m.watch {
+				return m, m.scheduleWatchCmd()
+			}
+			return m, nil
+		}
+		if msg.fromWatch && m.lastResult.Kind != "" {
+			m.statusMessage = "watch failed: " + oneLine(msg.err.Error())
+		} else {
+			m.rendered = "error: " + oneLine(msg.err.Error())
+			if errors.Is(msg.err, context.Canceled) {
+				m.rendered = "query cancelled"
+			}
+			m.resultView.SetContent(m.rendered)
+			m.statusMessage = "query failed"
+			if errors.Is(msg.err, context.Canceled) {
+				m.statusMessage = "query cancelled"
+			}
+		}
 		if m.watch {
 			return m, m.scheduleWatchCmd()
 		}
@@ -400,6 +547,7 @@ func (m Model) handleQueryResult(msg queryResultMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.lastResult = msg.result
+	m.lastRefresh = msg.finishedAt
 	if msg.result.Schema != nil {
 		snapshot := *msg.result.Schema
 		m.schemaSnapshot = &snapshot
@@ -435,6 +583,80 @@ func (m Model) handleQueryResult(msg queryResultMsg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.scheduleWatchCmd())
 	}
 	return m, tea.Batch(cmds...)
+}
+
+func (m Model) toggleWatch() (tea.Model, tea.Cmd) {
+	m.watch = !m.watch
+	if !m.watch {
+		if m.loading && m.activeWatch {
+			m.cancelActiveQuery()
+			m.statusMessage = "watch off; cancelling refresh"
+			return m, nil
+		}
+		m.statusMessage = "watch off"
+		return m, nil
+	}
+
+	query := strings.TrimSpace(m.editor.Value())
+	if query == "" {
+		query = strings.TrimSpace(m.lastQuery)
+	}
+	if query == "" {
+		m.statusMessage = "watch on; no query"
+		return m, m.scheduleWatchCmd()
+	}
+	m.lastQuery = query
+	if m.loading {
+		m.statusMessage = "watch on; query running"
+		return m, nil
+	}
+	updated, cmd := m.startQuery(query, true)
+	m = updated.(Model)
+	m.statusMessage = "watch on"
+	return m, cmd
+}
+
+func (m Model) manualRefresh() (tea.Model, tea.Cmd) {
+	query := strings.TrimSpace(m.lastQuery)
+	if query == "" {
+		query = strings.TrimSpace(m.editor.Value())
+	}
+	if query == "" {
+		m.statusMessage = "refresh: no query"
+		return m, nil
+	}
+	return m.startQuery(query, false)
+}
+
+func (m *Model) adjustWatchInterval(delta time.Duration) {
+	next := m.watchInterval + delta
+	if next < minWatchInterval {
+		next = minWatchInterval
+	}
+	if next > maxWatchInterval {
+		next = maxWatchInterval
+	}
+	m.watchInterval = next
+	m.statusMessage = "watch interval: " + formatDuration(next)
+}
+
+func (m *Model) cancelActiveQuery() bool {
+	if !m.loading {
+		return false
+	}
+	if m.cancelAsked {
+		return false
+	}
+	if m.activeCancel != nil {
+		m.activeCancel()
+	}
+	m.cancelAsked = true
+	if m.activeWatch {
+		m.statusMessage = "watch refresh cancelling"
+	} else {
+		m.statusMessage = "query cancelling"
+	}
+	return true
 }
 
 func (m Model) completeCmd(line string) tea.Cmd {

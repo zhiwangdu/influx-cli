@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/zhiwangdu/influx-cli/internal/schema"
@@ -151,4 +152,14 @@ func truncateRunes(value string, width int) string {
 		return strings.Repeat(".", width)
 	}
 	return string(runes[:width-3]) + "..."
+}
+
+func formatDuration(value time.Duration) string {
+	if value <= 0 {
+		return "-"
+	}
+	if value < time.Millisecond {
+		return value.String()
+	}
+	return value.Truncate(time.Millisecond).String()
 }
