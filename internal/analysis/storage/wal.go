@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/golang/snappy"
@@ -31,20 +32,36 @@ const (
 )
 
 type walEntryReport struct {
-	Offset           int64
-	SizeBytes        uint32
-	CompressedBytes  uint32
-	PayloadBytes     int
-	Type             string
-	Keys             []string
-	ValueCountsByKey map[string]int
-	TimeRangesByKey  map[string]walTimeRange
-	KeyCount         int
-	ValueCount       int
-	MinTime          int64
-	MaxTime          int64
-	HasTime          bool
-	QueryOverlaps    bool
+	Offset               int64
+	SizeBytes            uint32
+	CompressedBytes      uint32
+	PayloadBytes         int
+	Type                 string
+	Keys                 []string
+	WritePointSamples    []walWritePoint
+	QueryWritePointCount int
+	ValueCountsByKey     map[string]int
+	TimeRangesByKey      map[string]walTimeRange
+	KeyCount             int
+	ValueCount           int
+	MinTime              int64
+	MaxTime              int64
+	HasTime              bool
+	QueryOverlaps        bool
+}
+
+type walWritePoint struct {
+	Key   string
+	Time  int64
+	Type  string
+	Value string
+}
+
+type walReadOptions struct {
+	QueryKeySet           map[string]struct{}
+	QueryRange            TimeRange
+	WritePointSampleLimit int
+	writePointSamplesLeft *int
 }
 
 type walTimeRange struct {
@@ -60,11 +77,15 @@ func analyzeWAL(path string, info os.FileInfo, options Options) (FileReport, err
 	}
 	defer f.Close()
 
-	entries, notices, err := readWALEntries(f)
+	keySet := queryKeySet(options.QueryKeys)
+	entries, notices, err := readWALEntries(f, walReadOptions{
+		QueryKeySet:           keySet,
+		QueryRange:            options.QueryRange,
+		WritePointSampleLimit: options.BlockSampleLimit,
+	})
 	if err != nil {
 		return FileReport{}, err
 	}
-	keySet := queryKeySet(options.QueryKeys)
 	walPopulateQueryOverlaps(entries, keySet, options.QueryRange)
 
 	keys := walUniqueKeys(entries)
@@ -95,10 +116,12 @@ func analyzeWAL(path string, info os.FileInfo, options Options) (FileReport, err
 	return report, nil
 }
 
-func readWALEntries(r io.Reader) ([]walEntryReport, []string, error) {
+func readWALEntries(r io.Reader, options walReadOptions) ([]walEntryReport, []string, error) {
 	br := bufio.NewReader(r)
 	entries := make([]walEntryReport, 0)
 	notices := []string(nil)
+	writePointSamplesLeft := options.WritePointSampleLimit
+	options.writePointSamplesLeft = &writePointSamplesLeft
 	var offset int64
 	for {
 		var header [walEntryHeader]byte
@@ -133,7 +156,7 @@ func readWALEntries(r io.Reader) ([]walEntryReport, []string, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("decode WAL entry at offset %d: %w", entryOffset, err)
 		}
-		entry, err := parseWALEntryPayload(entryType, payload)
+		entry, err := parseWALEntryPayload(entryType, payload, options)
 		if err != nil {
 			return nil, nil, fmt.Errorf("parse WAL entry at offset %d: %w", entryOffset, err)
 		}
@@ -145,10 +168,10 @@ func readWALEntries(r io.Reader) ([]walEntryReport, []string, error) {
 	}
 }
 
-func parseWALEntryPayload(entryType byte, payload []byte) (walEntryReport, error) {
+func parseWALEntryPayload(entryType byte, payload []byte, options walReadOptions) (walEntryReport, error) {
 	switch entryType {
 	case walWriteEntryType:
-		return parseWALWriteEntry(payload)
+		return parseWALWriteEntry(payload, options)
 	case walDeleteEntryType:
 		return parseWALDeleteEntry(payload), nil
 	case walDeleteRangeEntryType:
@@ -158,7 +181,7 @@ func parseWALEntryPayload(entryType byte, payload []byte) (walEntryReport, error
 	}
 }
 
-func parseWALWriteEntry(payload []byte) (walEntryReport, error) {
+func parseWALWriteEntry(payload []byte, options walReadOptions) (walEntryReport, error) {
 	entry := walEntryReport{
 		Type:             "write",
 		ValueCountsByKey: map[string]int{},
@@ -207,11 +230,29 @@ func parseWALWriteEntry(payload []byte) (walEntryReport, error) {
 			keyRange = walExpandTimeRange(keyRange, timestamp)
 			entry.ValueCount++
 
-			var err error
-			offset, err = skipWALValue(payload, offset, valueType)
+			selected := walWritePointSelected(key, timestamp, options.QueryKeySet, options.QueryRange)
+			if selected {
+				entry.QueryWritePointCount++
+			}
+			if selected && options.consumeWritePointSample() {
+				nextOffset, valueTypeName, value, err := readWALValue(payload, offset, valueType)
+				if err != nil {
+					return entry, err
+				}
+				offset = nextOffset
+				entry.WritePointSamples = append(entry.WritePointSamples, walWritePoint{
+					Key:   key,
+					Time:  timestamp,
+					Type:  valueTypeName,
+					Value: value,
+				})
+				continue
+			}
+			nextOffset, err := skipWALValue(payload, offset, valueType)
 			if err != nil {
 				return entry, err
 			}
+			offset = nextOffset
 		}
 		entry.ValueCountsByKey[key] += valueCount
 		entry.TimeRangesByKey[key] = walMergeTimeRanges(entry.TimeRangesByKey[key], keyRange)
@@ -266,6 +307,14 @@ func parseWALDeleteRangeEntry(payload []byte) (walEntryReport, error) {
 	return entry, nil
 }
 
+func (o walReadOptions) consumeWritePointSample() bool {
+	if o.writePointSamplesLeft == nil || *o.writePointSamplesLeft <= 0 {
+		return false
+	}
+	*o.writePointSamplesLeft = *o.writePointSamplesLeft - 1
+	return true
+}
+
 func skipWALValue(payload []byte, offset int, valueType byte) (int, error) {
 	switch valueType {
 	case walFloat64ValueType, walIntegerValueType, walUnsignedValueType:
@@ -290,6 +339,50 @@ func skipWALValue(payload []byte, offset int, valueType byte) (int, error) {
 		return offset + valueLen, nil
 	default:
 		return offset, fmt.Errorf("unsupported write value type %d", valueType)
+	}
+}
+
+func readWALValue(payload []byte, offset int, valueType byte) (int, string, string, error) {
+	switch valueType {
+	case walFloat64ValueType:
+		if len(payload)-offset < 8 {
+			return offset, "", "", fmt.Errorf("short numeric write value")
+		}
+		value := math.Float64frombits(binary.BigEndian.Uint64(payload[offset : offset+8]))
+		return offset + 8, "float", strconv.FormatFloat(value, 'g', -1, 64), nil
+	case walIntegerValueType:
+		if len(payload)-offset < 8 {
+			return offset, "", "", fmt.Errorf("short numeric write value")
+		}
+		value := int64(binary.BigEndian.Uint64(payload[offset : offset+8]))
+		return offset + 8, "integer", strconv.FormatInt(value, 10), nil
+	case walUnsignedValueType:
+		if len(payload)-offset < 8 {
+			return offset, "", "", fmt.Errorf("short numeric write value")
+		}
+		value := binary.BigEndian.Uint64(payload[offset : offset+8])
+		return offset + 8, "unsigned", strconv.FormatUint(value, 10), nil
+	case walBooleanValueType:
+		if len(payload)-offset < 1 {
+			return offset, "", "", fmt.Errorf("short boolean write value")
+		}
+		value := "false"
+		if payload[offset] != 0 {
+			value = "true"
+		}
+		return offset + 1, "boolean", value, nil
+	case walStringValueType:
+		if len(payload)-offset < 4 {
+			return offset, "", "", fmt.Errorf("short string write value length")
+		}
+		valueLen := int(binary.BigEndian.Uint32(payload[offset : offset+4]))
+		offset += 4
+		if len(payload)-offset < valueLen {
+			return offset, "", "", fmt.Errorf("short string write value")
+		}
+		return offset + valueLen, "string", string(payload[offset : offset+valueLen]), nil
+	default:
+		return offset, "", "", fmt.Errorf("unsupported write value type %d", valueType)
 	}
 }
 
@@ -357,9 +450,12 @@ func buildWALDecodePathSummary(entries []walEntryReport, options Options) *Decod
 		summary.OptimizedDecodeBytes += int64(entry.SizeBytes)
 		if entry.ValueCount > 0 {
 			summary.OptimizedDecodeValues += walEntryQueryValueCount(entry, keySet, options.QueryRange)
+			outputPoints := walEntryQueryWritePointCount(entry)
+			summary.OptimizedValueOutputPoints += outputPoints
 		}
 		summary.DecodeBlocksByType["wal-"+entry.Type]++
 		appendWALDecodeSample(summary, entry, keySet, options.BlockSampleLimit)
+		appendWALCursorOutputSamples(summary, entry, options.BlockSampleLimit)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
@@ -396,8 +492,28 @@ func appendWALDecodeSample(summary *DecodePathSummary, entry walEntryReport, key
 	}
 	if entry.QueryOverlaps && entry.ValueCount > 0 {
 		sample.OutputValues = walEntryQueryValueCount(entry, keySet, summary.QueryRange)
+		sample.ValueOutputPoints = walEntryQueryWritePointCount(entry)
+		sample.ValueOutputAvailable = true
 	}
 	summary.Samples = append(summary.Samples, sample)
+}
+
+func appendWALCursorOutputSamples(summary *DecodePathSummary, entry walEntryReport, sampleLimit int) {
+	if sampleLimit <= 0 || entry.Type != "write" {
+		return
+	}
+	for _, point := range entry.WritePointSamples {
+		if len(summary.CursorOutputSamples) >= sampleLimit {
+			return
+		}
+		summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
+			Key:            point.Key,
+			Time:           point.Time,
+			Type:           "wal-write-" + point.Type,
+			OptimizedValue: point.Value,
+			Matches:        true,
+		})
+	}
 }
 
 func populateWALDecodeKeyMatches(summary *DecodePathSummary, entries []walEntryReport) {
@@ -432,6 +548,9 @@ func walDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(recommendations) == 0 && summary.OptimizedDecodeBlocks > 0 {
 		recommendations = append(recommendations, "query range maps directly to WAL replay candidates")
+	}
+	if len(summary.CursorOutputSamples) > 0 {
+		recommendations = append(recommendations, "sampled local WAL write points that match the replay key/range filters")
 	}
 	return recommendations
 }
@@ -507,6 +626,22 @@ func walEntryQueryValueCount(entry walEntryReport, keySet map[string]struct{}, q
 	// WAL write entries are summarized at key group granularity. Without
 	// retaining every timestamp, report the selected key group's full point count.
 	return entry.ValueCount
+}
+
+func walEntryQueryWritePointCount(entry walEntryReport) int {
+	if entry.Type != "write" {
+		return 0
+	}
+	return entry.QueryWritePointCount
+}
+
+func walWritePointSelected(key string, timestamp int64, keySet map[string]struct{}, queryRange TimeRange) bool {
+	if len(keySet) > 0 {
+		if _, ok := keySet[key]; !ok {
+			return false
+		}
+	}
+	return queryRange.Set && timestamp >= queryRange.Min && timestamp <= queryRange.Max
 }
 
 func walUniqueKeys(entries []walEntryReport) []string {

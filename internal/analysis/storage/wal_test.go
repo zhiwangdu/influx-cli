@@ -113,11 +113,36 @@ func TestAnalyzeWALSegment(t *testing.T) {
 	if got, want := decode.OptimizedDecodeValues, 2; got != want {
 		t.Fatalf("optimized values = %d, want %d", got, want)
 	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
 	if !equalStrings(decode.MatchedKeys, []string{"cpu value"}) {
 		t.Fatalf("matched keys = %v, want [cpu value]", decode.MatchedKeys)
 	}
 	if got, want := decode.Samples[0].OutputValues, 2; got != want {
 		t.Fatalf("first sample output values = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].ValueOutputPoints, 1; got != want {
+		t.Fatalf("first sample value output points = %d, want %d", got, want)
+	}
+	if !decode.Samples[0].ValueOutputAvailable {
+		t.Fatal("expected first sample value output to be available")
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	wantSample := DecodePathCursorOutput{
+		Key:            "cpu value",
+		Time:           20,
+		Type:           "wal-write-integer",
+		OptimizedValue: "2",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != wantSample {
+		t.Fatalf("cursor output sample = %+v, want %+v", got, wantSample)
+	}
+	if !containsString(decode.Recommendations, "sampled local WAL write points") {
+		t.Fatalf("recommendations = %v, want write point sample recommendation", decode.Recommendations)
 	}
 }
 
@@ -238,6 +263,96 @@ func TestAnalyzeWALRepeatedWriteKeyMergesCountsAndRanges(t *testing.T) {
 	}
 	if got, want := file.DecodePath.Samples[0].OutputValues, 2; got != want {
 		t.Fatalf("sample output values = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeWALSamplesWritePointValueTypes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "_00001.wal")
+	if err := writeTestWALSegment(path, testWALWriteEntry([]testWALWriteGroup{
+		{key: "float value", valueType: walFloat64ValueType, times: []int64{10}},
+		{key: "integer value", valueType: walIntegerValueType, times: []int64{10}},
+		{key: "unsigned value", valueType: walUnsignedValueType, times: []int64{10}},
+		{key: "boolean value", valueType: walBooleanValueType, times: []int64{10}},
+		{key: "string value", valueType: walStringValueType, times: []int64{10}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatWAL,
+		QueryRange:       queryRange,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 5; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	wantSamples := []DecodePathCursorOutput{
+		{Key: "float value", Time: 10, Type: "wal-write-float", OptimizedValue: "1.5", Matches: true},
+		{Key: "integer value", Time: 10, Type: "wal-write-integer", OptimizedValue: "1", Matches: true},
+		{Key: "unsigned value", Time: 10, Type: "wal-write-unsigned", OptimizedValue: "1", Matches: true},
+		{Key: "boolean value", Time: 10, Type: "wal-write-boolean", OptimizedValue: "true", Matches: true},
+		{Key: "string value", Time: 10, Type: "wal-write-string", OptimizedValue: "v1", Matches: true},
+	}
+	if got, want := len(decode.CursorOutputSamples), len(wantSamples); got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, want := range wantSamples {
+		if got := decode.CursorOutputSamples[i]; got != want {
+			t.Fatalf("cursor output sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
+func TestAnalyzeWALWritePointSampleLimitKeepsExactCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "_00001.wal")
+	if err := writeTestWALSegment(path,
+		testWALWriteEntry([]testWALWriteGroup{
+			{key: "cpu value", valueType: walIntegerValueType, times: []int64{10, 20}},
+		}),
+		testWALWriteEntry([]testWALWriteGroup{
+			{key: "cpu value", valueType: walIntegerValueType, times: []int64{30}},
+		}),
+	); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(1, 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatWAL,
+		QueryRange:       queryRange,
+		QueryKeys:        []string{"cpu value"},
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 3; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].Time, int64(10); got != want {
+		t.Fatalf("first cursor output sample time = %d, want %d", got, want)
 	}
 }
 
