@@ -1138,6 +1138,40 @@ func TestAnalyzeMergesetOpenGeminiTSIIndexInvalidItem(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetOpenGeminiTSIIndexInvalidPrefixTwoNotCLVDictionary(t *testing.T) {
+	items := [][]byte{
+		{
+			opengeminiTSINSPrefixTagToTSIDs,
+			0xff, 0xff, 0xff, 0xff,
+			opengeminiCLVSuffix,
+			'x', 'x', 'x', 'x', 'x', 'x', 'x',
+		},
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_badtsiclv")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_tsi_index_invalid_items"], "1"; got != want {
+		t.Fatalf("invalid TSI index items = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-tsi-index-invalid-item"], 1; got != want {
+		t.Fatalf("invalid TSI index block count = %d, want %d", got, want)
+	}
+	if _, ok := file.Extra["opengemini_clv_text_index_detected"]; ok {
+		t.Fatalf("unexpected CLV detection for malformed TSI item: %v", file.Extra)
+	}
+}
+
 func TestAnalyzeMergesetOpenGeminiTSIIndexEscapedTagValues(t *testing.T) {
 	tagKey := "ho" + string([]byte{opengeminiTSITagSeparator}) + "st"
 	tagValue := "a" + string([]byte{opengeminiTSITagSeparator}) + "b" + string([]byte{opengeminiTSINSSeparator}) + "c" + string([]byte{opengeminiTSIEscape}) + "d"
@@ -1169,6 +1203,36 @@ func TestAnalyzeMergesetOpenGeminiTSIIndexEscapedTagValues(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetOpenGeminiTSIKeyToTSIDWithTabDoesNotDetectCLV(t *testing.T) {
+	tagValue := "a\tb"
+	items := [][]byte{
+		encodeTestOpenGeminiTSIKeyToTSID("cpu", "host", tagValue, 42),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_tsitab")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_tsi_index_key_tsid_mappings"], "1"; got != want {
+		t.Fatalf("key->tsid mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_invalid_items"], "0"; got != want {
+		t.Fatalf("invalid TSI index items = %q, want %q", got, want)
+	}
+	if _, ok := file.Extra["opengemini_clv_text_index_detected"]; ok {
+		t.Fatalf("unexpected CLV detection for valid TSI item containing tab: %v", file.Extra)
+	}
+}
+
 func TestAnalyzeMergesetOpenGeminiTSIIndexAllowsEmptyMeasurement(t *testing.T) {
 	items := [][]byte{
 		encodeTestOpenGeminiTSIKeyToTSID("", "", "", 42),
@@ -1192,6 +1256,337 @@ func TestAnalyzeMergesetOpenGeminiTSIIndexAllowsEmptyMeasurement(t *testing.T) {
 	}
 	if got, want := file.Extra["opengemini_tsi_index_invalid_items"], "0"; got != want {
 		t.Fatalf("invalid TSI index items = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiCLVTextIndexItems(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiCLVDocument("get image ", []testCLVSIDPositions{
+			{
+				SID: 7,
+				Rows: []testCLVPosition{
+					{RowID: 100, Position: 2},
+					{RowID: 120, Position: 4},
+				},
+			},
+		}, []uint32{10, 11}),
+		encodeTestOpenGeminiCLVTerm("get"),
+		encodeTestOpenGeminiCLVDictionary(2, "get image "),
+		encodeTestOpenGeminiCLVDictionaryVersion(2),
+	}
+	partPath := filepath.Join(t.TempDir(), "4_1_clvtext")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   4,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_clv_text_index_detected"], "true"; got != want {
+		t.Fatalf("CLV text index detected = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_document_rows"], "1"; got != want {
+		t.Fatalf("CLV document rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_position_entries"], "2"; got != want {
+		t.Fatalf("CLV position entries = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_sid_groups"], "1"; got != want {
+		t.Fatalf("CLV sid groups = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_document_ids"], "2"; got != want {
+		t.Fatalf("CLV document ids = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_terms"], "1"; got != want {
+		t.Fatalf("CLV terms = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_dictionary_rows"], "1"; got != want {
+		t.Fatalf("CLV dictionary rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_dictionary_versions"], "1"; got != want {
+		t.Fatalf("CLV dictionary versions = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_invalid_items"], "0"; got != want {
+		t.Fatalf("CLV invalid items = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_position_samples"], "get image  sid_groups=1 positions=2 ids=2"; got != want {
+		t.Fatalf("CLV position samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_term_samples"], "get"; got != want {
+		t.Fatalf("CLV term samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_dictionary_samples"], "v2:get image "; got != want {
+		t.Fatalf("CLV dictionary samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_version_samples"], "2"; got != want {
+		t.Fatalf("CLV version samples = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-clv-text-document"], 1; got != want {
+		t.Fatalf("CLV document block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-clv-text-position"], 2; got != want {
+		t.Fatalf("CLV position block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-clv-text-term"], 1; got != want {
+		t.Fatalf("CLV term block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-clv-text-dictionary"], 1; got != want {
+		t.Fatalf("CLV dictionary block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-clv-text-dictionary-version"], 1; got != want {
+		t.Fatalf("CLV dictionary version block count = %d, want %d", got, want)
+	}
+	if _, ok := file.Extra["opengemini_tsi_index_detected"]; ok {
+		t.Fatalf("unexpected TSI detection for CLV text index items: %v", file.Extra)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiCLVTextIndexInvalidItem(t *testing.T) {
+	items := [][]byte{
+		{
+			opengeminiCLVPrefixPos, 'b', opengeminiCLVSuffix,
+			opengeminiCLVPrefixMeta,
+			0xff,
+			0, 3,
+		},
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_badclv")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_clv_text_index_invalid_items"], "1"; got != want {
+		t.Fatalf("invalid CLV text index items = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-clv-text-invalid-item"], 1; got != want {
+		t.Fatalf("invalid CLV text index block count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "openGemini CLV text index has 1 invalid") {
+		t.Fatalf("notices = %v, want invalid CLV text index notice", file.Notices)
+	}
+	if _, ok := file.Extra["opengemini_tsi_index_detected"]; ok {
+		t.Fatalf("unexpected TSI detection for malformed CLV document item: %v", file.Extra)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiCLVTextIndexInvalidDocumentWithoutSuffixDoesNotMarkTSIInvalid(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiCLVDocument("a", []testCLVSIDPositions{
+			{
+				SID: 1,
+				Rows: []testCLVPosition{
+					{RowID: 1, Position: 1},
+				},
+			},
+		}, nil),
+		append([]byte{opengeminiCLVPrefixPos}, bytes.Repeat([]byte{'z'}, 17)...),
+	}
+	partPath := filepath.Join(t.TempDir(), "2_1_clvbadctx")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_clv_text_index_document_rows"], "1"; got != want {
+		t.Fatalf("CLV document rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_invalid_items"], "1"; got != want {
+		t.Fatalf("invalid CLV text index items = %q, want %q", got, want)
+	}
+	if _, ok := file.Extra["opengemini_tsi_index_detected"]; ok {
+		t.Fatalf("unexpected TSI detection for malformed CLV document without suffix: %v", file.Extra)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiCLVTextIndexEarlierInvalidDocumentCountsAfterDetection(t *testing.T) {
+	items := [][]byte{
+		append([]byte{opengeminiCLVPrefixPos}, bytes.Repeat([]byte{'a'}, 17)...),
+		encodeTestOpenGeminiCLVDocument("z", []testCLVSIDPositions{
+			{
+				SID: 1,
+				Rows: []testCLVPosition{
+					{RowID: 1, Position: 1},
+				},
+			},
+		}, nil),
+	}
+	partPath := filepath.Join(t.TempDir(), "2_1_clvbadorder")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_clv_text_index_document_rows"], "1"; got != want {
+		t.Fatalf("CLV document rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_invalid_items"], "1"; got != want {
+		t.Fatalf("invalid CLV text index items = %q, want %q", got, want)
+	}
+	if _, ok := file.Extra["opengemini_tsi_index_detected"]; ok {
+		t.Fatalf("unexpected TSI detection for earlier malformed CLV document: %v", file.Extra)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiCLVTextIndexEarlierInvalidDocumentAcrossBlocks(t *testing.T) {
+	blocks := [][][]byte{
+		{
+			append([]byte{opengeminiCLVPrefixPos}, bytes.Repeat([]byte{'a'}, 17)...),
+		},
+		{
+			encodeTestOpenGeminiCLVDocument("z", []testCLVSIDPositions{
+				{
+					SID: 1,
+					Rows: []testCLVPosition{
+						{RowID: 1, Position: 1},
+					},
+				},
+			}, nil),
+		},
+	}
+	partPath := filepath.Join(t.TempDir(), "2_2_clvcross")
+	if err := writeTestMergesetPartWithItemBlocks(partPath, blocks); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItemBlocks() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_clv_text_index_document_rows"], "1"; got != want {
+		t.Fatalf("CLV document rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_invalid_items"], "1"; got != want {
+		t.Fatalf("invalid CLV text index items = %q, want %q", got, want)
+	}
+	if _, ok := file.Extra["opengemini_tsi_index_detected"]; ok {
+		t.Fatalf("unexpected TSI detection for cross-block malformed CLV document: %v", file.Extra)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiCLVTextIndexDocumentTokenBytes(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiCLVDocument("a"+string([]byte{1})+"b", []testCLVSIDPositions{
+			{
+				SID: 1,
+				Rows: []testCLVPosition{
+					{RowID: 1, Position: 1},
+				},
+			},
+		}, nil),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_clvbytes")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_clv_text_index_document_rows"], "1"; got != want {
+		t.Fatalf("CLV document rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_invalid_items"], "0"; got != want {
+		t.Fatalf("invalid CLV text index items = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_position_samples"], "0x610162 sid_groups=1 positions=1 ids=0"; got != want {
+		t.Fatalf("CLV position samples = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiCLVTextIndexTermOnlyDoesNotMarkTSIInvalid(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiCLVTerm("very long token value"),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_clvterm")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if _, ok := file.Extra["opengemini_tsi_index_detected"]; ok {
+		t.Fatalf("unexpected TSI detection for CLV term-only item: %v", file.Extra)
+	}
+	if _, ok := file.Extra["opengemini_clv_text_index_detected"]; ok {
+		t.Fatalf("unexpected CLV detection without document or dictionary-version evidence: %v", file.Extra)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiCLVTextIndexDictionaryVersionOnly(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiCLVDictionaryVersion(7),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_clvversion")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_clv_text_index_detected"], "true"; got != want {
+		t.Fatalf("CLV text index detected = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_dictionary_versions"], "1"; got != want {
+		t.Fatalf("CLV dictionary versions = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_clv_text_index_version_samples"], "7"; got != want {
+		t.Fatalf("CLV version samples = %q, want %q", got, want)
 	}
 }
 
@@ -1391,6 +1786,84 @@ func writeTestMergesetPartWithItems(path string, items [][]byte) error {
 	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
 		FirstItem:         header.FirstItem,
 		BlockHeadersCount: 1,
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexData)),
+	}})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetMetaindexFile), metaindex, 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetItemsFile), itemsData, 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(path, mergesetLensFile), lensData, 0o600)
+}
+
+func writeTestMergesetPartWithItemBlocks(path string, blocks [][][]byte) error {
+	if len(blocks) == 0 {
+		return fmt.Errorf("test mergeset item blocks cannot be empty")
+	}
+	var items [][]byte
+	for i, block := range blocks {
+		if len(block) == 0 {
+			return fmt.Errorf("test mergeset item block %d cannot be empty", i)
+		}
+		items = append(items, block...)
+	}
+	for i := 1; i < len(items); i++ {
+		if bytes.Compare(items[i-1], items[i]) >= 0 {
+			return fmt.Errorf("test mergeset item %d is not sorted: %x >= %x", i, items[i-1], items[i])
+		}
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	metadata := mergesetPartMetadata{
+		ItemsCount:  uint64(len(items)),
+		BlocksCount: uint64(len(blocks)),
+		FirstItem:   hex.EncodeToString(items[0]),
+		LastItem:    hex.EncodeToString(items[len(items)-1]),
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetMetadataFile), data, 0o600); err != nil {
+		return err
+	}
+
+	headers := make([]mergesetBlockHeader, 0, len(blocks))
+	var itemsData []byte
+	var lensData []byte
+	for _, block := range blocks {
+		blockItemsData, blockLensData, err := encodeTestMergesetBlockPayload(block, nil, mergesetMarshalTypePlain)
+		if err != nil {
+			return err
+		}
+		headers = append(headers, mergesetBlockHeader{
+			FirstItem:        append([]byte(nil), block[0]...),
+			MarshalType:      mergesetMarshalTypePlain,
+			ItemsCount:       uint32(len(block)),
+			ItemsBlockOffset: uint64(len(itemsData)),
+			LensBlockOffset:  uint64(len(lensData)),
+			ItemsBlockSize:   uint32(len(blockItemsData)),
+			LensBlockSize:    uint32(len(blockLensData)),
+		})
+		itemsData = append(itemsData, blockItemsData...)
+		lensData = append(lensData, blockLensData...)
+	}
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, mergesetIndexFile), indexData, 0o600); err != nil {
+		return err
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         headers[0].FirstItem,
+		BlockHeadersCount: uint32(len(headers)),
 		IndexBlockOffset:  0,
 		IndexBlockSize:    uint32(len(indexData)),
 	}})
@@ -1693,6 +2166,72 @@ func encodeTestZSTD(data []byte) ([]byte, error) {
 	return encoder.EncodeAll(data, nil), nil
 }
 
+type testCLVPosition struct {
+	RowID    int64
+	Position uint16
+}
+
+type testCLVSIDPositions struct {
+	SID  uint64
+	Rows []testCLVPosition
+}
+
+func encodeTestOpenGeminiCLVDocument(token string, groups []testCLVSIDPositions, ids []uint32) []byte {
+	item := []byte{opengeminiCLVPrefixPos}
+	item = append(item, token...)
+	item = append(item, opengeminiCLVSuffix)
+
+	sidLens := make([]uint16, 0, len(groups))
+	for _, group := range groups {
+		item = append(item, opengeminiCLVPrefixSID)
+		item = appendTestBigEndianUint64(item, group.SID)
+		sidLens = append(sidLens, uint16(len(group.Rows)))
+		for _, row := range group.Rows {
+			item = appendTestBigEndianInt64(item, row.RowID)
+			item = appendTestBigEndianUint16(item, row.Position)
+		}
+	}
+	if len(ids) > 0 {
+		item = append(item, opengeminiCLVPrefixID)
+		for _, id := range ids {
+			item = appendTestBigEndianUint32(item, id)
+		}
+	}
+
+	metaOffset := len(item)
+	item = append(item, opengeminiCLVPrefixMeta)
+	flag := byte(0)
+	if len(groups) > 0 {
+		flag |= opengeminiCLVPosFlag
+		item = appendTestBigEndianUint16(item, uint16(len(groups)))
+		for _, sidLen := range sidLens {
+			item = appendTestBigEndianUint16(item, sidLen)
+		}
+	}
+	if len(ids) > 0 {
+		flag |= opengeminiCLVIDFlag
+		item = appendTestBigEndianUint16(item, uint16(len(ids)))
+	}
+	item = append(item, flag)
+	return appendTestBigEndianUint16(item, uint16(metaOffset))
+}
+
+func encodeTestOpenGeminiCLVTerm(term string) []byte {
+	return append([]byte{opengeminiCLVPrefixTerm}, term...)
+}
+
+func encodeTestOpenGeminiCLVDictionary(version uint32, token string) []byte {
+	item := []byte{opengeminiCLVPrefixDictionary}
+	item = appendTestBigEndianUint32(item, version)
+	item = append(item, opengeminiCLVSuffix)
+	return append(item, token...)
+}
+
+func encodeTestOpenGeminiCLVDictionaryVersion(version uint32) []byte {
+	item := []byte{opengeminiCLVPrefixVersion, opengeminiCLVSuffix}
+	return appendTestBigEndianUint32(item, version)
+}
+
 func encodeTestOpenGeminiTSIKeyToTSID(measurement, tagKey, tagValue string, tsid uint64) []byte {
 	item := []byte{opengeminiTSINSPrefixKeyToTSID}
 	item = append(item, encodeTestOpenGeminiTSIIndexKey(measurement, tagKey, tagValue)...)
@@ -1825,6 +2364,12 @@ func bytesOf(value byte, count int) []byte {
 func appendTestBigEndianUint32(dst []byte, value uint32) []byte {
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], value)
+	return append(dst, buf[:]...)
+}
+
+func appendTestBigEndianInt64(dst []byte, value int64) []byte {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(value))
 	return append(dst, buf[:]...)
 }
 

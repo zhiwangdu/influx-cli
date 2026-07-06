@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -71,6 +72,7 @@ type mergesetItemPayloadSummary struct {
 	Samples       [][]byte
 	TSIIndex      mergesetTSIIndexSummary
 	FieldIndex    mergesetFieldIndexSummary
+	CLVText       mergesetCLVTextIndexSummary
 	DecodePath    *DecodePathSummary
 }
 
@@ -82,6 +84,7 @@ type mergesetTSIIndexSummary struct {
 	TagToTSIDValueCount int
 	TagValueCount       int
 	InvalidItems        int
+	DeferredCLVInvalids int
 	KeyToTSIDSamples    []string
 	TSIDToKeySamples    []string
 	TagToTSIDSamples    []string
@@ -98,6 +101,23 @@ type mergesetFieldIndexSummary struct {
 	FieldValueSamples       []string
 	FieldToPIDSamples       []string
 	DuplicateMeasurementKey int
+}
+
+type mergesetCLVTextIndexSummary struct {
+	Detected              bool
+	DocumentRows          int
+	PositionEntries       int
+	PositionSIDGroups     int
+	DocumentIDs           int
+	TermRows              int
+	DictionaryRows        int
+	DictionaryVersionRows int
+	InvalidItems          int
+	DeferredInvalidItems  int
+	PositionSamples       []string
+	TermSamples           []string
+	DictionarySamples     []string
+	VersionSamples        []string
 }
 
 type mergesetBlockHeader struct {
@@ -702,7 +722,8 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 			summary.FirstItem = append(summary.FirstItem[:0], decoded.FirstItem...)
 		}
 		summary.LastItem = append(summary.LastItem[:0], decoded.LastItem...)
-		observeMergesetTSIIndexItems(&summary.TSIIndex, decoded.Items, options.BlockSampleLimit)
+		observeMergesetCLVTextIndexItems(&summary.CLVText, decoded.Items, options.BlockSampleLimit)
+		observeMergesetTSIIndexItems(&summary.TSIIndex, decoded.Items, options.BlockSampleLimit, summary.CLVText.Detected)
 		observeMergesetFieldIndexItems(&summary.FieldIndex, decoded.Items, options.BlockSampleLimit)
 		if payloadSampleLimit > len(decoded.Samples) {
 			payloadSampleLimit = len(decoded.Samples)
@@ -713,6 +734,7 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 	}
 	search.Finish(options)
 	scan.Finish(options)
+	finalizeMergesetItemNamespaceSummaries(&summary.CLVText, &summary.TSIIndex)
 	return summary, notices
 }
 
@@ -1247,6 +1269,7 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 		}
 		report.Extra["item_payload_samples_hex"] = strings.Join(samples, ",")
 	}
+	addMergesetCLVTextIndexSummary(report, summary.CLVText)
 	addMergesetTSIIndexSummary(report, summary.TSIIndex)
 	addMergesetFieldIndexSummary(report, summary.FieldIndex)
 	if summary.ItemsDecoded != metadataItemsCount {
@@ -1273,6 +1296,17 @@ const (
 	opengeminiTSINSSeparator                byte = 2
 	opengeminiTSICompositeTagKeyPrefix      byte = 0xfe
 	opengeminiTSIDToFieldItemSize                = 10
+
+	opengeminiCLVPrefixPos        byte = 0
+	opengeminiCLVPrefixTerm       byte = 1
+	opengeminiCLVPrefixDictionary byte = 2
+	opengeminiCLVPrefixVersion    byte = 3
+	opengeminiCLVPrefixSID        byte = 4
+	opengeminiCLVPrefixID         byte = 5
+	opengeminiCLVPrefixMeta       byte = 6
+	opengeminiCLVSuffix           byte = 9
+	opengeminiCLVPosFlag          byte = 1
+	opengeminiCLVIDFlag           byte = 2
 )
 
 type mergesetTSIIndexItem struct {
@@ -1285,11 +1319,21 @@ type mergesetTSIIndexItem struct {
 	TSIDs       []uint64
 }
 
-func observeMergesetTSIIndexItems(summary *mergesetTSIIndexSummary, items [][]byte, sampleLimit int) {
+func observeMergesetTSIIndexItems(summary *mergesetTSIIndexSummary, items [][]byte, sampleLimit int, clvTextDetected bool) {
 	for _, item := range items {
 		parsed, err := parseMergesetTSIIndexItem(item)
 		if err != nil {
 			if isMergesetTSIIndexCandidate(item) {
+				if clv, clvErr := parseMergesetCLVTextIndexItem(item); clvErr == nil && (isMergesetCLVTextIndexEvidence(clv) || clv.Type == "term" || clvTextDetected && isMergesetCLVTextIndexContextual(clv)) {
+					continue
+				}
+				if clvTextDetected && isMergesetCLVTextIndexPrefix(item) {
+					continue
+				}
+				if !clvTextDetected && isMergesetCLVTextIndexPrefix(item) {
+					summary.DeferredCLVInvalids++
+					continue
+				}
 				summary.Detected = true
 				summary.InvalidItems++
 			}
@@ -1591,6 +1635,405 @@ func addMergesetTSIIndexSummary(report *FileReport, summary mergesetTSIIndexSumm
 	if summary.InvalidItems > 0 {
 		report.BlocksByType["opengemini-tsi-index-invalid-item"] = summary.InvalidItems
 		report.Notices = append(report.Notices, fmt.Sprintf("openGemini TSI index has %d invalid namespaced item(s)", summary.InvalidItems))
+	}
+}
+
+type mergesetCLVTextIndexItem struct {
+	Type          string
+	Token         string
+	Version       uint32
+	SIDGroups     int
+	PositionCount int
+	IDCount       int
+}
+
+func observeMergesetCLVTextIndexItems(summary *mergesetCLVTextIndexSummary, items [][]byte, sampleLimit int) {
+	type observation struct {
+		item   []byte
+		parsed mergesetCLVTextIndexItem
+		err    error
+	}
+	observations := make([]observation, 0, len(items))
+	detected := summary.Detected
+	for _, item := range items {
+		parsed, err := parseMergesetCLVTextIndexItem(item)
+		observations = append(observations, observation{
+			item:   item,
+			parsed: parsed,
+			err:    err,
+		})
+		if err != nil {
+			if _, tsiErr := parseMergesetTSIIndexItem(item); tsiErr != nil && isMergesetCLVTextIndexInvalidCandidate(item, false) {
+				detected = true
+			}
+			continue
+		}
+		if isMergesetCLVTextIndexEvidence(parsed) {
+			detected = true
+		}
+	}
+	summary.Detected = detected
+
+	for _, observation := range observations {
+		parsed := observation.parsed
+		if observation.err != nil {
+			if _, tsiErr := parseMergesetTSIIndexItem(observation.item); tsiErr == nil {
+				continue
+			}
+			if isMergesetCLVTextIndexInvalidCandidate(observation.item, summary.Detected) {
+				summary.InvalidItems++
+			} else if isMergesetCLVTextIndexPrefix(observation.item) {
+				summary.DeferredInvalidItems++
+			}
+			continue
+		}
+		switch parsed.Type {
+		case "document":
+			summary.DocumentRows++
+			summary.PositionEntries += parsed.PositionCount
+			summary.PositionSIDGroups += parsed.SIDGroups
+			summary.DocumentIDs += parsed.IDCount
+			if sampleLimit > 0 && len(summary.PositionSamples) < sampleLimit {
+				summary.PositionSamples = append(summary.PositionSamples, fmt.Sprintf("%s sid_groups=%d positions=%d ids=%d", formatMergesetCLVTextTokenSample(parsed.Token), parsed.SIDGroups, parsed.PositionCount, parsed.IDCount))
+			}
+		case "term":
+			summary.TermRows++
+			if sampleLimit > 0 && len(summary.TermSamples) < sampleLimit {
+				summary.TermSamples = append(summary.TermSamples, parsed.Token)
+			}
+		case "dictionary":
+			summary.DictionaryRows++
+			if sampleLimit > 0 && len(summary.DictionarySamples) < sampleLimit {
+				summary.DictionarySamples = append(summary.DictionarySamples, fmt.Sprintf("v%d:%s", parsed.Version, formatMergesetCLVTextTokenSample(parsed.Token)))
+			}
+		case "dictionary-version":
+			summary.DictionaryVersionRows++
+			if sampleLimit > 0 && len(summary.VersionSamples) < sampleLimit {
+				summary.VersionSamples = append(summary.VersionSamples, fmt.Sprint(parsed.Version))
+			}
+		}
+	}
+}
+
+func parseMergesetCLVTextIndexItem(item []byte) (mergesetCLVTextIndexItem, error) {
+	var parsed mergesetCLVTextIndexItem
+	if len(item) == 0 {
+		return parsed, fmt.Errorf("empty CLV text index item")
+	}
+	switch item[0] {
+	case opengeminiCLVPrefixPos:
+		return parseMergesetCLVPositionItem(item)
+	case opengeminiCLVPrefixTerm:
+		if len(item) < 2 {
+			return parsed, fmt.Errorf("short CLV term item")
+		}
+		token, err := parseMergesetCLVTermToken(item[1:])
+		if err != nil {
+			return parsed, err
+		}
+		parsed.Type = "term"
+		parsed.Token = token
+		return parsed, nil
+	case opengeminiCLVPrefixDictionary:
+		if len(item) < 7 {
+			return parsed, fmt.Errorf("short CLV dictionary item")
+		}
+		if item[5] != opengeminiCLVSuffix {
+			return parsed, fmt.Errorf("CLV dictionary item missing suffix")
+		}
+		parsed.Type = "dictionary"
+		parsed.Version = binary.BigEndian.Uint32(item[1:5])
+		parsed.Token = string(item[6:])
+		return parsed, nil
+	case opengeminiCLVPrefixVersion:
+		if len(item) != 6 {
+			return parsed, fmt.Errorf("CLV dictionary version item size=%d; want 6", len(item))
+		}
+		if item[1] != opengeminiCLVSuffix {
+			return parsed, fmt.Errorf("CLV dictionary version item missing suffix")
+		}
+		parsed.Type = "dictionary-version"
+		parsed.Version = binary.BigEndian.Uint32(item[2:6])
+		return parsed, nil
+	default:
+		return parsed, fmt.Errorf("not an openGemini CLV text index item")
+	}
+}
+
+func parseMergesetCLVPositionItem(item []byte) (mergesetCLVTextIndexItem, error) {
+	var parsed mergesetCLVTextIndexItem
+	if len(item) < 5 {
+		return parsed, fmt.Errorf("short CLV document item")
+	}
+	suffixOffset := bytes.IndexByte(item[1:], opengeminiCLVSuffix)
+	if suffixOffset < 0 {
+		return parsed, fmt.Errorf("CLV document item missing suffix")
+	}
+	suffix := suffixOffset + 1
+	if suffix <= 1 {
+		return parsed, fmt.Errorf("CLV document item has empty token")
+	}
+	if len(item) < suffix+4 {
+		return parsed, fmt.Errorf("short CLV document item metadata")
+	}
+	metaOffset := int(binary.BigEndian.Uint16(item[len(item)-2:]))
+	flag := item[len(item)-3]
+	if metaOffset <= suffix || metaOffset > len(item)-3 {
+		return parsed, fmt.Errorf("CLV document meta offset=%d outside payload", metaOffset)
+	}
+	if item[metaOffset] != opengeminiCLVPrefixMeta {
+		return parsed, fmt.Errorf("CLV document item missing meta prefix")
+	}
+	if flag == 0 {
+		return parsed, fmt.Errorf("CLV document item has empty meta flag")
+	}
+	if flag&^(opengeminiCLVPosFlag|opengeminiCLVIDFlag) != 0 {
+		return parsed, fmt.Errorf("CLV document item has unknown meta flag %d", flag)
+	}
+
+	meta := item[metaOffset+1 : len(item)-3]
+	var sidLens []uint16
+	var idCount int
+	if flag&opengeminiCLVPosFlag != 0 {
+		if len(meta) < 2 {
+			return parsed, fmt.Errorf("short CLV document sid group count")
+		}
+		groups := int(binary.BigEndian.Uint16(meta[:2]))
+		meta = meta[2:]
+		if groups == 0 {
+			return parsed, fmt.Errorf("CLV document position flag has zero sid groups")
+		}
+		if len(meta) < groups*2 {
+			return parsed, fmt.Errorf("short CLV document sid lengths")
+		}
+		sidLens = make([]uint16, 0, groups)
+		for i := 0; i < groups; i++ {
+			sidLens = append(sidLens, binary.BigEndian.Uint16(meta[:2]))
+			meta = meta[2:]
+		}
+	}
+	if flag&opengeminiCLVIDFlag != 0 {
+		if len(meta) < 2 {
+			return parsed, fmt.Errorf("short CLV document id count")
+		}
+		idCount = int(binary.BigEndian.Uint16(meta[:2]))
+		meta = meta[2:]
+		if idCount == 0 {
+			return parsed, fmt.Errorf("CLV document id flag has zero ids")
+		}
+	}
+	if len(meta) != 0 {
+		return parsed, fmt.Errorf("CLV document meta has %d trailing byte(s)", len(meta))
+	}
+
+	sidGroups, positions, ids, err := parseMergesetCLVPositionPayload(item[suffix+1:metaOffset], sidLens, idCount)
+	if err != nil {
+		return parsed, err
+	}
+	parsed.Type = "document"
+	parsed.Token = string(item[1:suffix])
+	parsed.SIDGroups = sidGroups
+	parsed.PositionCount = positions
+	parsed.IDCount = ids
+	return parsed, nil
+}
+
+func parseMergesetCLVTermToken(data []byte) (string, error) {
+	if len(data) == 0 {
+		return "", fmt.Errorf("CLV term token is empty")
+	}
+	if !utf8.Valid(data) {
+		return "", fmt.Errorf("CLV term token is not valid UTF-8")
+	}
+	for _, ch := range string(data) {
+		if ch < ' ' {
+			return "", fmt.Errorf("CLV term token contains control character")
+		}
+	}
+	return string(data), nil
+}
+
+func formatMergesetCLVTextTokenSample(token string) string {
+	if utf8.ValidString(token) {
+		printable := true
+		for _, ch := range token {
+			if ch < ' ' {
+				printable = false
+				break
+			}
+		}
+		if printable {
+			return token
+		}
+	}
+	return "0x" + hex.EncodeToString([]byte(token))
+}
+
+func finalizeMergesetItemNamespaceSummaries(clv *mergesetCLVTextIndexSummary, tsi *mergesetTSIIndexSummary) {
+	if clv.Detected {
+		clv.InvalidItems += clv.DeferredInvalidItems
+		clv.DeferredInvalidItems = 0
+		tsi.DeferredCLVInvalids = 0
+		return
+	}
+	if tsi.DeferredCLVInvalids > 0 {
+		tsi.Detected = true
+		tsi.InvalidItems += tsi.DeferredCLVInvalids
+	}
+	clv.DeferredInvalidItems = 0
+	tsi.DeferredCLVInvalids = 0
+}
+
+func parseMergesetCLVPositionPayload(data []byte, sidLens []uint16, idCount int) (int, int, int, error) {
+	positionCount := 0
+	for group, sidLen := range sidLens {
+		if len(data) < 9 {
+			return 0, 0, 0, fmt.Errorf("short CLV sid group #%d", group+1)
+		}
+		if data[0] != opengeminiCLVPrefixSID {
+			return 0, 0, 0, fmt.Errorf("CLV sid group #%d missing sid prefix", group+1)
+		}
+		data = data[9:]
+		positionBytes := int(sidLen) * 10
+		if len(data) < positionBytes {
+			return 0, 0, 0, fmt.Errorf("short CLV positions for sid group #%d", group+1)
+		}
+		positionCount += int(sidLen)
+		data = data[positionBytes:]
+	}
+	if idCount > 0 {
+		if len(data) < 1 {
+			return 0, 0, 0, fmt.Errorf("short CLV id list")
+		}
+		if data[0] != opengeminiCLVPrefixID {
+			return 0, 0, 0, fmt.Errorf("CLV id list missing prefix")
+		}
+		data = data[1:]
+		idBytes := idCount * 4
+		if len(data) < idBytes {
+			return 0, 0, 0, fmt.Errorf("short CLV id list payload")
+		}
+		data = data[idBytes:]
+	}
+	if len(data) != 0 {
+		return 0, 0, 0, fmt.Errorf("CLV position payload has %d trailing byte(s)", len(data))
+	}
+	return len(sidLens), positionCount, idCount, nil
+}
+
+func isMergesetCLVTextIndexCandidate(item []byte) bool {
+	if len(item) == 0 {
+		return false
+	}
+	switch item[0] {
+	case opengeminiCLVPrefixPos:
+		return len(item) >= 5 && bytes.IndexByte(item[1:], opengeminiCLVSuffix) > 0
+	case opengeminiCLVPrefixDictionary:
+		return len(item) >= 6
+	case opengeminiCLVPrefixVersion:
+		return len(item) >= 2
+	default:
+		return false
+	}
+}
+
+func isMergesetCLVTextIndexInvalidCandidate(item []byte, detected bool) bool {
+	if detected {
+		return isMergesetCLVTextIndexPrefix(item)
+	}
+	return isMergesetCLVTextIndexCandidate(item) && isMergesetCLVTextIndexStrongCandidate(item)
+}
+
+func isMergesetCLVTextIndexPrefix(item []byte) bool {
+	if len(item) == 0 {
+		return false
+	}
+	switch item[0] {
+	case opengeminiCLVPrefixPos, opengeminiCLVPrefixTerm, opengeminiCLVPrefixDictionary, opengeminiCLVPrefixVersion:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMergesetCLVTextIndexStrongCandidate(item []byte) bool {
+	if len(item) == 0 {
+		return false
+	}
+	switch item[0] {
+	case opengeminiCLVPrefixPos:
+		return isMergesetCLVDocumentStructureCandidate(item)
+	case opengeminiCLVPrefixVersion:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMergesetCLVDocumentStructureCandidate(item []byte) bool {
+	if len(item) < 5 {
+		return false
+	}
+	suffixOffset := bytes.IndexByte(item[1:], opengeminiCLVSuffix)
+	if suffixOffset <= 0 {
+		return false
+	}
+	suffix := suffixOffset + 1
+	metaOffset := int(binary.BigEndian.Uint16(item[len(item)-2:]))
+	return metaOffset > suffix && metaOffset <= len(item)-3 && item[metaOffset] == opengeminiCLVPrefixMeta
+}
+
+func isMergesetCLVTextIndexEvidence(item mergesetCLVTextIndexItem) bool {
+	switch item.Type {
+	case "document", "dictionary-version":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMergesetCLVTextIndexContextual(item mergesetCLVTextIndexItem) bool {
+	switch item.Type {
+	case "dictionary":
+		return true
+	default:
+		return false
+	}
+}
+
+func addMergesetCLVTextIndexSummary(report *FileReport, summary mergesetCLVTextIndexSummary) {
+	if !summary.Detected {
+		return
+	}
+	report.Extra["opengemini_clv_text_index_detected"] = "true"
+	report.Extra["opengemini_clv_text_index_document_rows"] = fmt.Sprint(summary.DocumentRows)
+	report.Extra["opengemini_clv_text_index_position_entries"] = fmt.Sprint(summary.PositionEntries)
+	report.Extra["opengemini_clv_text_index_sid_groups"] = fmt.Sprint(summary.PositionSIDGroups)
+	report.Extra["opengemini_clv_text_index_document_ids"] = fmt.Sprint(summary.DocumentIDs)
+	report.Extra["opengemini_clv_text_index_terms"] = fmt.Sprint(summary.TermRows)
+	report.Extra["opengemini_clv_text_index_dictionary_rows"] = fmt.Sprint(summary.DictionaryRows)
+	report.Extra["opengemini_clv_text_index_dictionary_versions"] = fmt.Sprint(summary.DictionaryVersionRows)
+	report.Extra["opengemini_clv_text_index_invalid_items"] = fmt.Sprint(summary.InvalidItems)
+	if len(summary.PositionSamples) > 0 {
+		report.Extra["opengemini_clv_text_index_position_samples"] = strings.Join(summary.PositionSamples, ",")
+	}
+	if len(summary.TermSamples) > 0 {
+		report.Extra["opengemini_clv_text_index_term_samples"] = strings.Join(summary.TermSamples, ",")
+	}
+	if len(summary.DictionarySamples) > 0 {
+		report.Extra["opengemini_clv_text_index_dictionary_samples"] = strings.Join(summary.DictionarySamples, ",")
+	}
+	if len(summary.VersionSamples) > 0 {
+		report.Extra["opengemini_clv_text_index_version_samples"] = strings.Join(summary.VersionSamples, ",")
+	}
+	report.BlocksByType["opengemini-clv-text-document"] = summary.DocumentRows
+	report.BlocksByType["opengemini-clv-text-position"] = summary.PositionEntries
+	report.BlocksByType["opengemini-clv-text-term"] = summary.TermRows
+	report.BlocksByType["opengemini-clv-text-dictionary"] = summary.DictionaryRows
+	report.BlocksByType["opengemini-clv-text-dictionary-version"] = summary.DictionaryVersionRows
+	if summary.InvalidItems > 0 {
+		report.BlocksByType["opengemini-clv-text-invalid-item"] = summary.InvalidItems
+		report.Notices = append(report.Notices, fmt.Sprintf("openGemini CLV text index has %d invalid namespaced item(s)", summary.InvalidItems))
 	}
 }
 
