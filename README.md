@@ -58,11 +58,14 @@ influx-cli ingest high-cardinality --db metrics --hosts 1000 --pids 10000
 influx-cli ingest out-of-order --db metrics --ratio 0.1
 influx-cli ingest covering-block --db metrics
 influx-cli ingest stress-basic --db stress --point-count 10 --series-count 1000 --tick 10s --start 2006-01-02T00:00:00Z
+influx-cli ingest iql --file ./mock.iql --dry-run
 influx-cli ingest demo-cpu --rate 2/s --duration 1s --start 2026-07-05T00:00:00Z --dry-run
 ```
 
 Use `--start` when the generated timestamp range must be reproducible. Without it, the range is relative to the current clock.
 The `stress-basic` dataset mirrors the basic `influx_stress` point generator shape: `point-count * series-count` points, `host=server-N` series tags, and timestamps advanced by `--tick`.
+The `iql` dataset reads an `influx_stress`-style IQL file as a mock data generator input. It supports write-oriented `SET`, `INSERT`, `GO INSERT`, and `WAIT` statements; query and raw InfluxQL statements are reported as skipped rather than used for pressure testing.
+For `ingest iql`, explicit CLI flags take precedence over IQL `SET` values, which take precedence over profile/config defaults. `GO` and `WAIT` are accepted for compatibility, but writes are executed through the existing synchronous Dataset Generator path.
 
 ## MVP Scope
 

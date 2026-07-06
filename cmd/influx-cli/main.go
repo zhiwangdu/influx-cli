@@ -182,6 +182,7 @@ type ingestCommandFlags struct {
 	rate        string
 	duration    string
 	start       string
+	file        string
 	tick        string
 	batchSize   int
 	pointCount  int
@@ -218,23 +219,28 @@ func newIngestCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ratePerSecond, err := ingest.ParseRate(ingestFlags.rate)
-			if err != nil {
-				return err
-			}
-			duration, err := time.ParseDuration(ingestFlags.duration)
-			if err != nil {
-				return fmt.Errorf("parse duration %q: %w", ingestFlags.duration, err)
-			}
-			tick, err := time.ParseDuration(ingestFlags.tick)
-			if err != nil {
-				return fmt.Errorf("parse tick %q: %w", ingestFlags.tick, err)
+			var ratePerSecond int
+			var duration time.Duration
+			var tick time.Duration
+			if dataset != ingest.DatasetIQL {
+				ratePerSecond, err = ingest.ParseRate(ingestFlags.rate)
+				if err != nil {
+					return err
+				}
+				duration, err = time.ParseDuration(ingestFlags.duration)
+				if err != nil {
+					return fmt.Errorf("parse duration %q: %w", ingestFlags.duration, err)
+				}
+				tick, err = time.ParseDuration(ingestFlags.tick)
+				if err != nil {
+					return fmt.Errorf("parse tick %q: %w", ingestFlags.tick, err)
+				}
 			}
 			start, err := parseIngestStart(ingestFlags.start)
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(effective.Database) == "" && !ingestFlags.dryRun {
+			if dataset != ingest.DatasetIQL && strings.TrimSpace(effective.Database) == "" && !ingestFlags.dryRun {
 				return errors.New("database is required for ingest; set --db or configure a profile database")
 			}
 
@@ -247,21 +253,28 @@ func newIngestCommand(flags *globalFlags) *cobra.Command {
 			defer stop()
 
 			summary, err := ingest.Run(ctx, writer, ingest.Options{
-				Dataset:         dataset,
-				Database:        effective.Database,
-				RetentionPolicy: effective.RetentionPolicy,
-				Precision:       effective.Precision,
-				RatePerSecond:   ratePerSecond,
-				Duration:        duration,
-				Tick:            tick,
-				BatchSize:       ingestFlags.batchSize,
-				PointCount:      ingestFlags.pointCount,
-				SeriesCount:     ingestFlags.seriesCount,
-				Hosts:           ingestFlags.hosts,
-				PIDs:            ingestFlags.pids,
-				Ratio:           ingestFlags.ratio,
-				Measurement:     ingestFlags.measurement,
-				Start:           start,
+				Dataset:              dataset,
+				Database:             effective.Database,
+				RetentionPolicy:      effective.RetentionPolicy,
+				Precision:            effective.Precision,
+				RatePerSecond:        ratePerSecond,
+				Duration:             duration,
+				Tick:                 tick,
+				BatchSize:            ingestFlags.batchSize,
+				PointCount:           ingestFlags.pointCount,
+				SeriesCount:          ingestFlags.seriesCount,
+				Hosts:                ingestFlags.hosts,
+				PIDs:                 ingestFlags.pids,
+				Ratio:                ingestFlags.ratio,
+				Measurement:          ingestFlags.measurement,
+				Start:                start,
+				IQLFile:              ingestFlags.file,
+				ForceDatabase:        strings.TrimSpace(flags.overrides.Database) != "",
+				ForceRetentionPolicy: strings.TrimSpace(flags.overrides.RetentionPolicy) != "",
+				ForcePrecision:       strings.TrimSpace(flags.overrides.Precision) != "",
+				ForceStart:           cmd.Flags().Changed("start"),
+				ForceBatchSize:       cmd.Flags().Changed("batch-size"),
+				AllowEmptyDatabase:   ingestFlags.dryRun,
 			})
 			if err != nil {
 				return err
@@ -278,6 +291,7 @@ func newIngestCommand(flags *globalFlags) *cobra.Command {
 	command.Flags().StringVar(&ingestFlags.rate, "rate", ingestFlags.rate, "points per simulated second, for example 100/s or 10k/s")
 	command.Flags().StringVar(&ingestFlags.duration, "duration", ingestFlags.duration, "simulated time range to generate")
 	command.Flags().StringVar(&ingestFlags.start, "start", "", "simulated range start time in RFC3339 or RFC3339Nano")
+	command.Flags().StringVar(&ingestFlags.file, "file", "", "iql file to generate mock data from")
 	command.Flags().StringVar(&ingestFlags.tick, "tick", ingestFlags.tick, "timestamp step between stress-basic point groups")
 	command.Flags().IntVar(&ingestFlags.batchSize, "batch-size", ingestFlags.batchSize, fmt.Sprintf("line protocol rows per write request (max %d)", ingest.MaxBatchSize))
 	command.Flags().IntVar(&ingestFlags.pointCount, "point-count", ingestFlags.pointCount, "number of timestamp groups for stress-basic")
@@ -388,8 +402,11 @@ func printIngestSummary(w io.Writer, summary ingest.Summary, dryRun bool) {
 	fmt.Fprintf(w, "database: %s\n", printableSummaryValue(summary.Database))
 	fmt.Fprintf(w, "retention_policy: %s\n", printableSummaryValue(summary.RetentionPolicy))
 	fmt.Fprintf(w, "measurement: %s\n", summary.Measurement)
+	if summary.Dataset == ingest.DatasetIQL {
+		fmt.Fprintf(w, "iql_file: %s\n", summary.IQLFile)
+	}
 	fmt.Fprintf(w, "precision: %s\n", summary.Precision)
-	if summary.Dataset != ingest.DatasetStressBasic {
+	if summary.Dataset != ingest.DatasetStressBasic && summary.Dataset != ingest.DatasetIQL {
 		fmt.Fprintf(w, "rate: %d/s\n", summary.RatePerSecond)
 	}
 	fmt.Fprintf(w, "duration: %s\n", summary.Duration)
@@ -398,10 +415,18 @@ func printIngestSummary(w io.Writer, summary ingest.Summary, dryRun bool) {
 		fmt.Fprintf(w, "series_count: %d\n", summary.SeriesCount)
 		fmt.Fprintf(w, "tick: %s\n", summary.Tick)
 	}
+	if summary.Dataset == ingest.DatasetIQL {
+		fmt.Fprintf(w, "insert_statements: %d\n", summary.IQLInserts)
+		fmt.Fprintf(w, "skipped_queries: %d\n", summary.IQLSkippedQuery)
+		fmt.Fprintf(w, "skipped_influxql: %d\n", summary.IQLSkippedRaw)
+		if len(summary.IQLIgnoredSets) > 0 {
+			fmt.Fprintf(w, "ignored_iql_settings: %s\n", strings.Join(summary.IQLIgnoredSets, ", "))
+		}
+	}
 	fmt.Fprintf(w, "points: %d\n", summary.WrittenPoints)
 	fmt.Fprintf(w, "batches: %d\n", summary.Batches)
 	fmt.Fprintf(w, "simulated_range: %s to %s\n", summary.StartedAt.Format(time.RFC3339Nano), summary.EndedAt.Format(time.RFC3339Nano))
-	if summary.Dataset == ingest.DatasetStressBasic && !summary.DataStartedAt.IsZero() && !summary.DataEndedAt.IsZero() &&
+	if (summary.Dataset == ingest.DatasetStressBasic || summary.Dataset == ingest.DatasetIQL) && !summary.DataStartedAt.IsZero() && !summary.DataEndedAt.IsZero() &&
 		(!summary.DataStartedAt.Equal(summary.StartedAt) || !summary.DataEndedAt.Equal(summary.EndedAt)) {
 		fmt.Fprintf(w, "data_range: %s to %s\n", summary.DataStartedAt.Format(time.RFC3339Nano), summary.DataEndedAt.Format(time.RFC3339Nano))
 	}

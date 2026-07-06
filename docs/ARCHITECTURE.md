@@ -306,6 +306,8 @@ Dataset Generator belongs to the CLI/app layer, not the renderer layer. It produ
 
 The `stress-basic` dataset integrates the reusable shape from the standalone `influx_stress` basic point generator without importing its client/runtime dependencies: it creates `point-count * series-count` line protocol rows, suffixes the first tag as `host=server-N`, and advances timestamp groups by `--tick`.
 
+The `iql` dataset treats `influx_stress`-style IQL as a mock data description language for Dataset Generator. It supports write-oriented `SET`, `INSERT`, `GO INSERT`, and `WAIT` statements through the same line protocol writer path; query, raw InfluxQL, concurrency, interval, and stress-reporting semantics are intentionally skipped so formal pressure testing remains delegated to dedicated tools. Explicit CLI flags override IQL `SET` values, and IQL `SET` values override profile/config defaults.
+
 Autocomplete 由 application core 提供候选，REPL line editor 只负责调用。候选来源为 `ShowDatabases`、`ShowRetentionPolicies`、`ShowMeasurements` 和 `GetSchema`。当 query 已能识别 `FROM <measurement>` 时补全使用单 measurement schema；当用户从左到右输入 `SELECT ...` 尚未写出 `FROM` 时，补全使用当前 db/rp 的 DB 级 schema。schema/measurement cache 默认 TTL 60s，并可通过 `:refresh schema` 手动清空。
 
 ### 6.4 TUI

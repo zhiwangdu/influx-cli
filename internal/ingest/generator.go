@@ -22,6 +22,7 @@ const (
 	DatasetOutOfOrder      Dataset = "out-of-order"
 	DatasetCoveringBlock   Dataset = "covering-block"
 	DatasetStressBasic     Dataset = "stress-basic"
+	DatasetIQL             Dataset = "iql"
 )
 
 const (
@@ -39,21 +40,28 @@ const (
 )
 
 type Options struct {
-	Dataset         Dataset
-	Database        string
-	RetentionPolicy string
-	Precision       string
-	RatePerSecond   int
-	Duration        time.Duration
-	BatchSize       int
-	PointCount      int
-	SeriesCount     int
-	Tick            time.Duration
-	Hosts           int
-	PIDs            int
-	Ratio           float64
-	Measurement     string
-	Start           time.Time
+	Dataset              Dataset
+	Database             string
+	RetentionPolicy      string
+	Precision            string
+	RatePerSecond        int
+	Duration             time.Duration
+	BatchSize            int
+	PointCount           int
+	SeriesCount          int
+	Tick                 time.Duration
+	Hosts                int
+	PIDs                 int
+	Ratio                float64
+	Measurement          string
+	Start                time.Time
+	IQLFile              string
+	ForceDatabase        bool
+	ForceRetentionPolicy bool
+	ForcePrecision       bool
+	ForceStart           bool
+	ForceBatchSize       bool
+	AllowEmptyDatabase   bool
 }
 
 type Summary struct {
@@ -75,6 +83,11 @@ type Summary struct {
 	DataStartedAt   time.Time
 	DataEndedAt     time.Time
 	Elapsed         time.Duration
+	IQLFile         string
+	IQLInserts      int
+	IQLSkippedQuery int
+	IQLSkippedRaw   int
+	IQLIgnoredSets  []string
 }
 
 type WriterFunc func(ctx context.Context, request adapter.WriteRequest) error
@@ -100,13 +113,14 @@ func Datasets() []Dataset {
 		DatasetOutOfOrder,
 		DatasetCoveringBlock,
 		DatasetStressBasic,
+		DatasetIQL,
 	}
 }
 
 func ParseDataset(raw string) (Dataset, error) {
 	normalized := Dataset(strings.ToLower(strings.TrimSpace(raw)))
 	switch normalized {
-	case DatasetDemoCPU, DatasetHighCardinality, DatasetOutOfOrder, DatasetCoveringBlock, DatasetStressBasic:
+	case DatasetDemoCPU, DatasetHighCardinality, DatasetOutOfOrder, DatasetCoveringBlock, DatasetStressBasic, DatasetIQL:
 		return normalized, nil
 	default:
 		return "", fmt.Errorf("unknown dataset %q; supported datasets: %s", raw, datasetList())
@@ -149,6 +163,13 @@ func ParseRate(raw string) (int, error) {
 func Run(ctx context.Context, writer adapter.LineProtocolWriter, options Options) (Summary, error) {
 	if writer == nil {
 		return Summary{}, errors.New("line protocol writer is required")
+	}
+	dataset, err := ParseDataset(string(options.Dataset))
+	if err != nil {
+		return Summary{}, err
+	}
+	if dataset == DatasetIQL {
+		return runIQL(ctx, writer, options)
 	}
 	plan, err := newPlan(options, time.Now())
 	if err != nil {
@@ -622,6 +643,8 @@ func defaultMeasurement(dataset Dataset) string {
 		return "covering_block_cpu"
 	case DatasetStressBasic:
 		return "cpu"
+	case DatasetIQL:
+		return "iql"
 	default:
 		return "generated"
 	}
