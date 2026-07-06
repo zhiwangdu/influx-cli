@@ -417,7 +417,7 @@ func TestAnalyzeMergesetFileSetTableScanSingleStreamHeapAccounting(t *testing.T)
 	}
 	wantFirstStep := DecodePathCursorStep{
 		Step:                1,
-		Type:                "mergeset-table-search-heap-step",
+		Type:                "mergeset-table-scan-heap-step",
 		Action:              "heap_pop_cursor_advance",
 		Key:                 "aa",
 		File:                partPath,
@@ -500,7 +500,7 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 	}
 	wantFirstStep := DecodePathCursorStep{
 		Step:                1,
-		Type:                "mergeset-table-search-heap-step",
+		Type:                "mergeset-table-scan-heap-step",
 		Action:              "heap_pop_cursor_advance",
 		Key:                 "aa",
 		File:                partPath1,
@@ -516,7 +516,7 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 	}
 	wantLastStep := DecodePathCursorStep{
 		Step:                6,
-		Type:                "mergeset-table-search-heap-step",
+		Type:                "mergeset-table-scan-heap-step",
 		Action:              "heap_pop_cursor_exhaust",
 		Key:                 "ae",
 		File:                partPath2,
@@ -2047,6 +2047,55 @@ func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	if got, want := decode.TableSearchExactMisses, 1; got != want {
 		t.Fatalf("table search exact misses = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorExecutionSamples), 3; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantExecutionSamples := []DecodePathCursorStep{
+		{
+			Step:                1,
+			Type:                "mergeset-table-search-candidate-heap-step",
+			Action:              "heap_pop_exact_miss_candidate",
+			Key:                 "0",
+			CandidateValue:      "aa",
+			File:                partPath1,
+			HeapSizeBefore:      2,
+			HeapSizeAfterPop:    1,
+			HeapSizeAfterAction: 1,
+			CursorIndexBefore:   -1,
+			CursorIndexAfter:    -1,
+		},
+		{
+			Step:                2,
+			Type:                "mergeset-table-search-candidate-heap-step",
+			Action:              "heap_pop_exact_match_candidate",
+			Key:                 "aa",
+			CandidateValue:      "aa",
+			File:                partPath1,
+			HeapSizeBefore:      2,
+			HeapSizeAfterPop:    1,
+			HeapSizeAfterAction: 1,
+			CursorIndexBefore:   -1,
+			CursorIndexAfter:    -1,
+		},
+		{
+			Step:                3,
+			Type:                "mergeset-table-search-candidate-heap-step",
+			Action:              "heap_pop_exact_match_candidate",
+			Key:                 "za",
+			CandidateValue:      "za",
+			File:                partPath2,
+			HeapSizeBefore:      1,
+			HeapSizeAfterPop:    0,
+			HeapSizeAfterAction: 0,
+			CursorIndexBefore:   -1,
+			CursorIndexAfter:    -1,
+		},
+	}
+	for i, want := range wantExecutionSamples {
+		if got := decode.CursorExecutionSamples[i]; got != want {
+			t.Fatalf("cursor execution sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
 	if got, want := decode.Samples[0].Path, partPath2; got != want {
 		t.Fatalf("first sample path = %q, want %q", got, want)
 	}
@@ -2058,6 +2107,9 @@ func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "exact-miss TableSearch seek window") {
 		t.Fatalf("recommendations = %v, want exact-miss seek window recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "candidate heap pop steps") {
+		t.Fatalf("recommendations = %v, want heap pop execution recommendation", decode.Recommendations)
 	}
 }
 
@@ -2104,11 +2156,69 @@ func TestAnalyzeMergesetFileSetQueryKeySearchBeyondRangeHasNoExactMissWindow(t *
 	if got, want := len(decode.CursorFinalOutputSamples), 0; got != want {
 		t.Fatalf("cursor final output samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorExecutionSamples), 0; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
 	if containsString(decode.Recommendations, "exact-miss TableSearch seek window") {
 		t.Fatalf("recommendations = %v, want no exact-miss seek window recommendation", decode.Recommendations)
 	}
 	if !containsString(decode.Recommendations, "query item key(s) were not found") {
 		t.Fatalf("recommendations = %v, want missing-key recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeMergesetFileSetQueryKeySearchSampleLimitZeroSuppressesExecutionSamples(t *testing.T) {
+	dir := t.TempDir()
+	partPath1 := filepath.Join(dir, "2_1_searchlimit1")
+	if err := writeTestMergesetPartWithItems(partPath1, [][]byte{
+		[]byte("aa"),
+		[]byte("ab"),
+	}); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems(%q) error = %v", partPath1, err)
+	}
+	partPath2 := filepath.Join(dir, "2_1_searchlimit2")
+	if err := writeTestMergesetPartWithItems(partPath2, [][]byte{
+		[]byte("aa"),
+		[]byte("ac"),
+	}); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems(%q) error = %v", partPath2, err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		QueryKeys:        []string{"aa"},
+		BlockSampleLimit: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected file-set decode path")
+	}
+	if got, want := decode.MatchedKeys, []string{"aa"}; !equalStrings(got, want) {
+		t.Fatalf("matched keys = %v, want %v", got, want)
+	}
+	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
+		t.Fatalf("table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchHeapPops, 1; got != want {
+		t.Fatalf("table search heap pops = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got := len(decode.CursorWindows); got != 0 {
+		t.Fatalf("cursor windows = %d, want 0", got)
+	}
+	if got := len(decode.CursorOutputSamples); got != 0 {
+		t.Fatalf("cursor output samples = %d, want 0", got)
+	}
+	if got := len(decode.CursorFinalOutputSamples); got != 0 {
+		t.Fatalf("cursor final output samples = %d, want 0", got)
+	}
+	if got := len(decode.CursorExecutionSamples); got != 0 {
+		t.Fatalf("cursor execution samples = %d, want 0", got)
 	}
 }
 
@@ -2186,6 +2296,25 @@ func TestAnalyzeMergesetFileSetQueryKeySearchDescending(t *testing.T) {
 	}
 	if got, want := len(decode.CursorOutputSamples), 1; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantExecutionSample := DecodePathCursorStep{
+		Step:                1,
+		Type:                "mergeset-table-search-candidate-heap-step",
+		Action:              "heap_pop_exact_miss_candidate",
+		Key:                 "ae",
+		CandidateValue:      "ad",
+		File:                partPath1,
+		HeapSizeBefore:      2,
+		HeapSizeAfterPop:    1,
+		HeapSizeAfterAction: 1,
+		CursorIndexBefore:   -1,
+		CursorIndexAfter:    -1,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantExecutionSample {
+		t.Fatalf("cursor execution sample = %+v, want %+v", got, wantExecutionSample)
 	}
 	wantSample := DecodePathCursorOutput{
 		Key:            "ae",
@@ -2285,6 +2414,25 @@ func TestAnalyzeMergesetFileSetQueryKeySearchDescendingDuplicateExact(t *testing
 	}
 	if got, want := decode.TableSearchExactMisses, 0; got != want {
 		t.Fatalf("table search exact misses = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantExecutionSample := DecodePathCursorStep{
+		Step:                1,
+		Type:                "mergeset-table-search-candidate-heap-step",
+		Action:              "heap_pop_exact_match_candidate",
+		Key:                 "ad",
+		CandidateValue:      "ad",
+		File:                partPath1,
+		HeapSizeBefore:      2,
+		HeapSizeAfterPop:    1,
+		HeapSizeAfterAction: 1,
+		CursorIndexBefore:   -1,
+		CursorIndexAfter:    -1,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantExecutionSample {
+		t.Fatalf("cursor execution sample = %+v, want %+v", got, wantExecutionSample)
 	}
 	if got, want := len(decode.CursorWindows), 1; got != want {
 		t.Fatalf("cursor windows = %d, want %d", got, want)

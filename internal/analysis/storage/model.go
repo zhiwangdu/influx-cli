@@ -465,6 +465,7 @@ type DecodePathCursorStep struct {
 	Type                string `json:"type"`
 	Action              string `json:"action"`
 	Key                 string `json:"key"`
+	CandidateValue      string `json:"candidate_value,omitempty"`
 	File                string `json:"file,omitempty"`
 	HeapSizeBefore      int    `json:"heap_size_before"`
 	HeapSizeAfterPop    int    `json:"heap_size_after_pop"`

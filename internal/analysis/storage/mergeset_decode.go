@@ -53,7 +53,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 			summary.MissingKeys = append(summary.MissingKeys, key)
 		}
 	}
-	tableSeekResults, heapInserts, heapPops := mergeMergesetFileSetSearchCandidates(tableSeekCandidates, options.CursorDescending)
+	tableSeekResults, heapInserts, heapPops := mergeMergesetFileSetSearchCandidates(summary, tableSeekCandidates, options)
 	summary.BaselineOutputValues = len(options.QueryKeys)
 	summary.OptimizedOutputValues = countMergesetMatchedItemFiles(matchedKeyFiles)
 	summary.DeduplicatedOutputValues = len(summary.MatchedKeys)
@@ -76,27 +76,56 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	return summary
 }
 
-func mergeMergesetFileSetSearchCandidates(candidates map[string][]mergesetSeekResult, descending bool) (map[string]mergesetSeekResult, int, int) {
+func mergeMergesetFileSetSearchCandidates(summary *DecodePathSummary, candidates map[string][]mergesetSeekResult, options Options) (map[string]mergesetSeekResult, int, int) {
 	results := map[string]mergesetSeekResult{}
 	heapInserts := 0
 	heapPops := 0
-	for key, group := range candidates {
+	for _, key := range options.QueryKeys {
+		group := candidates[key]
 		if len(group) == 0 {
 			continue
 		}
 		candidateHeap := mergesetFileSetSearchHeap{
 			candidates: append([]mergesetSeekResult(nil), group...),
-			descending: descending,
+			descending: options.CursorDescending,
 		}
 		heapInserts += len(candidateHeap.candidates)
 		heap.Init(&candidateHeap)
 		if candidateHeap.Len() > 0 {
+			heapSizeBefore := candidateHeap.Len()
 			result := heap.Pop(&candidateHeap).(mergesetSeekResult)
 			heapPops++
 			results[key] = result
+			appendMergesetFileSetSearchExecutionSample(summary, options.BlockSampleLimit, DecodePathCursorStep{
+				Step:                heapPops,
+				Type:                "mergeset-table-search-candidate-heap-step",
+				Action:              mergesetFileSetSearchExecutionAction(result.Matches),
+				Key:                 key,
+				CandidateValue:      string(result.Item),
+				File:                result.File,
+				HeapSizeBefore:      heapSizeBefore,
+				HeapSizeAfterPop:    candidateHeap.Len(),
+				HeapSizeAfterAction: candidateHeap.Len(),
+				CursorIndexBefore:   -1,
+				CursorIndexAfter:    -1,
+			})
 		}
 	}
 	return results, heapInserts, heapPops
+}
+
+func mergesetFileSetSearchExecutionAction(matches bool) string {
+	if matches {
+		return "heap_pop_exact_match_candidate"
+	}
+	return "heap_pop_exact_miss_candidate"
+}
+
+func appendMergesetFileSetSearchExecutionSample(summary *DecodePathSummary, sampleLimit int, sample DecodePathCursorStep) {
+	if sampleLimit <= 0 || summary == nil || len(summary.CursorExecutionSamples) >= sampleLimit {
+		return
+	}
+	summary.CursorExecutionSamples = append(summary.CursorExecutionSamples, sample)
 }
 
 type mergesetFileSetSearchHeap struct {
@@ -518,7 +547,7 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 		}
 		appendMergesetFileSetScanExecutionSample(summary, options.BlockSampleLimit, DecodePathCursorStep{
 			Step:                total,
-			Type:                "mergeset-table-search-heap-step",
+			Type:                "mergeset-table-scan-heap-step",
 			Action:              mergesetFileSetScanExecutionAction(advanced),
 			Key:                 string(item),
 			File:                stream.path,
@@ -550,7 +579,7 @@ func mergesetFileSetScanExecutionAction(advanced bool) string {
 }
 
 func appendMergesetFileSetScanExecutionSample(summary *DecodePathSummary, sampleLimit int, sample DecodePathCursorStep) {
-	if sampleLimit <= 0 || len(summary.CursorExecutionSamples) >= sampleLimit {
+	if sampleLimit <= 0 || summary == nil || len(summary.CursorExecutionSamples) >= sampleLimit {
 		return
 	}
 	summary.CursorExecutionSamples = append(summary.CursorExecutionSamples, sample)
@@ -710,6 +739,9 @@ func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Op
 	}
 	if summary.TableSearchCursorAdvances > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("advanced %d local mergeset part cursor step(s) while seeking item candidates", summary.TableSearchCursorAdvances))
+	}
+	if len(summary.CursorExecutionSamples) > 0 {
+		recommendations = append(recommendations, "file-set item-search execution samples show local candidate heap pop steps")
 	}
 	if exactMissWindows := countMergesetExactMissCursorWindows(summary.CursorWindows); exactMissWindows > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("recorded %d exact-miss TableSearch seek window(s) with nearest local item candidates", exactMissWindows))
