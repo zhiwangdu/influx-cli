@@ -32,7 +32,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set && options.Format != FormatMergeset {
 		return Report{}, fmt.Errorf("query key filter requires query range")
 	}
-	if len(options.QuerySeriesIDs) > 0 && !options.QueryRange.Set {
+	if len(options.QuerySeriesIDs) > 0 && !options.QueryRange.Set && options.Format != FormatSeriesFile {
 		return Report{}, fmt.Errorf("query series id filter requires query range")
 	}
 	if len(options.QueryMetaIndexIDs) > 0 && !options.QueryRange.Set {
@@ -262,6 +262,8 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return analyzeTSI(path, info, options)
 	case FormatTSILog:
 		return analyzeTSILog(path, info, options)
+	case FormatSeriesFile:
+		return analyzeSeriesFile(path, info, options)
 	case FormatMergeset:
 		return analyzeMergesetPart(path, info, options)
 	case FormatOpenGeminiMeta:
@@ -283,6 +285,9 @@ func detectFormat(path string) (Format, error) {
 	}
 	if isOpenGeminiMetaPath(path) {
 		return FormatOpenGeminiMeta, nil
+	}
+	if isSeriesFilePath(path) {
+		return FormatSeriesFile, nil
 	}
 
 	f, err := os.Open(path)
@@ -308,6 +313,9 @@ func detectFormat(path string) (Format, error) {
 	if n >= len(tsiMagic) && string(header[:len(tsiMagic)]) == tsiMagic {
 		return FormatTSI, nil
 	}
+	if n >= seriesSegmentHeaderSize && string(header[:len(seriesSegmentMagic)]) == seriesSegmentMagic && header[len(seriesSegmentMagic)] == seriesSegmentVersion {
+		return FormatSeriesFile, nil
+	}
 	if n < 5 {
 		return "", fmt.Errorf("file too small to detect storage format")
 	}
@@ -329,12 +337,14 @@ func isStorageCandidate(path string, format Format) bool {
 		return strings.HasSuffix(lower, ".tsi")
 	case FormatTSILog:
 		return isTSILogPath(path)
+	case FormatSeriesFile:
+		return isSeriesFilePath(path)
 	case FormatMergeset:
 		return isMergesetPartPath(path)
 	case FormatOpenGeminiMeta:
 		return isOpenGeminiMetaPath(path)
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path)
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || strings.Contains(lower, ".tssp") || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path)
 	}
 }
 

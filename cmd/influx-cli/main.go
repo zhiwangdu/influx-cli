@@ -226,7 +226,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(seriesIDs) > 0 && !queryRange.Set {
+			if len(seriesIDs) > 0 && !queryRange.Set && storageFormat != storage.FormatSeriesFile {
 				return fmt.Errorf("--series-id requires --from and --to because decode-path planning needs a query range")
 			}
 			metaIndexIDs, err := parseStorageMetaIndexIDs(analyzeFlags.metaIndexIDs)
@@ -300,12 +300,12 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, wal, tssp, tssp-metaindex, tsi, tsi-log, mergeset, opengemini-meta")
+	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, wal, tssp, tssp-metaindex, tsi, tsi-log, series-file, mergeset, opengemini-meta")
 	analyzeCommand.Flags().BoolVar(&analyzeFlags.recursive, "recursive", false, "walk directories recursively")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.keys, "key", nil, "TSM index key or mergeset item key to include in query/search planning; repeat for multiple keys")
-	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "openGemini TSSP series ID to include in query decode-path planning; repeat for multiple IDs")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")

@@ -18,6 +18,7 @@ const (
 	FormatTSSPDetachedIndex Format = "tssp-metaindex"
 	FormatTSI               Format = "tsi"
 	FormatTSILog            Format = "tsi-log"
+	FormatSeriesFile        Format = "series-file"
 	FormatMergeset          Format = "mergeset"
 	FormatOpenGeminiMeta    Format = "opengemini-meta"
 )
