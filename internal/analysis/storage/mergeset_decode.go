@@ -41,7 +41,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 		for key, result := range file.DecodePath.mergesetSeekResults {
 			result.File = file.Path
 			current, ok := tableSeekResults[key]
-			if !ok || bytes.Compare(result.Item, current.Item) < 0 {
+			if !ok || mergesetPreferSeekResult(result, current, options.CursorDescending) {
 				tableSeekResults[key] = result
 			}
 		}
@@ -73,6 +73,14 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	}
 	summary.Recommendations = mergesetFileSetSearchRecommendations(summary, options)
 	return summary
+}
+
+func mergesetPreferSeekResult(candidate, current mergesetSeekResult, descending bool) bool {
+	cmp := bytes.Compare(candidate.Item, current.Item)
+	if descending {
+		return cmp > 0
+	}
+	return cmp < 0
 }
 
 func buildMergesetFileSetScanSummary(files []FileReport, options Options) *DecodePathSummary {
