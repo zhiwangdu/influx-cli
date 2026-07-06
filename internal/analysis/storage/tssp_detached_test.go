@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"os"
 	"path/filepath"
@@ -801,6 +802,87 @@ func TestAnalyzeTSSPDetachedFieldFilterMatchesIntegerComparison(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedFieldFilterMatchesStringComparison(t *testing.T) {
+	dir := t.TempDir()
+	values := []string{"red", "blue"}
+	timestamps := []int64{333, 444}
+	valueSize, err := testTSSPDetachedStringFullBlockSize(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := []testTSSPChunkSpec{{
+		sid:      42,
+		minTime:  333,
+		maxTime:  444,
+		offset:   1200,
+		size:     valueSize,
+		timeSize: testTSSPDetachedIntegerFullBlockSize(timestamps),
+	}}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedStringFullData(filepath.Join(dir, tsspDetachedDataFileName), 1400, chunks[0], values, timestamps); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "<", Value: "red"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: "<", Value: "red"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRows, 2; got != want {
+		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterMatches, 1; got != want {
+		t.Fatalf("data block probe filter matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRejects, 1; got != want {
+		t.Fatalf("data block probe filter rejects = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "meta-index-id:42/value",
+		Time:           444,
+		Type:           "string-full",
+		OptimizedValue: "blue",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
+	}
+}
+
 func TestInspectTSSPDetachedDataBlockEmptyRows(t *testing.T) {
 	payload := make([]byte, 5)
 	payload[0] = 42 // openGemini encoding.BlockIntegerEmpty.
@@ -1452,6 +1534,57 @@ func writeTestTSSPDetachedOneRowData(path string, size int, chunk testTSSPChunkS
 		return err
 	}
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPDetachedStringFullData(path string, size int, chunk testTSSPChunkSpec, values []string, timestamps []int64) error {
+	valuePayload, err := testTSSPStringFullPayload(values, 0)
+	if err != nil {
+		return err
+	}
+	timePayload := testTSSPIntegerFullPayload(timestamps)
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+	for buf.Len() < size {
+		buf.WriteByte(0)
+	}
+	if err := writeTestTSSPDetachedPayloadBlock(buf.Bytes(), chunk.offset, chunk.size, valuePayload); err != nil {
+		return err
+	}
+	if err := writeTestTSSPDetachedPayloadBlock(buf.Bytes(), chunk.offset+int64(chunk.size), chunk.testTimeSize(), timePayload); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func testTSSPDetachedStringFullBlockSize(values []string) (uint32, error) {
+	payload, err := testTSSPStringFullPayload(values, 0)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(crc32.Size + len(payload)), nil
+}
+
+func testTSSPDetachedIntegerFullBlockSize(values []int64) uint32 {
+	return uint32(crc32.Size + len(testTSSPIntegerFullPayload(values)))
+}
+
+func testTSSPIntegerFullPayload(values []int64) []byte {
+	var payload bytes.Buffer
+	writeTestTSSPAttachedIntegerFullBlock(&payload, values)
+	return payload.Bytes()
+}
+
+func writeTestTSSPDetachedPayloadBlock(data []byte, offset int64, size uint32, payload []byte) error {
+	if offset < 0 || int64(len(data)) < offset+int64(size) {
+		return fmt.Errorf("detached block range offset=%d size=%d exceeds %d bytes", offset, size, len(data))
+	}
+	if int(size) != crc32.Size+len(payload) {
+		return fmt.Errorf("detached block size = %d, want %d", size, crc32.Size+len(payload))
+	}
+	binary.BigEndian.PutUint32(data[offset:], crc32.ChecksumIEEE(payload))
+	copy(data[offset+crc32.Size:], payload)
+	return nil
 }
 
 func writeTestTSSPDetachedDataBlock(data []byte, offset int64, size uint32) error {
