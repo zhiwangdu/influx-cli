@@ -94,7 +94,7 @@ TSDB 问题常常同时横跨查询语句、索引、文件布局和内部指标
 
 ### 6.3 Schema-aware Console
 
-右侧 context panel 始终围绕当前查询对象展示 schema、cardinality、字段类型、tag 分布和建议。
+右侧 context panel 围绕当前查询对象逐步展示信息。Phase 2 聚焦 schema、字段类型、tag 名称和结果上下文；cardinality、tag 分布和查询建议进入 Phase 3/4 的智能分析能力。
 
 ### 6.4 Zero-switch Analytics
 
@@ -288,13 +288,14 @@ db: metrics | rp: autogen | mode: influxql | latency: 12ms | ok
 
 内容：
 
-| 内容 | MVP | 说明 |
+| 内容 | 阶段 | 说明 |
 | --- | --- | --- |
 | 当前 db/rp | yes | 状态上下文 |
 | measurement schema | phase 1 | field/tag/type |
-| cardinality summary | phase 2 | top measurement/tag |
-| query hints | phase 2 | time bucket、group by、limit |
-| profiler hints | phase 3 | scan/block decode/cost |
+| result/query context | phase 2 | renderer、rows/points、series count、time range、watch state |
+| cardinality summary | phase 3 | top measurement/tag |
+| query hints | phase 3 | time bucket、group by、limit、time predicate |
+| profiler hints | phase 4 | scan/block decode/cost |
 
 ### 9.5 Footer
 

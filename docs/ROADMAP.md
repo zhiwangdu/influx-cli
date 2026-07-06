@@ -29,6 +29,7 @@
 | `docs/PRODUCT_DESIGN.md` | 产品设计书 |
 | `docs/ARCHITECTURE.md` | 架构说明 |
 | `docs/ROADMAP.md` | 本 roadmap |
+| `docs/PHASE2_TUI_ITERATION_PLAN.md` | Phase 2 TUI 详细迭代路线 |
 
 Phase 0 仍应通过本地 InfluxDB/openGemini 兼容端点做人工验收。
 
@@ -147,6 +148,8 @@ REPL meta command：
 
 目标：形成可持续使用的终端控制台。
 
+详细迭代路线见 `docs/PHASE2_TUI_ITERATION_PLAN.md`。该路线经过本地 Claude 设计审视后，明确 Phase 2 聚焦单查询 TUI 工作台、键盘交互、结果浏览、watch 生命周期和上下文结构；cardinality summary、query hints、explain 和 schema explorer tree 保持在 Phase 3。
+
 ### 5.1 交付范围
 
 | 模块 | 交付内容 |
@@ -154,9 +157,12 @@ REPL meta command：
 | Bubble Tea TUI | statusline、query editor、result view、context panel、footer |
 | layout | 窄屏/宽屏自适应 |
 | chart | ASCII line chart |
-| watch | live refresh |
-| renderer switch | table/sparkline/chart 切换 |
-| schema panel | 右侧展示当前 measurement 信息 |
+| result workbench | 当前结果的键盘滚动、元信息和 renderer 切换 |
+| watch | live refresh、取消、间隔控制和 last error 展示 |
+| renderer switch | table/sparkline/chart/json/auto 切换 |
+| context panel | 展示当前 db/rp、measurement schema、result metadata 和 watch state |
+| history panel | 检索并加载 query history |
+| completion menu | 可选择的 autocomplete 候选 |
 
 ### 5.2 TUI 快捷键
 
@@ -170,6 +176,8 @@ REPL meta command：
 | 3 | chart |
 | S | schema panel |
 | W | watch |
+| R | manual refresh |
+| +/- | adjust watch interval |
 | F | fullscreen |
 | Q | quit |
 
@@ -180,8 +188,10 @@ REPL meta command：
 | TUI 启动 | `influx-cli tui` 可进入 |
 | 查询 | TUI 内可执行 query |
 | 结果 | table/sparkline/chart 可切换 |
-| context | 显示 db/rp/schema summary |
-| watch | 能定时刷新且可取消 |
+| context | 显示 db/rp/schema summary、result metadata 和 watch state，不包含 Phase 3 hints |
+| watch | 能定时刷新、调整间隔且可取消，不并发重入 |
+| history | 可检索并加载历史 query |
+| completion | 多候选补全可选择 |
 | resize | 改变终端尺寸不崩溃、不严重重叠 |
 
 ## 6. Phase 3: Schema Intelligence 和 Query Explain
