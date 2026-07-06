@@ -1334,6 +1334,24 @@ func TestAnalyzeMergesetQueryKeySearchDescendingMultiBlockExactMatch(t *testing.
 	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
 		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 2; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].FirstBlockIndex, 1; got != want {
+		t.Fatalf("first cursor window block index = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "key_range_candidate"; got != want {
+		t.Fatalf("first cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[1].FirstBlockIndex, 0; got != want {
+		t.Fatalf("second cursor window block index = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[1].Reason, "key_range_candidate"; got != want {
+		t.Fatalf("second cursor window reason = %q, want %q", got, want)
+	}
 	if got, want := decode.TableSearchHeapCandidates, 2; got != want {
 		t.Fatalf("table search heap candidates = %d, want %d", got, want)
 	}
@@ -1419,6 +1437,18 @@ func TestAnalyzeMergesetQueryKeySearchAscendingExactMatchDoesNotAdvance(t *testi
 	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
 		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 1; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "key_range_candidate"; got != want {
+		t.Fatalf("cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[0].FirstBlockIndex, 0; got != want {
+		t.Fatalf("cursor window first block index = %d, want %d", got, want)
+	}
 	if got, want := decode.TableSearchCursorAdvances, 0; got != want {
 		t.Fatalf("table search cursor advances = %d, want %d", got, want)
 	}
@@ -1475,6 +1505,18 @@ func TestAnalyzeMergesetQueryKeySearchAscendingInBlockMissDoesNotAdvance(t *test
 	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
 		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 1; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "key_range_candidate"; got != want {
+		t.Fatalf("cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorWindows[0].FirstBlockIndex, 0; got != want {
+		t.Fatalf("cursor window first block index = %d, want %d", got, want)
+	}
 	if got, want := decode.TableSearchCursorAdvances, 0; got != want {
 		t.Fatalf("table search cursor advances = %d, want %d", got, want)
 	}
@@ -1526,6 +1568,15 @@ func TestMergesetSearchPlanDoesNotAdvanceWhenDirectCandidateIsUndecoded(t *testi
 	}
 	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
 		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 1; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindows[0].Reason, "key_range_candidate"; got != want {
+		t.Fatalf("cursor window reason = %q, want %q", got, want)
 	}
 	if got, want := decode.TableSearchCursorAdvances, 0; got != want {
 		t.Fatalf("table search cursor advances = %d, want %d", got, want)
@@ -1580,6 +1631,24 @@ func TestAnalyzeMergesetQueryKeySearchAscendingGapAdvancesToNextBlock(t *testing
 	}
 	if got, want := fileDecode.OptimizedDecodeBlocks, 2; got != want {
 		t.Fatalf("file optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := fileDecode.CursorWindowCount, 2; got != want {
+		t.Fatalf("file cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(fileDecode.CursorWindows), 2; got != want {
+		t.Fatalf("file cursor windows = %d, want %d", got, want)
+	}
+	if got, want := fileDecode.CursorWindows[0].Reason, "key_range_candidate"; got != want {
+		t.Fatalf("first file cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := fileDecode.CursorWindows[0].FirstBlockIndex, 0; got != want {
+		t.Fatalf("first file cursor window index = %d, want %d", got, want)
+	}
+	if got, want := fileDecode.CursorWindows[1].Reason, "cursor_advance_candidate"; got != want {
+		t.Fatalf("second file cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := fileDecode.CursorWindows[1].FirstBlockIndex, 1; got != want {
+		t.Fatalf("second file cursor window index = %d, want %d", got, want)
 	}
 	if got, want := fileDecode.TableSearchCursorAdvances, 1; got != want {
 		t.Fatalf("file table search cursor advances = %d, want %d", got, want)

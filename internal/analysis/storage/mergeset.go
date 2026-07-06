@@ -1171,6 +1171,20 @@ func (p *mergesetSearchPlan) ObserveHeader(index int, header mergesetBlockHeader
 			Reason:            reason,
 		})
 	}
+	if candidate && p.SampleLimit > 0 && len(summary.CursorWindows) < p.SampleLimit {
+		window := DecodePathCursorWindow{
+			Key:             hex.EncodeToString(header.FirstItem),
+			LocationBlocks:  1,
+			DecodedBlocks:   1,
+			Reason:          reason,
+			FirstBlockIndex: index,
+		}
+		if p.DecodePath.Mode == "mergeset-item-search-descending" {
+			summary.CursorWindows = append([]DecodePathCursorWindow{window}, summary.CursorWindows...)
+		} else {
+			summary.CursorWindows = append(summary.CursorWindows, window)
+		}
+	}
 }
 
 func (p *mergesetSearchPlan) searchBlockCandidate(index int) (bool, string) {
