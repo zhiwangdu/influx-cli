@@ -87,12 +87,12 @@ func TestParseStorageTagFiltersRejectsMalformedValues(t *testing.T) {
 }
 
 func TestParseStorageFieldFilters(t *testing.T) {
-	got, err := parseStorageFieldFilters([]string{" value = 99 ", "", "status!=true", "temperature>=1.5", "usage<10", "load<=2", "label!=a=b", "status in (true,false)", "value in(1.25,2.5)", "value not in (1.25,2.5)", "region not-in(us,eu)", "value is null", "status is-not true", "region is not us", "notes in review is null", "message=error in transit", "notes in review>5"})
+	got, err := parseStorageFieldFilters([]string{" value = 99 ", "", "status!=true", "temperature>=1.5", "usage<10", "load<=2", "label!=a=b", "status in (true,false)", "message in (\"error, transit\",\"ok)\")", "value in(1.25,2.5)", "value not in (1.25,2.5)", "region not-in(us,eu)", "value is null", "status is-not true", "region is not us", "notes in review is null", "message=error in transit", "notes in review>5"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 16 {
-		t.Fatalf("field filters = %d, want 16", len(got))
+	if len(got) != 17 {
+		t.Fatalf("field filters = %d, want 17", len(got))
 	}
 	if got[0].Key != "value" || got[0].Op != "" || got[0].Value != "99" {
 		t.Fatalf("first field filter = %+v, want value=99", got[0])
@@ -115,32 +115,35 @@ func TestParseStorageFieldFilters(t *testing.T) {
 	if got[6].Key != "status" || got[6].Op != "in" || got[6].Value != "(true,false)" {
 		t.Fatalf("seventh field filter = %+v, want status in (true,false)", got[6])
 	}
-	if got[7].Key != "value" || got[7].Op != "in" || got[7].Value != "(1.25,2.5)" {
-		t.Fatalf("eighth field filter = %+v, want value in(1.25,2.5)", got[7])
+	if got[7].Key != "message" || got[7].Op != "in" || got[7].Value != "(\"error, transit\",\"ok)\")" {
+		t.Fatalf("eighth field filter = %+v, want quoted message set", got[7])
 	}
-	if got[8].Key != "value" || got[8].Op != "not-in" || got[8].Value != "(1.25,2.5)" {
-		t.Fatalf("ninth field filter = %+v, want value not-in (1.25,2.5)", got[8])
+	if got[8].Key != "value" || got[8].Op != "in" || got[8].Value != "(1.25,2.5)" {
+		t.Fatalf("ninth field filter = %+v, want value in(1.25,2.5)", got[8])
 	}
-	if got[9].Key != "region" || got[9].Op != "not-in" || got[9].Value != "(us,eu)" {
-		t.Fatalf("tenth field filter = %+v, want region not-in(us,eu)", got[9])
+	if got[9].Key != "value" || got[9].Op != "not-in" || got[9].Value != "(1.25,2.5)" {
+		t.Fatalf("tenth field filter = %+v, want value not-in (1.25,2.5)", got[9])
 	}
-	if got[10].Key != "value" || got[10].Op != "" || got[10].Value != "null" {
-		t.Fatalf("eleventh field filter = %+v, want value is null", got[10])
+	if got[10].Key != "region" || got[10].Op != "not-in" || got[10].Value != "(us,eu)" {
+		t.Fatalf("eleventh field filter = %+v, want region not-in(us,eu)", got[10])
 	}
-	if got[11].Key != "status" || got[11].Op != "!=" || got[11].Value != "true" {
-		t.Fatalf("twelfth field filter = %+v, want status is-not true", got[11])
+	if got[11].Key != "value" || got[11].Op != "" || got[11].Value != "null" {
+		t.Fatalf("twelfth field filter = %+v, want value is null", got[11])
 	}
-	if got[12].Key != "region" || got[12].Op != "!=" || got[12].Value != "us" {
-		t.Fatalf("thirteenth field filter = %+v, want region is not us", got[12])
+	if got[12].Key != "status" || got[12].Op != "!=" || got[12].Value != "true" {
+		t.Fatalf("thirteenth field filter = %+v, want status is-not true", got[12])
 	}
-	if got[13].Key != "notes in review" || got[13].Op != "" || got[13].Value != "null" {
-		t.Fatalf("fourteenth field filter = %+v, want notes in review is null", got[13])
+	if got[13].Key != "region" || got[13].Op != "!=" || got[13].Value != "us" {
+		t.Fatalf("fourteenth field filter = %+v, want region is not us", got[13])
 	}
-	if got[14].Key != "message" || got[14].Op != "" || got[14].Value != "error in transit" {
-		t.Fatalf("fifteenth field filter = %+v, want message=error in transit", got[14])
+	if got[14].Key != "notes in review" || got[14].Op != "" || got[14].Value != "null" {
+		t.Fatalf("fifteenth field filter = %+v, want notes in review is null", got[14])
 	}
-	if got[15].Key != "notes in review" || got[15].Op != ">" || got[15].Value != "5" {
-		t.Fatalf("sixteenth field filter = %+v, want notes in review>5", got[15])
+	if got[15].Key != "message" || got[15].Op != "" || got[15].Value != "error in transit" {
+		t.Fatalf("sixteenth field filter = %+v, want message=error in transit", got[15])
+	}
+	if got[16].Key != "notes in review" || got[16].Op != ">" || got[16].Value != "5" {
+		t.Fatalf("seventeenth field filter = %+v, want notes in review>5", got[16])
 	}
 }
 

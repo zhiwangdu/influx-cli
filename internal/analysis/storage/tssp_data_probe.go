@@ -317,7 +317,7 @@ func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter 
 		}
 		matches := false
 		for _, value := range values {
-			if tsspDataBlockValueMatches(block, row, FieldFilter{Key: filter.Key, Value: value}) {
+			if tsspDataBlockLiteralMatches(block, row, "=", value) {
 				matches = true
 				break
 			}
@@ -327,8 +327,13 @@ func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter 
 		}
 		return matches
 	}
-	want := filter.Value
+	want := fieldFilterScalarValue(filter.Value)
+	return tsspDataBlockLiteralMatches(block, row, op, want)
+}
+
+func tsspDataBlockLiteralMatches(block tsspDetachedDataBlockInfo, row int, op, want string) bool {
 	got := tsspDataProbeRecordValue(block, row)
+	// null is a reserved decoded-row sentinel even when it came from a quoted literal.
 	if got == "null" || want == "null" {
 		return compareTSSPEqualValues(got, want, op)
 	}

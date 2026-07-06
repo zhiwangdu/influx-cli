@@ -275,16 +275,103 @@ func fieldFilterSetValues(value string) []string {
 	if value == "" {
 		return nil
 	}
-	parts := strings.Split(value, ",")
+	parts := splitFieldFilterSetLiterals(value)
 	values := make([]string, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		values = append(values, part)
+		literal, quoted := fieldFilterLiteralValue(part)
+		if literal == "" && !quoted {
+			continue
+		}
+		values = append(values, literal)
 	}
 	return values
+}
+
+func splitFieldFilterSetLiterals(value string) []string {
+	var parts []string
+	var part strings.Builder
+	var quote byte
+	escaped := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if escaped {
+			part.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if c == '\\' {
+				part.WriteByte(c)
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			part.WriteByte(c)
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+			part.WriteByte(c)
+		case ',':
+			parts = append(parts, part.String())
+			part.Reset()
+		default:
+			part.WriteByte(c)
+		}
+	}
+	parts = append(parts, part.String())
+	return parts
+}
+
+func fieldFilterScalarValue(value string) string {
+	literal, _ := fieldFilterLiteralValue(strings.TrimSpace(value))
+	return literal
+}
+
+func fieldFilterLiteralValue(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 {
+		return value, false
+	}
+	quote := value[0]
+	if (quote != '\'' && quote != '"') || value[len(value)-1] != quote {
+		return value, false
+	}
+	var literal strings.Builder
+	escaped := false
+	for i := 1; i < len(value)-1; i++ {
+		c := value[i]
+		if escaped {
+			switch c {
+			case 'n':
+				literal.WriteByte('\n')
+			case 'r':
+				literal.WriteByte('\r')
+			case 't':
+				literal.WriteByte('\t')
+			default:
+				literal.WriteByte(c)
+			}
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		literal.WriteByte(c)
+	}
+	if escaped {
+		literal.WriteByte('\\')
+	}
+	return literal.String(), true
 }
 
 func expandPaths(ctx context.Context, paths []string, options Options) ([]string, error) {
