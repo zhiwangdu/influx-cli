@@ -555,7 +555,7 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary == nil {
 		return ""
 	}
-	parts := make([]string, 0, 6)
+	parts := make([]string, 0, 7)
 	if summary.Mode != "" {
 		parts = append(parts, summary.Mode)
 	}
@@ -579,6 +579,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.TableSearchHeapInserts > 0 || summary.TableSearchHeapPops > 0 {
 		parts = append(parts, fmt.Sprintf("table_search_heap inserts=%d pops=%d", summary.TableSearchHeapInserts, summary.TableSearchHeapPops))
+	}
+	if summary.DataBlockProbeFilterRows > 0 || summary.DataBlockProbeFilterMatches > 0 || summary.DataBlockProbeFilterRejects > 0 {
+		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects))
 	}
 	if summary.ValueOutputMismatches > 0 {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
