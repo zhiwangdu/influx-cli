@@ -299,7 +299,7 @@ func (c *tsmKeyCursor) readDescendingWindow(values []tsmPoint, minT, maxT int64,
 		nextValues = excludeTSMPoints(nextValues, cur.readMin, cur.readMax)
 		if len(nextValues) > 0 {
 			nextValues = includeTSMPoints(nextValues, minT, maxT)
-			values = mergeTSMPoints(values, nextValues)
+			values = mergeTSMPoints(nextValues, values)
 		}
 		cur.markRead(minT, maxT)
 	}
@@ -325,6 +325,11 @@ func (l *tsmCursorReadLocation) values() []tsmPoint {
 		return nil
 	}
 	points := append([]tsmPoint(nil), l.entry.Points...)
+	if l.path != "" {
+		for i := range points {
+			points[i].File = l.path
+		}
+	}
 	sort.SliceStable(points, func(i, j int) bool {
 		return points[i].Timestamp < points[j].Timestamp
 	})

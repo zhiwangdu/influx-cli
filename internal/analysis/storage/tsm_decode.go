@@ -236,31 +236,11 @@ func summarizeTSMCursorOutput(summary *DecodePathSummary, baseline, optimized ts
 	summary.BaselineCursorReadCalls = baseline.ReadCalls
 	summary.OptimizedCursorReadCalls = optimized.ReadCalls
 	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches, summary.CursorOutputSamples = compareTSMOutputPoints(baseline.Points, optimized.Points, sampleLimit)
+	summary.CursorFinalOutputSamples = sampleTSMFinalOutputPoints(baseline.Points, optimized.Points, sampleLimit)
 }
 
 func compareTSMOutputPoints(baseline, optimized map[tsmOutputPointKey]tsmPoint, sampleLimit int) (int, int, []DecodePathCursorOutput) {
-	keys := make([]tsmOutputPointKey, 0, len(baseline)+len(optimized))
-	seen := map[tsmOutputPointKey]struct{}{}
-	for key := range baseline {
-		keys = append(keys, key)
-		seen[key] = struct{}{}
-	}
-	for key := range optimized {
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].key != keys[j].key {
-			return keys[i].key < keys[j].key
-		}
-		if keys[i].timestamp != keys[j].timestamp {
-			return keys[i].timestamp < keys[j].timestamp
-		}
-		return keys[i].typ < keys[j].typ
-	})
-
+	keys := sortedTSMOutputPointKeys(baseline, optimized)
 	compared := 0
 	mismatches := 0
 	samples := make([]DecodePathCursorOutput, 0)
@@ -289,6 +269,70 @@ func compareTSMOutputPoints(baseline, optimized map[tsmOutputPointKey]tsmPoint, 
 		}
 	}
 	return compared, mismatches, samples
+}
+
+func sampleTSMFinalOutputPoints(baseline, optimized map[tsmOutputPointKey]tsmPoint, sampleLimit int) []DecodePathCursorOutput {
+	if sampleLimit <= 0 || len(optimized) == 0 {
+		return nil
+	}
+	keys := sortedTSMOutputPointKeys(optimized)
+	samples := make([]DecodePathCursorOutput, 0, minInt(sampleLimit, len(keys)))
+	for _, key := range keys {
+		if len(samples) >= sampleLimit {
+			break
+		}
+		point := optimized[key]
+		baselinePoint, baselineOK := baseline[key]
+		samples = append(samples, DecodePathCursorOutput{
+			Key:            key.key,
+			Time:           key.timestamp,
+			Type:           tsmBlockTypeName(key.typ),
+			File:           point.File,
+			OptimizedValue: point.Value,
+			Matches:        baselineOK && baselinePoint.Value == point.Value,
+		})
+	}
+	return samples
+}
+
+func sortedTSMOutputPointKeys(pointSets ...map[tsmOutputPointKey]tsmPoint) []tsmOutputPointKey {
+	if len(pointSets) == 1 {
+		keys := make([]tsmOutputPointKey, 0, len(pointSets[0]))
+		for key := range pointSets[0] {
+			keys = append(keys, key)
+		}
+		sortTSMOutputPointKeys(keys)
+		return keys
+	}
+	total := 0
+	for _, points := range pointSets {
+		total += len(points)
+	}
+	keys := make([]tsmOutputPointKey, 0, total)
+	seen := map[tsmOutputPointKey]struct{}{}
+	for _, points := range pointSets {
+		for key := range points {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+		}
+	}
+	sortTSMOutputPointKeys(keys)
+	return keys
+}
+
+func sortTSMOutputPointKeys(keys []tsmOutputPointKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].key != keys[j].key {
+			return keys[i].key < keys[j].key
+		}
+		if keys[i].timestamp != keys[j].timestamp {
+			return keys[i].timestamp < keys[j].timestamp
+		}
+		return keys[i].typ < keys[j].typ
+	})
 }
 
 func addTSMOutputTimestamps(outputByKey map[string]map[int64]struct{}, key string, timestamps []int64) {

@@ -50,6 +50,7 @@ type tsmPoint struct {
 	Timestamp int64
 	Type      byte
 	Value     string
+	File      string
 }
 
 func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, error) {
