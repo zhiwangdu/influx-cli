@@ -141,8 +141,8 @@ func TestAnalyzeWALSegment(t *testing.T) {
 	if got := decode.CursorOutputSamples[0]; got != wantSample {
 		t.Fatalf("cursor output sample = %+v, want %+v", got, wantSample)
 	}
-	if !containsString(decode.Recommendations, "sampled local WAL write points") {
-		t.Fatalf("recommendations = %v, want write point sample recommendation", decode.Recommendations)
+	if !containsString(decode.Recommendations, "sampled local WAL replay candidates") {
+		t.Fatalf("recommendations = %v, want replay candidate sample recommendation", decode.Recommendations)
 	}
 }
 
@@ -353,6 +353,52 @@ func TestAnalyzeWALWritePointSampleLimitKeepsExactCount(t *testing.T) {
 	}
 	if got, want := decode.CursorOutputSamples[0].Time, int64(10); got != want {
 		t.Fatalf("first cursor output sample time = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeWALSamplesDeleteReplayCandidates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "_00001.wal")
+	if err := writeTestWALSegment(path,
+		testWALDeleteRangeEntry(15, 25, "cpu value", "mem value"),
+		testWALDeleteEntry("cpu value", "disk value"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(20, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatWAL,
+		QueryRange:       queryRange,
+		QueryKeys:        []string{"cpu value"},
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
+		t.Fatalf("optimized blocks = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 2; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	wantSamples := []DecodePathCursorOutput{
+		{Key: "cpu value", Time: 15, Type: "wal-delete-range", OptimizedValue: "15..25", Matches: true},
+		{Key: "cpu value", Type: "wal-delete", OptimizedValue: "delete-key", Matches: true},
+	}
+	for i, want := range wantSamples {
+		if got := decode.CursorOutputSamples[i]; got != want {
+			t.Fatalf("cursor output sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+	if !containsString(decode.Recommendations, "sampled local WAL replay candidates") {
+		t.Fatalf("recommendations = %v, want replay candidate sample recommendation", decode.Recommendations)
 	}
 }
 

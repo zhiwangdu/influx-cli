@@ -455,7 +455,7 @@ func buildWALDecodePathSummary(entries []walEntryReport, options Options) *Decod
 		}
 		summary.DecodeBlocksByType["wal-"+entry.Type]++
 		appendWALDecodeSample(summary, entry, keySet, options.BlockSampleLimit)
-		appendWALCursorOutputSamples(summary, entry, options.BlockSampleLimit)
+		appendWALReplayCandidateSamples(summary, entry, keySet, options.BlockSampleLimit)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
@@ -498,10 +498,21 @@ func appendWALDecodeSample(summary *DecodePathSummary, entry walEntryReport, key
 	summary.Samples = append(summary.Samples, sample)
 }
 
-func appendWALCursorOutputSamples(summary *DecodePathSummary, entry walEntryReport, sampleLimit int) {
-	if sampleLimit <= 0 || entry.Type != "write" {
+func appendWALReplayCandidateSamples(summary *DecodePathSummary, entry walEntryReport, keySet map[string]struct{}, sampleLimit int) {
+	if sampleLimit <= 0 {
 		return
 	}
+	switch entry.Type {
+	case "write":
+		appendWALWritePointSamples(summary, entry, sampleLimit)
+	case "delete":
+		appendWALDeleteSamples(summary, entry, keySet, sampleLimit)
+	case "delete-range":
+		appendWALDeleteRangeSamples(summary, entry, keySet, sampleLimit)
+	}
+}
+
+func appendWALWritePointSamples(summary *DecodePathSummary, entry walEntryReport, sampleLimit int) {
 	for _, point := range entry.WritePointSamples {
 		if len(summary.CursorOutputSamples) >= sampleLimit {
 			return
@@ -511,6 +522,44 @@ func appendWALCursorOutputSamples(summary *DecodePathSummary, entry walEntryRepo
 			Time:           point.Time,
 			Type:           "wal-write-" + point.Type,
 			OptimizedValue: point.Value,
+			Matches:        true,
+		})
+	}
+}
+
+func appendWALDeleteSamples(summary *DecodePathSummary, entry walEntryReport, keySet map[string]struct{}, sampleLimit int) {
+	for _, key := range entry.Keys {
+		if len(summary.CursorOutputSamples) >= sampleLimit {
+			return
+		}
+		if !walKeySelected(key, keySet) {
+			continue
+		}
+		summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
+			Key:            key,
+			Type:           "wal-delete",
+			OptimizedValue: "delete-key",
+			Matches:        true,
+		})
+	}
+}
+
+func appendWALDeleteRangeSamples(summary *DecodePathSummary, entry walEntryReport, keySet map[string]struct{}, sampleLimit int) {
+	if !entry.HasTime {
+		return
+	}
+	for _, key := range entry.Keys {
+		if len(summary.CursorOutputSamples) >= sampleLimit {
+			return
+		}
+		if !walKeySelected(key, keySet) {
+			continue
+		}
+		summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
+			Key:            key,
+			Time:           entry.MinTime,
+			Type:           "wal-delete-range",
+			OptimizedValue: fmt.Sprintf("%d..%d", entry.MinTime, entry.MaxTime),
 			Matches:        true,
 		})
 	}
@@ -550,7 +599,7 @@ func walDecodeRecommendations(summary *DecodePathSummary) []string {
 		recommendations = append(recommendations, "query range maps directly to WAL replay candidates")
 	}
 	if len(summary.CursorOutputSamples) > 0 {
-		recommendations = append(recommendations, "sampled local WAL write points that match the replay key/range filters")
+		recommendations = append(recommendations, "sampled local WAL replay candidates that match the key/range filters")
 	}
 	return recommendations
 }
@@ -578,11 +627,19 @@ func walEntryKeySelected(entry walEntryReport, keySet map[string]struct{}) bool 
 		return true
 	}
 	for _, key := range entry.Keys {
-		if _, ok := keySet[key]; ok {
+		if walKeySelected(key, keySet) {
 			return true
 		}
 	}
 	return false
+}
+
+func walKeySelected(key string, keySet map[string]struct{}) bool {
+	if len(keySet) == 0 {
+		return true
+	}
+	_, ok := keySet[key]
+	return ok
 }
 
 func walEntryTimeOverlaps(entry walEntryReport, keySet map[string]struct{}, queryRange TimeRange) bool {
