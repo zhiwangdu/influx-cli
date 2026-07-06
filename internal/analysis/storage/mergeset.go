@@ -69,8 +69,23 @@ type mergesetItemPayloadSummary struct {
 	FirstItem     []byte
 	LastItem      []byte
 	Samples       [][]byte
+	TSIIndex      mergesetTSIIndexSummary
 	FieldIndex    mergesetFieldIndexSummary
 	DecodePath    *DecodePathSummary
+}
+
+type mergesetTSIIndexSummary struct {
+	Detected            bool
+	KeyToTSIDCount      int
+	TSIDToKeyCount      int
+	TagToTSIDCount      int
+	TagToTSIDValueCount int
+	TagValueCount       int
+	InvalidItems        int
+	KeyToTSIDSamples    []string
+	TSIDToKeySamples    []string
+	TagToTSIDSamples    []string
+	TagValueSamples     []string
 }
 
 type mergesetFieldIndexSummary struct {
@@ -687,6 +702,7 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 			summary.FirstItem = append(summary.FirstItem[:0], decoded.FirstItem...)
 		}
 		summary.LastItem = append(summary.LastItem[:0], decoded.LastItem...)
+		observeMergesetTSIIndexItems(&summary.TSIIndex, decoded.Items, options.BlockSampleLimit)
 		observeMergesetFieldIndexItems(&summary.FieldIndex, decoded.Items, options.BlockSampleLimit)
 		if payloadSampleLimit > len(decoded.Samples) {
 			payloadSampleLimit = len(decoded.Samples)
@@ -1231,6 +1247,7 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 		}
 		report.Extra["item_payload_samples_hex"] = strings.Join(samples, ",")
 	}
+	addMergesetTSIIndexSummary(report, summary.TSIIndex)
 	addMergesetFieldIndexSummary(report, summary.FieldIndex)
 	if summary.ItemsDecoded != metadataItemsCount {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded item payload count=%d differs from metadata items_count=%d", summary.ItemsDecoded, metadataItemsCount))
@@ -1244,12 +1261,338 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 }
 
 const (
-	opengeminiTSINSPrefixTSIDToField byte = 4
-	opengeminiTSINSFieldToPID        byte = 5
-	opengeminiTSINSMstToFieldKey     byte = 6
-	opengeminiTSINSSeparator         byte = 2
-	opengeminiTSIDToFieldItemSize         = 10
+	opengeminiTSINSPrefixKeyToTSID          byte = 0
+	opengeminiTSINSPrefixTSIDToKey          byte = 1
+	opengeminiTSINSPrefixTagToTSIDs         byte = 2
+	opengeminiTSINSPrefixTSIDToField        byte = 4
+	opengeminiTSINSFieldToPID               byte = 5
+	opengeminiTSINSMstToFieldKey            byte = 6
+	opengeminiTSINSPrefixTagKeysToTagValues byte = 7
+	opengeminiTSIEscape                     byte = 0
+	opengeminiTSITagSeparator               byte = 1
+	opengeminiTSINSSeparator                byte = 2
+	opengeminiTSICompositeTagKeyPrefix      byte = 0xfe
+	opengeminiTSIDToFieldItemSize                = 10
 )
+
+type mergesetTSIIndexItem struct {
+	Type        string
+	SeriesKey   string
+	Measurement string
+	TagKey      string
+	TagValue    string
+	TSID        uint64
+	TSIDs       []uint64
+}
+
+func observeMergesetTSIIndexItems(summary *mergesetTSIIndexSummary, items [][]byte, sampleLimit int) {
+	for _, item := range items {
+		parsed, err := parseMergesetTSIIndexItem(item)
+		if err != nil {
+			if isMergesetTSIIndexCandidate(item) {
+				summary.Detected = true
+				summary.InvalidItems++
+			}
+			continue
+		}
+		summary.Detected = true
+		switch parsed.Type {
+		case "key-tsid":
+			summary.KeyToTSIDCount++
+			if sampleLimit > 0 && len(summary.KeyToTSIDSamples) < sampleLimit {
+				summary.KeyToTSIDSamples = append(summary.KeyToTSIDSamples, fmt.Sprintf("%s->%d", parsed.SeriesKey, parsed.TSID))
+			}
+		case "tsid-key":
+			summary.TSIDToKeyCount++
+			if sampleLimit > 0 && len(summary.TSIDToKeySamples) < sampleLimit {
+				summary.TSIDToKeySamples = append(summary.TSIDToKeySamples, fmt.Sprintf("%d:%s", parsed.TSID, parsed.SeriesKey))
+			}
+		case "tag-tsid":
+			summary.TagToTSIDCount++
+			summary.TagToTSIDValueCount += len(parsed.TSIDs)
+			if sampleLimit > 0 && len(summary.TagToTSIDSamples) < sampleLimit {
+				summary.TagToTSIDSamples = append(summary.TagToTSIDSamples, formatMergesetTSITagToTSIDSample(parsed))
+			}
+		case "tag-value":
+			summary.TagValueCount++
+			if sampleLimit > 0 && len(summary.TagValueSamples) < sampleLimit {
+				summary.TagValueSamples = append(summary.TagValueSamples, fmt.Sprintf("%s:%s=%s", parsed.Measurement, parsed.TagKey, parsed.TagValue))
+			}
+		}
+	}
+}
+
+func parseMergesetTSIIndexItem(item []byte) (mergesetTSIIndexItem, error) {
+	var parsed mergesetTSIIndexItem
+	if len(item) == 0 {
+		return parsed, fmt.Errorf("empty TSI index item")
+	}
+	switch item[0] {
+	case opengeminiTSINSPrefixKeyToTSID:
+		if len(item) < 18 {
+			return parsed, fmt.Errorf("short key-to-tsid item")
+		}
+		sep := len(item) - 9
+		if sep < 1 || item[sep] != opengeminiTSINSSeparator {
+			return parsed, fmt.Errorf("key-to-tsid item missing separator")
+		}
+		seriesKey, err := parseOpenGeminiTSIIndexKey(item[1:sep])
+		if err != nil {
+			return parsed, err
+		}
+		parsed.Type = "key-tsid"
+		parsed.SeriesKey = seriesKey
+		parsed.TSID = binary.BigEndian.Uint64(item[len(item)-8:])
+		return parsed, nil
+	case opengeminiTSINSPrefixTSIDToKey:
+		if len(item) < 17 {
+			return parsed, fmt.Errorf("short tsid-to-key item")
+		}
+		seriesKey, err := parseOpenGeminiTSIIndexKey(item[9:])
+		if err != nil {
+			return parsed, err
+		}
+		parsed.Type = "tsid-key"
+		parsed.TSID = binary.BigEndian.Uint64(item[1:9])
+		parsed.SeriesKey = seriesKey
+		return parsed, nil
+	case opengeminiTSINSPrefixTagToTSIDs:
+		if len(item) < 13 {
+			return parsed, fmt.Errorf("short tag-to-tsid item")
+		}
+		parsed.Type = "tag-tsid"
+		measurement, tagKey, tagValue, tsidBytes, err := parseOpenGeminiTSITagTupleWithTail(item[1:])
+		if err != nil {
+			return parsed, err
+		}
+		if len(tsidBytes) == 0 || len(tsidBytes)%8 != 0 {
+			return parsed, fmt.Errorf("tag-to-tsid item has %d trailing TSID byte(s)", len(tsidBytes))
+		}
+		parsed.Measurement = measurement
+		parsed.TagKey = tagKey
+		parsed.TagValue = tagValue
+		for len(tsidBytes) > 0 {
+			parsed.TSIDs = append(parsed.TSIDs, binary.BigEndian.Uint64(tsidBytes[:8]))
+			tsidBytes = tsidBytes[8:]
+		}
+		parsed.TSID = parsed.TSIDs[0]
+		return parsed, nil
+	case opengeminiTSINSPrefixTagKeysToTagValues:
+		if len(item) < 5 {
+			return parsed, fmt.Errorf("short tag-key-to-value item")
+		}
+		parsed.Type = "tag-value"
+		measurement, tagKey, tagValue, err := parseOpenGeminiTSITagTuple(item[1:])
+		if err != nil {
+			return parsed, err
+		}
+		parsed.Measurement = measurement
+		parsed.TagKey = tagKey
+		parsed.TagValue = tagValue
+		return parsed, nil
+	default:
+		return parsed, fmt.Errorf("not an openGemini TSI index item")
+	}
+}
+
+func parseOpenGeminiTSITagTuple(data []byte) (string, string, string, error) {
+	measurement, tagKey, tagValue, tail, err := parseOpenGeminiTSITagTupleWithTail(data)
+	if err != nil {
+		return "", "", "", err
+	}
+	if len(tail) != 0 {
+		return "", "", "", fmt.Errorf("tag tuple has %d trailing byte(s)", len(tail))
+	}
+	return measurement, tagKey, tagValue, nil
+}
+
+func parseOpenGeminiTSITagTupleWithTail(data []byte) (string, string, string, []byte, error) {
+	tail, compositeKey, err := parseOpenGeminiTSITagValue(data)
+	if err != nil {
+		return "", "", "", nil, err
+	}
+	tail, tagValue, err := parseOpenGeminiTSITagValue(tail)
+	if err != nil {
+		return "", "", "", nil, err
+	}
+	measurement, tagKey, err := parseOpenGeminiTSICompositeTagKey(compositeKey)
+	if err != nil {
+		return "", "", "", nil, err
+	}
+	return measurement, tagKey, string(tagValue), tail, nil
+}
+
+func parseOpenGeminiTSIIndexKey(data []byte) (string, error) {
+	if len(data) < 8 {
+		return "", fmt.Errorf("short TSI index key")
+	}
+	keyLen := int(binary.BigEndian.Uint32(data[:4]))
+	if keyLen != len(data) {
+		return "", fmt.Errorf("TSI index key length=%d differs from payload size=%d", keyLen, len(data))
+	}
+	tail := data[4:]
+	if len(tail) < 2 {
+		return "", fmt.Errorf("short TSI measurement length")
+	}
+	measurementLen := int(binary.BigEndian.Uint16(tail[:2]))
+	tail = tail[2:]
+	if len(tail) < measurementLen+2 {
+		return "", fmt.Errorf("short TSI measurement")
+	}
+	measurement := string(tail[:measurementLen])
+	tail = tail[measurementLen:]
+	tagCount := int(binary.BigEndian.Uint16(tail[:2]))
+	tail = tail[2:]
+
+	var display strings.Builder
+	display.WriteString(measurement)
+	for i := 0; i < tagCount; i++ {
+		if len(tail) < 2 {
+			return "", fmt.Errorf("short TSI tag key length")
+		}
+		tagKeyLen := int(binary.BigEndian.Uint16(tail[:2]))
+		tail = tail[2:]
+		if len(tail) < tagKeyLen+2 {
+			return "", fmt.Errorf("short TSI tag key")
+		}
+		tagKey := string(tail[:tagKeyLen])
+		tail = tail[tagKeyLen:]
+		tagValueLen := int(binary.BigEndian.Uint16(tail[:2]))
+		tail = tail[2:]
+		if len(tail) < tagValueLen {
+			return "", fmt.Errorf("short TSI tag value")
+		}
+		tagValue := string(tail[:tagValueLen])
+		tail = tail[tagValueLen:]
+		display.WriteByte(',')
+		display.WriteString(tagKey)
+		display.WriteByte('=')
+		display.WriteString(tagValue)
+	}
+	if len(tail) != 0 {
+		return "", fmt.Errorf("TSI index key has %d trailing byte(s)", len(tail))
+	}
+	return display.String(), nil
+}
+
+func parseOpenGeminiTSITagValue(data []byte) ([]byte, []byte, error) {
+	value := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case opengeminiTSITagSeparator:
+			return data[i+1:], value, nil
+		case opengeminiTSIEscape:
+			i++
+			if i >= len(data) {
+				return nil, nil, fmt.Errorf("truncated TSI tag escape")
+			}
+			switch data[i] {
+			case '0':
+				value = append(value, opengeminiTSIEscape)
+			case '1':
+				value = append(value, opengeminiTSITagSeparator)
+			case '2':
+				value = append(value, opengeminiTSINSSeparator)
+			default:
+				return nil, nil, fmt.Errorf("invalid TSI tag escape %q", data[i])
+			}
+		default:
+			value = append(value, data[i])
+		}
+	}
+	return nil, nil, fmt.Errorf("missing TSI tag separator")
+}
+
+func parseOpenGeminiTSICompositeTagKey(data []byte) (string, string, error) {
+	if len(data) == 0 || data[0] != opengeminiTSICompositeTagKeyPrefix {
+		return "", "", fmt.Errorf("invalid composite tag key prefix")
+	}
+	nameLen, n := binary.Uvarint(data[1:])
+	if n <= 0 {
+		return "", "", fmt.Errorf("invalid composite tag measurement length")
+	}
+	tail := data[1+n:]
+	if uint64(len(tail)) < nameLen {
+		return "", "", fmt.Errorf("short composite tag measurement")
+	}
+	measurement := string(tail[:nameLen])
+	tagKey := string(tail[nameLen:])
+	return measurement, tagKey, nil
+}
+
+func isMergesetTSIIndexCandidate(item []byte) bool {
+	if len(item) == 0 {
+		return false
+	}
+	switch item[0] {
+	case opengeminiTSINSPrefixKeyToTSID:
+		return len(item) >= 18
+	case opengeminiTSINSPrefixTSIDToKey:
+		return len(item) >= 17
+	case opengeminiTSINSPrefixTagToTSIDs:
+		return len(item) >= 13
+	case opengeminiTSINSPrefixTagKeysToTagValues:
+		return len(item) >= 5
+	default:
+		return false
+	}
+}
+
+func formatMergesetTSITagToTSIDSample(item mergesetTSIIndexItem) string {
+	prefix := item.Measurement
+	if item.TagKey != "" {
+		prefix = fmt.Sprintf("%s:%s=%s", item.Measurement, item.TagKey, item.TagValue)
+	}
+	return prefix + "->" + formatMergesetTSIListSample(item.TSIDs)
+}
+
+func formatMergesetTSIListSample(values []uint64) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	if len(values) == 1 {
+		return fmt.Sprint(values[0])
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprint(value))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
+
+func addMergesetTSIIndexSummary(report *FileReport, summary mergesetTSIIndexSummary) {
+	if !summary.Detected {
+		return
+	}
+	report.Extra["opengemini_tsi_index_detected"] = "true"
+	report.Extra["opengemini_tsi_index_key_tsid_mappings"] = fmt.Sprint(summary.KeyToTSIDCount)
+	report.Extra["opengemini_tsi_index_tsid_key_mappings"] = fmt.Sprint(summary.TSIDToKeyCount)
+	report.Extra["opengemini_tsi_index_tag_tsid_mappings"] = fmt.Sprint(summary.TagToTSIDCount)
+	report.Extra["opengemini_tsi_index_tag_tsid_values"] = fmt.Sprint(summary.TagToTSIDValueCount)
+	report.Extra["opengemini_tsi_index_tag_value_mappings"] = fmt.Sprint(summary.TagValueCount)
+	report.Extra["opengemini_tsi_index_invalid_items"] = fmt.Sprint(summary.InvalidItems)
+	if len(summary.KeyToTSIDSamples) > 0 {
+		report.Extra["opengemini_tsi_index_key_tsid_samples"] = strings.Join(summary.KeyToTSIDSamples, ",")
+	}
+	if len(summary.TSIDToKeySamples) > 0 {
+		report.Extra["opengemini_tsi_index_tsid_key_samples"] = strings.Join(summary.TSIDToKeySamples, ",")
+	}
+	if len(summary.TagToTSIDSamples) > 0 {
+		report.Extra["opengemini_tsi_index_tag_tsid_samples"] = strings.Join(summary.TagToTSIDSamples, ",")
+	}
+	if len(summary.TagValueSamples) > 0 {
+		report.Extra["opengemini_tsi_index_tag_value_samples"] = strings.Join(summary.TagValueSamples, ",")
+	}
+	report.BlocksByType["opengemini-tsi-index-key-tsid"] = summary.KeyToTSIDCount
+	report.BlocksByType["opengemini-tsi-index-tsid-key"] = summary.TSIDToKeyCount
+	report.BlocksByType["opengemini-tsi-index-tag-tsid"] = summary.TagToTSIDCount
+	report.BlocksByType["opengemini-tsi-index-tag-tsid-value"] = summary.TagToTSIDValueCount
+	report.BlocksByType["opengemini-tsi-index-tag-value"] = summary.TagValueCount
+	if summary.InvalidItems > 0 {
+		report.BlocksByType["opengemini-tsi-index-invalid-item"] = summary.InvalidItems
+		report.Notices = append(report.Notices, fmt.Sprintf("openGemini TSI index has %d invalid namespaced item(s)", summary.InvalidItems))
+	}
+}
 
 type mergesetFieldIndexItem struct {
 	Type        string

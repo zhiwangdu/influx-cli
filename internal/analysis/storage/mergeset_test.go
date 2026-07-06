@@ -1009,6 +1009,192 @@ func TestAnalyzeMergesetBadItemPayloadNotice(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetOpenGeminiTSIIndexItems(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiTSIKeyToTSID("cpu", "host", "a", 42),
+		encodeTestOpenGeminiTSITSIDToKey(42, "cpu", "host", "a"),
+		encodeTestOpenGeminiTSITagToTSID("cpu", "host", "a", 42),
+		encodeTestOpenGeminiTSITagValue("cpu", "host", "a"),
+	}
+	partPath := filepath.Join(t.TempDir(), "4_1_tsi")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   4,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_tsi_index_detected"], "true"; got != want {
+		t.Fatalf("TSI index detected = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_key_tsid_mappings"], "1"; got != want {
+		t.Fatalf("key->tsid mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tsid_key_mappings"], "1"; got != want {
+		t.Fatalf("tsid->key mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tag_tsid_mappings"], "1"; got != want {
+		t.Fatalf("tag->tsid mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tag_tsid_values"], "1"; got != want {
+		t.Fatalf("tag->tsid values = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tag_value_mappings"], "1"; got != want {
+		t.Fatalf("tag value mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_key_tsid_samples"], "cpu,host=a->42"; got != want {
+		t.Fatalf("key->tsid samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tsid_key_samples"], "42:cpu,host=a"; got != want {
+		t.Fatalf("tsid->key samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tag_tsid_samples"], "cpu:host=a->42"; got != want {
+		t.Fatalf("tag->tsid samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tag_value_samples"], "cpu:host=a"; got != want {
+		t.Fatalf("tag value samples = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-tsi-index-key-tsid"], 1; got != want {
+		t.Fatalf("key->tsid block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-tsi-index-tsid-key"], 1; got != want {
+		t.Fatalf("tsid->key block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-tsi-index-tag-tsid"], 1; got != want {
+		t.Fatalf("tag->tsid block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-tsi-index-tag-tsid-value"], 1; got != want {
+		t.Fatalf("tag->tsid value block count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-tsi-index-tag-value"], 1; got != want {
+		t.Fatalf("tag value block count = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiTSIIndexMultiTSIDTagRow(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiTSITagToTSIDs("cpu", "host", "a", 42, 43),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_multitsi")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_tsi_index_tag_tsid_mappings"], "1"; got != want {
+		t.Fatalf("tag->tsid mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tag_tsid_values"], "2"; got != want {
+		t.Fatalf("tag->tsid values = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tag_tsid_samples"], "cpu:host=a->[42,43]"; got != want {
+		t.Fatalf("tag->tsid samples = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_invalid_items"], "0"; got != want {
+		t.Fatalf("invalid TSI index items = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiTSIIndexInvalidItem(t *testing.T) {
+	items := [][]byte{
+		append([]byte{opengeminiTSINSPrefixTagToTSIDs}, bytes.Repeat([]byte{0xff}, 12)...),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_badtsi")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_tsi_index_invalid_items"], "1"; got != want {
+		t.Fatalf("invalid TSI index items = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["opengemini-tsi-index-invalid-item"], 1; got != want {
+		t.Fatalf("invalid TSI index block count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "openGemini TSI index has 1 invalid") {
+		t.Fatalf("notices = %v, want invalid TSI index notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiTSIIndexEscapedTagValues(t *testing.T) {
+	tagKey := "ho" + string([]byte{opengeminiTSITagSeparator}) + "st"
+	tagValue := "a" + string([]byte{opengeminiTSITagSeparator}) + "b" + string([]byte{opengeminiTSINSSeparator}) + "c" + string([]byte{opengeminiTSIEscape}) + "d"
+	items := [][]byte{
+		encodeTestOpenGeminiTSITagToTSID("cpu", tagKey, tagValue, 42),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_tsiescape")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_tsi_index_tag_tsid_mappings"], "1"; got != want {
+		t.Fatalf("tag->tsid mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_invalid_items"], "0"; got != want {
+		t.Fatalf("invalid TSI index items = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_tag_tsid_samples"], fmt.Sprintf("cpu:%s=%s->42", tagKey, tagValue); got != want {
+		t.Fatalf("tag->tsid samples = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiTSIIndexAllowsEmptyMeasurement(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiTSIKeyToTSID("", "", "", 42),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_emptytsi")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["opengemini_tsi_index_key_tsid_mappings"], "1"; got != want {
+		t.Fatalf("key->tsid mappings = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["opengemini_tsi_index_invalid_items"], "0"; got != want {
+		t.Fatalf("invalid TSI index items = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeMergesetOpenGeminiFieldIndexItems(t *testing.T) {
 	items := [][]byte{
 		encodeTestOpenGeminiFieldIndexTSIDValue(42, "us-east"),
@@ -1507,6 +1693,83 @@ func encodeTestZSTD(data []byte) ([]byte, error) {
 	return encoder.EncodeAll(data, nil), nil
 }
 
+func encodeTestOpenGeminiTSIKeyToTSID(measurement, tagKey, tagValue string, tsid uint64) []byte {
+	item := []byte{opengeminiTSINSPrefixKeyToTSID}
+	item = append(item, encodeTestOpenGeminiTSIIndexKey(measurement, tagKey, tagValue)...)
+	item = append(item, opengeminiTSINSSeparator)
+	return appendTestBigEndianUint64(item, tsid)
+}
+
+func encodeTestOpenGeminiTSITSIDToKey(tsid uint64, measurement, tagKey, tagValue string) []byte {
+	item := []byte{opengeminiTSINSPrefixTSIDToKey}
+	item = appendTestBigEndianUint64(item, tsid)
+	return append(item, encodeTestOpenGeminiTSIIndexKey(measurement, tagKey, tagValue)...)
+}
+
+func encodeTestOpenGeminiTSIIndexKey(measurement, tagKey, tagValue string) []byte {
+	tagCount := uint16(0)
+	tagsSize := 0
+	if tagKey != "" {
+		tagCount = 1
+		tagsSize = 4 + len(tagKey) + len(tagValue)
+	}
+	size := 4 + 2 + len(measurement) + 2 + tagsSize
+	item := appendTestBigEndianUint32(nil, uint32(size))
+	item = appendTestBigEndianUint16(item, uint16(len(measurement)))
+	item = append(item, measurement...)
+	item = appendTestBigEndianUint16(item, tagCount)
+	if tagCount > 0 {
+		item = appendTestBigEndianUint16(item, uint16(len(tagKey)))
+		item = append(item, tagKey...)
+		item = appendTestBigEndianUint16(item, uint16(len(tagValue)))
+		item = append(item, tagValue...)
+	}
+	return item
+}
+
+func encodeTestOpenGeminiTSITagToTSID(measurement, tagKey, tagValue string, tsid uint64) []byte {
+	return encodeTestOpenGeminiTSITagToTSIDs(measurement, tagKey, tagValue, tsid)
+}
+
+func encodeTestOpenGeminiTSITagToTSIDs(measurement, tagKey, tagValue string, tsids ...uint64) []byte {
+	item := []byte{opengeminiTSINSPrefixTagToTSIDs}
+	item = appendTestOpenGeminiTSITagValue(item, encodeTestOpenGeminiTSICompositeTagKey(measurement, tagKey))
+	item = appendTestOpenGeminiTSITagValue(item, []byte(tagValue))
+	for _, tsid := range tsids {
+		item = appendTestBigEndianUint64(item, tsid)
+	}
+	return item
+}
+
+func encodeTestOpenGeminiTSITagValue(measurement, tagKey, tagValue string) []byte {
+	item := []byte{opengeminiTSINSPrefixTagKeysToTagValues}
+	item = appendTestOpenGeminiTSITagValue(item, encodeTestOpenGeminiTSICompositeTagKey(measurement, tagKey))
+	return appendTestOpenGeminiTSITagValue(item, []byte(tagValue))
+}
+
+func encodeTestOpenGeminiTSICompositeTagKey(measurement, tagKey string) []byte {
+	item := []byte{opengeminiTSICompositeTagKeyPrefix}
+	item = appendTestUvarint(item, uint64(len(measurement)))
+	item = append(item, measurement...)
+	return append(item, tagKey...)
+}
+
+func appendTestOpenGeminiTSITagValue(dst, value []byte) []byte {
+	for _, ch := range value {
+		switch ch {
+		case opengeminiTSIEscape:
+			dst = append(dst, opengeminiTSIEscape, '0')
+		case opengeminiTSITagSeparator:
+			dst = append(dst, opengeminiTSIEscape, '1')
+		case opengeminiTSINSSeparator:
+			dst = append(dst, opengeminiTSIEscape, '2')
+		default:
+			dst = append(dst, ch)
+		}
+	}
+	return append(dst, opengeminiTSITagSeparator)
+}
+
 func encodeTestOpenGeminiFieldIndexTSIDValue(tsid uint64, value string) []byte {
 	item := []byte{opengeminiTSINSPrefixTSIDToField}
 	item = appendTestBigEndianUint64(item, tsid)
@@ -1537,6 +1800,12 @@ func containsString(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func appendTestUvarint(dst []byte, value uint64) []byte {
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(buf[:], value)
+	return append(dst, buf[:n]...)
 }
 
 func appendTestBigEndianUint16(dst []byte, value uint16) []byte {
