@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"strings"
@@ -282,6 +283,7 @@ func TestAnalyzeTSSPSamplesAttachedFloatFullBlocks(t *testing.T) {
 		{name: "gorilla", codec: 3, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
 		{name: "same", codec: 4, values: []float64{7.5, 7.5, 7.5}, want: []string{"7.5", "7.5", "7.5"}},
 		{name: "rle", codec: 5, values: []float64{1.5, 1.5, 0, 0, 2.5}, want: []string{"1.5", "1.5", "0", "0", "2.5"}},
+		{name: "mlf", codec: 6, values: []float64{1.11, 0, -2.22, 3.33, 4.44, 5.55, 6.66, 7.77, 8.88, 9.99, 10.01}, want: []string{"1.11", "0", "-2.22", "3.33", "4.44", "5.55", "6.66", "7.77", "8.88", "9.99", "10.01"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
@@ -347,7 +349,7 @@ func TestInspectTSSPDataBlockPayloadFloatFullUnsupportedCodecReason(t *testing.T
 	var payload bytes.Buffer
 	payload.WriteByte(31) // openGemini encoding.BlockFloatFull.
 	writeUint32(&payload, 2)
-	payload.WriteByte(6 << 4) // openGemini floatCompressMLF.
+	payload.WriteByte(7 << 4)
 
 	info, ok, reason := inspectTSSPDataBlockPayload(payload.Bytes())
 	if !ok {
@@ -365,14 +367,55 @@ func TestInspectTSSPDataBlockPayloadFloatFullUnsupportedCodecReason(t *testing.T
 	if info.ValueKnown {
 		t.Fatal("expected unsupported codec value to be unknown")
 	}
-	if got, want := info.ValueReason, "float-full-codec-6"; got != want {
+	if got, want := info.ValueReason, "float-full-codec-7"; got != want {
 		t.Fatalf("value reason = %q, want %q", got, want)
+	}
+}
+
+func TestDecodeTSSPFloatFullMLFSpecialModes(t *testing.T) {
+	rawValues := []float64{1.25, -2.5}
+	var raw bytes.Buffer
+	raw.WriteByte(6 << 4)
+	writeUint16(&raw, uint16(len(rawValues)))
+	raw.WriteByte(tsspMLFCompressModeNone)
+	raw.Write(testTSSPFloatRawBytes(rawValues))
+
+	var zeros bytes.Buffer
+	zeros.WriteByte(6 << 4)
+	writeUint16(&zeros, 3)
+	zeros.WriteByte(tsspMLFCompressModeAllZero)
+
+	var same bytes.Buffer
+	same.WriteByte(6 << 4)
+	writeUint16(&same, 4)
+	same.WriteByte(tsspMLFCompressModeSame)
+	writeUint64(&same, math.Float64bits(7.5))
+
+	for _, tc := range []struct {
+		name    string
+		encoded []byte
+		rows    int
+		want    []string
+	}{
+		{name: "none", encoded: raw.Bytes(), rows: len(rawValues), want: []string{"1.25", "-2.5"}},
+		{name: "all-zero", encoded: zeros.Bytes(), rows: 3, want: []string{"0", "0", "0"}},
+		{name: "same", encoded: same.Bytes(), rows: 4, want: []string{"7.5", "7.5", "7.5", "7.5"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := decodeTSSPFloatFullValues(tc.encoded, tc.rows)
+			if !ok {
+				t.Fatal("decode returned false")
+			}
+			if !equalStrings(got, tc.want) {
+				t.Fatalf("values = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
 func TestAnalyzeTSSPSamplesAttachedFloatFullUnsupportedCodecReason(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
-	times, err := writeTestTSSPWithUnsupportedFloatFullCodec(path, 6)
+	times, err := writeTestTSSPWithUnsupportedFloatFullCodec(path, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,13 +443,13 @@ func TestAnalyzeTSSPSamplesAttachedFloatFullUnsupportedCodecReason(t *testing.T)
 	if got, want := file.Extra["data_block_probe_value_unknowns"], "1"; got != want {
 		t.Fatalf("data block probe value unknowns = %q, want %q", got, want)
 	}
-	if got, want := file.Extra["data_block_probe_value_unknown_reasons"], "float-full-codec-6:1"; got != want {
+	if got, want := file.Extra["data_block_probe_value_unknown_reasons"], "float-full-codec-7:1"; got != want {
 		t.Fatalf("data block probe value unknown reasons = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_types"], "float-full:1,integer-full:1"; got != want {
 		t.Fatalf("data block probe types = %q, want %q", got, want)
 	}
-	if notices := strings.Join(file.Notices, "\n"); !strings.Contains(notices, "unavailable value samples: float-full-codec-6:1") {
+	if notices := strings.Join(file.Notices, "\n"); !strings.Contains(notices, "unavailable value samples: float-full-codec-7:1") {
 		t.Fatalf("notices = %v, want unavailable value sample reason", file.Notices)
 	}
 	decode := file.DecodePath
@@ -2089,6 +2132,12 @@ func testTSSPFloatFullEncodedPayload(values []float64, codec byte) ([]byte, erro
 		payload.Write(encoded)
 	case 5:
 		payload.Write(testTSSPFloatRLEPayload(values))
+	case 6:
+		encoded, err := testTSSPFloatMLFPayload(values)
+		if err != nil {
+			return nil, err
+		}
+		payload.Write(encoded)
 	default:
 		return nil, fmt.Errorf("unsupported test TSSP float codec %d", codec)
 	}
@@ -2140,6 +2189,215 @@ func testTSSPFloatRLEPayload(values []float64) []byte {
 		i += count
 	}
 	return payload.Bytes()
+}
+
+type testTSSPMLFEncodeContext struct {
+	flags            []uint8
+	factors          []uint64
+	min              float64
+	max              float64
+	precision        float64
+	maxPrecisionSize int
+	allSkip          bool
+	allZero          bool
+}
+
+func testTSSPFloatMLFPayload(values []float64) ([]byte, error) {
+	ctx := testTSSPPrepareMLF(values)
+	var payload bytes.Buffer
+	writeUint16(&payload, uint16(len(values)))
+	if ctx.allZero {
+		payload.WriteByte(tsspMLFCompressModeAllZero)
+		return payload.Bytes(), nil
+	}
+
+	precisionPow10 := tsspMLFPow10[ctx.maxPrecisionSize]
+	multiplicand := ctx.max + ctx.precision*1.1
+	payload.WriteByte(byte(ctx.maxPrecisionSize))
+	uncompressedCountOffset := payload.Len()
+	writeUint16(&payload, 0)
+	uncompressedCount := 0
+	factors := make([]uint64, 0, len(values))
+	maxFactorBitSize := 0
+
+	for i, value := range values {
+		if value == 0 {
+			ctx.flags[i] = tsspMLFFlagZero
+			continue
+		}
+		absValue := value
+		if value < 0 {
+			ctx.flags[i] = tsspMLFFlagNegative
+			absValue = -absValue
+		}
+		factor, size := testTSSPEncodeMLFFactor(absValue, multiplicand, ctx.precision)
+		if size >= 0 && testTSSPInvalidMLFFactor(factor, multiplicand, precisionPow10, absValue) {
+			size = -1
+		}
+		if size == -1 {
+			uncompressedCount++
+			ctx.flags[i] = tsspMLFFlagSkip
+			writeUint64(&payload, math.Float64bits(value))
+			continue
+		}
+		factors = append(factors, factor)
+		if size > maxFactorBitSize {
+			maxFactorBitSize = size
+		}
+	}
+	if uncompressedCount == len(values) {
+		payload.Truncate(2)
+		payload.WriteByte(tsspMLFCompressModeNone)
+		payload.Write(testTSSPFloatRawBytes(values))
+		return payload.Bytes(), nil
+	}
+	raw := payload.Bytes()
+	binary.BigEndian.PutUint16(raw[uncompressedCountOffset:uncompressedCountOffset+2], uint16(uncompressedCount))
+	testTSSPWriteMLFBitmap(&payload, ctx.flags)
+	if len(factors) > 0 {
+		writeUint64(&payload, math.Float64bits(multiplicand))
+		publicPrefixSize := testTSSPMLFPublicPrefixSize(ctx.min / multiplicand)
+		testTSSPWriteMLFFactors(&payload, factors, maxFactorBitSize, publicPrefixSize)
+	}
+	return payload.Bytes(), nil
+}
+
+func testTSSPPrepareMLF(values []float64) testTSSPMLFEncodeContext {
+	ctx := testTSSPMLFEncodeContext{
+		flags:   make([]uint8, len(values)),
+		min:     math.MaxFloat64,
+		max:     0,
+		allSkip: true,
+		allZero: true,
+	}
+	limit := len(values) / 10
+	if limit < 16 {
+		limit = 16
+	}
+	for _, value := range values {
+		absValue := value
+		if value == 0 {
+			ctx.allSkip = false
+			continue
+		}
+		ctx.allZero = false
+		if absValue < 0 {
+			absValue = -absValue
+		}
+		if limit > 0 {
+			precisionSize := testTSSPMLFPrecision(absValue, ctx.maxPrecisionSize)
+			if precisionSize != -1 {
+				if precisionSize > ctx.maxPrecisionSize {
+					ctx.maxPrecisionSize = precisionSize
+				}
+				limit--
+				ctx.allSkip = false
+			}
+		}
+		if ctx.max < absValue {
+			ctx.max = absValue
+		}
+		if ctx.min > absValue {
+			ctx.min = absValue
+		}
+	}
+	ctx.precision = 1 / tsspMLFPow10[ctx.maxPrecisionSize]
+	ctx.precision -= ctx.precision / 10
+	return ctx
+}
+
+func testTSSPMLFPrecision(value float64, begin int) int {
+	for i := begin; i < len(tsspMLFPow10); i++ {
+		scaled := value * tsspMLFPow10[i]
+		if scaled >= 1<<52 {
+			break
+		}
+		if scaled >= 1 && testTSSPMLFIsInt(scaled) {
+			return i
+		}
+	}
+	return -1
+}
+
+func testTSSPMLFIsInt(value float64) bool {
+	bits := math.Float64bits(value)
+	shift := bits>>tsspMLFMantissaBits - tsspMLFMiddleNumber
+	mask := uint64(1)<<(tsspMLFMantissaBits-shift) - 1
+	bits &= mask
+	return bits < 8 || bits == mask
+}
+
+func testTSSPEncodeMLFFactor(value, multiplicand, precision float64) (uint64, int) {
+	if value >= multiplicand {
+		return 0, -1
+	}
+	u1 := math.Float64bits((value + multiplicand) / multiplicand)
+	u2 := math.Float64bits((value + precision + multiplicand) / multiplicand)
+	size := bits.LeadingZeros64(u1^u2) - 11
+	if size > tsspMLFMaxFactorBits || size <= 0 {
+		return 0, -1
+	}
+	factor := (u1>>uint(tsspMLFMantissaBits-size) | 1) << uint(tsspMLFMantissaBits-size)
+	return factor, size
+}
+
+func testTSSPInvalidMLFFactor(factor uint64, multiplicand, precision, expected float64) bool {
+	coefficient := math.Float64frombits(factor) - 1
+	return math.Floor(multiplicand*coefficient*precision)/precision != expected
+}
+
+func testTSSPWriteMLFBitmap(payload *bytes.Buffer, flags []uint8) {
+	hasFlags := false
+	for _, flag := range flags {
+		if flag != 0 {
+			hasFlags = true
+			break
+		}
+	}
+	if !hasFlags {
+		payload.WriteByte(tsspMLFBitmapEmpty)
+		return
+	}
+	payload.WriteByte(tsspMLFBitmapNormal)
+	bitmap := make([]byte, tsspMLFBitmapSize(len(flags)))
+	for i, flag := range flags {
+		if flag == 0 {
+			continue
+		}
+		index := i / 4
+		shift := uint(6 - 2*(i%4))
+		bitmap[index] |= flag << shift
+	}
+	payload.Write(bitmap)
+}
+
+func testTSSPMLFPublicPrefixSize(min float64) int {
+	value := math.Float64bits(1+min) ^ (uint64(1)<<62 - 1)
+	return bits.LeadingZeros64(value) - 12
+}
+
+func testTSSPWriteMLFFactors(payload *bytes.Buffer, factors []uint64, bitSize int, publicPrefixSize int) {
+	itemSize := bitSize - publicPrefixSize
+	payload.WriteByte(byte(itemSize))
+	payload.WriteByte(byte(publicPrefixSize))
+	var swap uint64
+	swapSize := 0
+	shift := publicPrefixSize + 12
+	for _, factor := range factors {
+		factor <<= uint(shift)
+		if swapSize+itemSize < 64 {
+			swap |= factor >> uint(swapSize)
+			swapSize += itemSize
+			continue
+		}
+		capacity := 64 - swapSize
+		writeUint64(payload, swap|(factor>>uint(swapSize)))
+		swap = factor << uint(capacity)
+		swapSize = itemSize - capacity
+	}
+	if swapSize > 0 {
+		writeUint64(payload, swap)
+	}
 }
 
 func writeTestTSSPAttachedIntegerFullBlock(buf *bytes.Buffer, values []int64) uint32 {

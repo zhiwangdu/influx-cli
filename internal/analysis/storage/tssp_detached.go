@@ -775,6 +775,12 @@ func decodeTSSPFloatFullValues(encoded []byte, rows int) ([]string, bool) {
 			return nil, false
 		}
 		return formatTSSPFloatValues(values), true
+	case 6:
+		values, ok := decodeTSSPFloatFullMLFValues(encoded[1:], rows)
+		if !ok {
+			return nil, false
+		}
+		return formatTSSPFloatValues(values), true
 	default:
 		return nil, false
 	}
@@ -799,6 +805,14 @@ func decodeTSSPFloatFullOldGorillaValues(encoded []byte, rows int) ([]string, bo
 }
 
 func decodeTSSPFloatFullRawValues(raw []byte, rows int) ([]string, bool) {
+	values, ok := decodeTSSPFloatFullRawFloatValues(raw, rows)
+	if !ok {
+		return nil, false
+	}
+	return formatTSSPFloatValues(values), true
+}
+
+func decodeTSSPFloatFullRawFloatValues(raw []byte, rows int) ([]float64, bool) {
 	if len(raw) != rows*8 {
 		return nil, false
 	}
@@ -806,7 +820,7 @@ func decodeTSSPFloatFullRawValues(raw []byte, rows int) ([]string, bool) {
 	for offset := 0; offset < len(raw); offset += 8 {
 		values[offset/8] = math.Float64frombits(binary.LittleEndian.Uint64(raw[offset : offset+8]))
 	}
-	return formatTSSPFloatValues(values), true
+	return values, true
 }
 
 func decodeTSSPFloatFullSameValues(encoded []byte, rows int) ([]float64, bool) {
@@ -863,6 +877,190 @@ func decodeTSSPFloatFullRLEValues(encoded []byte, rows int) ([]float64, bool) {
 		return nil, false
 	}
 	return values, true
+}
+
+const (
+	tsspMLFCompressModeNone    = 0xF0
+	tsspMLFCompressModeSame    = 0xF1
+	tsspMLFCompressModeAllZero = 0xF2
+
+	tsspMLFBitmapEmpty  = 0
+	tsspMLFBitmapNormal = 1
+
+	tsspMLFFlagZero     = 1
+	tsspMLFFlagNegative = 2
+	tsspMLFFlagSkip     = 3
+
+	tsspMLFMantissaBits  = 52
+	tsspMLFMiddleNumber  = 1023
+	tsspMLFMaxFactorBits = 50
+)
+
+var tsspMLFPow10 = [...]float64{1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000}
+
+func decodeTSSPFloatFullMLFValues(encoded []byte, rows int) ([]float64, bool) {
+	if rows < 0 || len(encoded) < 3 {
+		return nil, false
+	}
+	count := int(binary.BigEndian.Uint16(encoded[:2]))
+	if count != rows {
+		return nil, false
+	}
+	mode := encoded[2]
+	data := encoded[3:]
+	switch mode {
+	case tsspMLFCompressModeNone:
+		return decodeTSSPFloatFullRawFloatValues(data, rows)
+	case tsspMLFCompressModeAllZero:
+		return make([]float64, rows), true
+	case tsspMLFCompressModeSame:
+		if len(data) < 8 {
+			return nil, false
+		}
+		value := math.Float64frombits(binary.BigEndian.Uint64(data[:8]))
+		values := make([]float64, rows)
+		for i := range values {
+			values[i] = value
+		}
+		return values, true
+	default:
+		if int(mode) >= len(tsspMLFPow10) {
+			return nil, false
+		}
+		return decodeTSSPFloatFullMLFFactors(data, rows, int(mode))
+	}
+}
+
+func decodeTSSPFloatFullMLFFactors(data []byte, rows int, precisionSize int) ([]float64, bool) {
+	if len(data) < 3 {
+		return nil, false
+	}
+	uncompressedCount := int(binary.BigEndian.Uint16(data[:2]))
+	data = data[2:]
+	if uncompressedCount < 0 || uncompressedCount > rows || len(data) < uncompressedCount*8+1 {
+		return nil, false
+	}
+	uncompressed := data[:uncompressedCount*8]
+	data = data[uncompressedCount*8:]
+
+	bitmapFlag := data[0]
+	data = data[1:]
+	var bitmap []byte
+	switch bitmapFlag {
+	case tsspMLFBitmapEmpty:
+	case tsspMLFBitmapNormal:
+		size := tsspMLFBitmapSize(rows)
+		if len(data) < size {
+			return nil, false
+		}
+		bitmap = data[:size]
+		data = data[size:]
+	default:
+		return nil, false
+	}
+
+	var multiplicand float64
+	var bitSize, publicPrefixSize int
+	if len(data) > 0 {
+		if len(data) < 10 {
+			return nil, false
+		}
+		multiplicand = math.Float64frombits(binary.BigEndian.Uint64(data[:8]))
+		bitSize = int(data[8])
+		publicPrefixSize = int(data[9])
+		data = data[10:]
+		if bitSize <= 0 || bitSize >= tsspMLFMaxFactorBits || publicPrefixSize < 0 || bitSize+publicPrefixSize > tsspMLFMantissaBits {
+			return nil, false
+		}
+	}
+
+	values := make([]float64, rows)
+	bitPos := 0
+	uncompressedOffset := 0
+	precision := tsspMLFPow10[precisionSize]
+	for i := range values {
+		flag := uint8(0)
+		if bitmap != nil {
+			var ok bool
+			flag, ok = tsspMLFBitmapFlag(bitmap, i)
+			if !ok {
+				return nil, false
+			}
+		}
+		switch flag {
+		case tsspMLFFlagZero:
+			values[i] = 0
+		case tsspMLFFlagSkip:
+			if len(uncompressed)-uncompressedOffset < 8 {
+				return nil, false
+			}
+			values[i] = math.Float64frombits(binary.BigEndian.Uint64(uncompressed[uncompressedOffset : uncompressedOffset+8]))
+			uncompressedOffset += 8
+		case tsspMLFFlagNegative, 0:
+			if bitSize == 0 {
+				return nil, false
+			}
+			coefficient, ok := tsspReadBits(data, bitPos, bitSize)
+			if !ok {
+				return nil, false
+			}
+			bitPos += bitSize
+			value, ok := decodeTSSPFloatFullMLFCoefficient(coefficient, bitSize, publicPrefixSize, precision, multiplicand)
+			if !ok {
+				return nil, false
+			}
+			if flag == tsspMLFFlagNegative {
+				value = -value
+			}
+			values[i] = value
+		default:
+			return nil, false
+		}
+	}
+	if uncompressedOffset != len(uncompressed) {
+		return nil, false
+	}
+	return values, true
+}
+
+func decodeTSSPFloatFullMLFCoefficient(coefficient uint64, bitSize int, publicPrefixSize int, precision float64, multiplicand float64) (float64, bool) {
+	left := tsspMLFMantissaBits - bitSize - publicPrefixSize
+	if left < 0 {
+		return 0, false
+	}
+	prefix := uint64(0)
+	if publicPrefixSize > 0 {
+		prefix = (uint64(1)<<uint(publicPrefixSize) - 1) << uint(tsspMLFMantissaBits-publicPrefixSize)
+	}
+	base := prefix | (uint64(tsspMLFMiddleNumber) << tsspMLFMantissaBits)
+	factor := math.Float64frombits(base|(coefficient<<uint(left))) - 1
+	return math.Floor(multiplicand*factor*precision) / precision, true
+}
+
+func tsspMLFBitmapSize(rows int) int {
+	return 2 * ((rows + 7) / 8)
+}
+
+func tsspMLFBitmapFlag(bitmap []byte, pos int) (uint8, bool) {
+	index := pos / 4
+	if index < 0 || index >= len(bitmap) {
+		return 0, false
+	}
+	shift := uint(6 - 2*(pos%4))
+	return (bitmap[index] >> shift) & 3, true
+}
+
+func tsspReadBits(data []byte, bitPos int, bitSize int) (uint64, bool) {
+	if bitSize < 0 || bitSize > 64 || bitPos < 0 || len(data)*8-bitPos < bitSize {
+		return 0, false
+	}
+	var value uint64
+	for i := 0; i < bitSize; i++ {
+		index := bitPos + i
+		bit := (data[index/8] >> uint(7-index%8)) & 1
+		value = (value << 1) | uint64(bit)
+	}
+	return value, true
 }
 
 func formatTSSPFloatValues(values []float64) []string {
