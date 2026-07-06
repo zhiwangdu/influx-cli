@@ -408,6 +408,23 @@ func TestViewIncludesResultAndWatchContext(t *testing.T) {
 	}
 }
 
+func TestViewShowsLightSyntaxHintForSelectWithoutFrom(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.editor.SetValue("select usage_idle")
+	model.resize(120, 30)
+
+	view := model.View()
+	if !strings.Contains(view, "syntax: SELECT needs FROM") {
+		t.Fatalf("view missing syntax hint:\n%s", view)
+	}
+
+	model.editor.SetValue("select usage_idle from cpu")
+	view = model.View()
+	if strings.Contains(view, "syntax: SELECT needs FROM") {
+		t.Fatalf("view still shows syntax hint for complete query:\n%s", view)
+	}
+}
+
 func TestViewRendersCommonTerminalSizes(t *testing.T) {
 	for _, size := range []struct {
 		width  int

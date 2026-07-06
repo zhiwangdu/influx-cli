@@ -174,6 +174,9 @@ func (m Model) contextPanel(width int) string {
 	if timeRange := m.resultTimeRange(); timeRange != "" {
 		lines = append(lines, "time: "+timeRange)
 	}
+	if hint := m.syntaxHint(); hint != "" {
+		lines = append(lines, "syntax: "+hint)
+	}
 	if m.lastErr != nil {
 		lines = append(lines, "last error: "+oneLine(m.lastErr.Error()))
 	}
@@ -333,6 +336,26 @@ func (m Model) querySummary() string {
 		return ""
 	}
 	return oneLine(query)
+}
+
+func (m Model) syntaxHint() string {
+	query := strings.TrimSpace(m.editor.Value())
+	if query == "" {
+		return ""
+	}
+	tokens := queryTokens(query)
+	if len(tokens) == 0 {
+		return ""
+	}
+	if !strings.EqualFold(tokens[0], "select") {
+		return ""
+	}
+	for _, token := range tokens[1:] {
+		if strings.EqualFold(token, "from") {
+			return ""
+		}
+	}
+	return "SELECT needs FROM"
 }
 
 func (m Model) resultTimeRange() string {
