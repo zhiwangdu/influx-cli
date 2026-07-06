@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -91,6 +92,41 @@ func TestReportResultIncludesTSMCursorDecodePathSummary(t *testing.T) {
 		if !strings.Contains(decodeText, want) {
 			t.Fatalf("decode path summary %q does not contain %q", decodeText, want)
 		}
+	}
+}
+
+func TestDecodePathStringListJSONRoundTrip(t *testing.T) {
+	type payload struct {
+		MergeFiles DecodePathStringList `json:"merge_files,omitempty"`
+	}
+	original := payload{
+		MergeFiles: newDecodePathStringList([]string{"part,one", "part-two"}),
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), `{"merge_files":["part,one","part-two"]}`; got != want {
+		t.Fatalf("json = %s, want %s", got, want)
+	}
+	var decoded payload
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.MergeFiles != original.MergeFiles {
+		t.Fatalf("merge files = %q, want %q", decoded.MergeFiles, original.MergeFiles)
+	}
+
+	var fallback DecodePathStringList
+	if err := json.Unmarshal([]byte(`"part\u0000one"`), &fallback); err != nil {
+		t.Fatal(err)
+	}
+	fallbackData, err := json.Marshal(fallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(fallbackData), `["part\u0000one"]`; got != want {
+		t.Fatalf("fallback json = %s, want %s", got, want)
 	}
 }
 

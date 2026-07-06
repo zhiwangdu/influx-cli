@@ -39,6 +39,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 			matchedKeyFiles[key] = append(matchedKeyFiles[key], file.Path)
 		}
 		for key, result := range file.DecodePath.mergesetSeekResults {
+			result.File = file.Path
 			current, ok := tableSeekResults[key]
 			if !ok || bytes.Compare(result.Item, current.Item) < 0 {
 				tableSeekResults[key] = result
@@ -204,6 +205,7 @@ func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tabl
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
 			Key:            key,
 			Type:           "mergeset-table-search-item",
+			File:           result.File,
 			OptimizedValue: string(result.Item),
 			Matches:        result.Matches,
 		})
@@ -307,40 +309,112 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 	duplicateGroups := 0
 	groupSize := 0
 	var previous []byte
+	var groupFiles []string
+	var groupSampleIndexes []int
+	finishGroup := func() {
+		if groupSize <= 1 {
+			return
+		}
+		files := uniqueStringsPreserveOrder(groupFiles)
+		for _, index := range groupSampleIndexes {
+			summary.CursorOutputSamples[index].RequiresDedup = true
+		}
+		if len(files) > 1 {
+			duplicateGroups++
+			appendMergesetDuplicateMergeWindow(summary, DecodePathCursorWindow{
+				Key:            string(previous),
+				Files:          files,
+				LocationBlocks: len(files),
+				DecodedBlocks:  len(files),
+				RequiresMerge:  true,
+				Reason:         "duplicate_item_merge",
+			}, options.BlockSampleLimit)
+			for _, index := range groupSampleIndexes {
+				summary.CursorOutputSamples[index].MergeFiles = newDecodePathStringList(files)
+				summary.CursorOutputSamples[index].RequiresMerge = true
+			}
+		}
+	}
 	for cursorHeap.Len() > 0 {
 		stream := heap.Pop(&cursorHeap).(*mergesetFileSetScanStream)
 		item := stream.current()
 		total++
 		if previous == nil || !bytes.Equal(previous, item) {
-			if groupSize > 1 {
-				duplicateGroups++
-			}
+			finishGroup()
 			unique++
 			groupSize = 1
 			previous = append(previous[:0], item...)
+			groupFiles = groupFiles[:0]
+			groupSampleIndexes = groupSampleIndexes[:0]
 		} else {
 			duplicates++
 			groupSize++
 		}
+		groupFiles = append(groupFiles, stream.path)
 		if options.BlockSampleLimit > 0 && len(summary.CursorOutputSamples) < options.BlockSampleLimit {
+			sampleIndex := len(summary.CursorOutputSamples)
 			summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
 				Key:            string(item),
 				Type:           "mergeset-table-search-item",
+				File:           stream.path,
 				OptimizedValue: string(item),
 				Matches:        true,
 			})
+			groupSampleIndexes = append(groupSampleIndexes, sampleIndex)
 		}
 		if stream.advance(options.CursorDescending) {
 			heap.Push(&cursorHeap, stream)
 		}
 	}
-	if groupSize > 1 {
-		duplicateGroups++
-	}
+	finishGroup()
 	summary.TableSearchOutputValues = total
 	summary.DeduplicatedOutputValues = unique
 	summary.DuplicateOutputValues = duplicates
 	summary.MergeWindowKeys = duplicateGroups
+}
+
+func appendMergesetDuplicateMergeWindow(summary *DecodePathSummary, window DecodePathCursorWindow, sampleLimit int) {
+	if sampleLimit <= 0 {
+		return
+	}
+	if len(summary.CursorWindows) < sampleLimit {
+		summary.CursorWindows = append(summary.CursorWindows, window)
+		return
+	}
+	for i := 0; i < len(summary.CursorWindows); i++ {
+		if summary.CursorWindows[i].Reason != "duplicate_item_merge" {
+			copy(summary.CursorWindows[i:], summary.CursorWindows[i+1:])
+			summary.CursorWindows[len(summary.CursorWindows)-1] = window
+			summary.mergesetEvictedCursorWindows++
+			return
+		}
+	}
+}
+
+func countMergesetDuplicateMergeWindows(windows []DecodePathCursorWindow) int {
+	count := 0
+	for _, window := range windows {
+		if window.Reason == "duplicate_item_merge" {
+			count++
+		}
+	}
+	return count
+}
+
+func uniqueStringsPreserveOrder(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }
 
 func appendMergesetFileSearchSamples(dst, src *DecodePathSummary, path string, sampleLimit int) {
@@ -392,9 +466,29 @@ func mergesetFileSetScanRecommendations(summary *DecodePathSummary) []string {
 		))
 	}
 	if summary.DuplicateOutputValues > 0 {
+		if summary.MergeWindowKeys > 0 {
+			recommendations = append(recommendations, fmt.Sprintf(
+				"merge/dedup %d duplicate table-scan item candidate(s) across %d cross-part duplicate group(s)",
+				summary.DuplicateOutputValues,
+				summary.MergeWindowKeys,
+			))
+		} else {
+			recommendations = append(recommendations, fmt.Sprintf(
+				"dedup %d duplicate table-scan item candidate(s) within analyzed part cursor(s)",
+				summary.DuplicateOutputValues,
+			))
+		}
+	}
+	if summary.mergesetEvictedCursorWindows > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"merge/dedup %d duplicate table-scan item candidate(s) across %d duplicate group(s)",
-			summary.DuplicateOutputValues,
+			"evicted %d part-level cursor window sample(s) to retain duplicate merge window sample(s)",
+			summary.mergesetEvictedCursorWindows,
+		))
+	}
+	if sampled := countMergesetDuplicateMergeWindows(summary.CursorWindows); sampled > 0 && summary.MergeWindowKeys > sampled {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"sampled %d of %d duplicate merge window(s)",
+			sampled,
 			summary.MergeWindowKeys,
 		))
 	}

@@ -750,6 +750,7 @@ type mergesetDecodedBlockItems struct {
 
 type mergesetSeekResult struct {
 	Item    []byte
+	File    string
 	Matches bool
 }
 

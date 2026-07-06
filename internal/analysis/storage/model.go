@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -365,6 +366,7 @@ type DecodePathSummary struct {
 	Recommendations              []string                  `json:"recommendations,omitempty"`
 	mergesetSeekResults          map[string]mergesetSeekResult
 	mergesetScanItems            [][]byte
+	mergesetEvictedCursorWindows int
 }
 
 type DecodePathBlockDecision struct {
@@ -413,12 +415,50 @@ type DecodePathCursorWindow struct {
 }
 
 type DecodePathCursorOutput struct {
-	Key            string `json:"key"`
-	Time           int64  `json:"time"`
-	Type           string `json:"type"`
-	BaselineValue  string `json:"baseline_value,omitempty"`
-	OptimizedValue string `json:"optimized_value,omitempty"`
-	Matches        bool   `json:"matches"`
+	Key            string               `json:"key"`
+	Time           int64                `json:"time"`
+	Type           string               `json:"type"`
+	File           string               `json:"file,omitempty"`
+	MergeFiles     DecodePathStringList `json:"merge_files,omitempty"`
+	BaselineValue  string               `json:"baseline_value,omitempty"`
+	OptimizedValue string               `json:"optimized_value,omitempty"`
+	Matches        bool                 `json:"matches"`
+	RequiresDedup  bool                 `json:"requires_dedup,omitempty"`
+	RequiresMerge  bool                 `json:"requires_merge,omitempty"`
+}
+
+type DecodePathStringList string
+
+func newDecodePathStringList(values []string) DecodePathStringList {
+	if len(values) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return ""
+	}
+	return DecodePathStringList(data)
+}
+
+func (l DecodePathStringList) MarshalJSON() ([]byte, error) {
+	if l == "" {
+		return json.Marshal([]string(nil))
+	}
+	return []byte(l), nil
+}
+
+func (l *DecodePathStringList) UnmarshalJSON(data []byte) error {
+	var values []string
+	if err := json.Unmarshal(data, &values); err == nil {
+		*l = newDecodePathStringList(values)
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*l = newDecodePathStringList([]string{value})
+	return nil
 }
 
 type BlockReport struct {

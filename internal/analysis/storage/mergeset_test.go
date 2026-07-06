@@ -306,15 +306,24 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 	if got, want := decode.CursorOutputSamples[0].OptimizedValue, "aa"; got != want {
 		t.Fatalf("first cursor output sample = %q, want %q", got, want)
 	}
+	if got, want := decode.CursorOutputSamples[0].File, partPath1; got != want {
+		t.Fatalf("first cursor output files = %v, want %v", got, want)
+	}
 	wantSecondOutput := []byte{'a', 'a', 0, 0, 0, 0, 0, 0, 0, 1}
 	if got := []byte(decode.CursorOutputSamples[1].OptimizedValue); !bytes.Equal(got, wantSecondOutput) {
 		t.Fatalf("second cursor output sample = %x, want %x", got, wantSecondOutput)
+	}
+	if got, want := decode.CursorOutputSamples[1].File, partPath1; got != want {
+		t.Fatalf("second cursor output files = %v, want %v", got, want)
 	}
 	if got, want := decode.CursorOutputSamples[2].OptimizedValue, "ad"; got != want {
 		t.Fatalf("third cursor output sample = %q, want %q", got, want)
 	}
 	if got, want := decode.CursorOutputSamples[3].OptimizedValue, "za"; got != want {
 		t.Fatalf("fourth cursor output sample = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[3].File, partPath2; got != want {
+		t.Fatalf("fourth cursor output files = %v, want %v", got, want)
 	}
 	if !containsString(decode.Recommendations, "TableSearch-style heap ordering") {
 		t.Fatalf("recommendations = %v, want file-set scan recommendation", decode.Recommendations)
@@ -381,8 +390,318 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 			t.Fatalf("cursor output sample[%d] = %x, want %x", i, got, want)
 		}
 	}
+	for i := 0; i < 4; i++ {
+		wantFile := partPath1
+		if i%2 == 1 {
+			wantFile = partPath2
+		}
+		if got := decode.CursorOutputSamples[i].File; got != wantFile {
+			t.Fatalf("cursor output sample[%d] file = %q, want %q", i, got, wantFile)
+		}
+		wantMergeFiles := newDecodePathStringList([]string{partPath1, partPath2})
+		if got := decode.CursorOutputSamples[i].MergeFiles; got != wantMergeFiles {
+			t.Fatalf("cursor output sample[%d] merge files = %q, want %q", i, got, wantMergeFiles)
+		}
+		if !decode.CursorOutputSamples[i].RequiresDedup {
+			t.Fatalf("cursor output sample[%d] should require dedup", i)
+		}
+		if !decode.CursorOutputSamples[i].RequiresMerge {
+			t.Fatalf("cursor output sample[%d] should require merge", i)
+		}
+	}
+	duplicateWindowCount := 0
+	for _, window := range decode.CursorWindows {
+		if window.Reason == "duplicate_item_merge" {
+			duplicateWindowCount++
+			if !window.RequiresMerge {
+				t.Fatalf("duplicate merge window %#v should require merge", window)
+			}
+			if got, want := window.Files, []string{partPath1, partPath2}; !equalStrings(got, want) {
+				t.Fatalf("duplicate merge window files = %v, want %v", got, want)
+			}
+		}
+	}
+	if got, want := duplicateWindowCount, 2; got != want {
+		t.Fatalf("duplicate merge windows = %d, want %d", got, want)
+	}
 	if !containsString(decode.Recommendations, "merge/dedup 2 duplicate table-scan item candidate") {
 		t.Fatalf("recommendations = %v, want duplicate heap output recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeMergesetFileSetTableScanIntraPartDuplicateHeapOutput(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "3_1_dupinpart")
+	items := [][][]byte{{
+		[]byte("aa"),
+		[]byte("aa"),
+		[]byte("ab"),
+	}}
+	if err := writeTestMergesetPartWithItemBlocks(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItemBlocks() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := decode.DuplicateOutputValues, 1; got != want {
+		t.Fatalf("duplicate output values = %d, want %d", got, want)
+	}
+	if got, want := decode.MergeWindowKeys, 0; got != want {
+		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	for i := 0; i < 2; i++ {
+		if got, want := decode.CursorOutputSamples[i].File, partPath; got != want {
+			t.Fatalf("cursor output sample[%d] file = %q, want %q", i, got, want)
+		}
+		if !decode.CursorOutputSamples[i].RequiresDedup {
+			t.Fatalf("cursor output sample[%d] should require dedup", i)
+		}
+		if decode.CursorOutputSamples[i].RequiresMerge {
+			t.Fatalf("cursor output sample[%d] should not require merge", i)
+		}
+		if decode.CursorOutputSamples[i].MergeFiles != "" {
+			t.Fatalf("cursor output sample[%d] merge files = %q, want empty", i, decode.CursorOutputSamples[i].MergeFiles)
+		}
+	}
+	if !containsString(decode.Recommendations, "dedup 1 duplicate table-scan item candidate") {
+		t.Fatalf("recommendations = %v, want intra-part duplicate recommendation", decode.Recommendations)
+	}
+	if containsString(decode.Recommendations, "sampled 0 of") {
+		t.Fatalf("recommendations = %v, want no false duplicate window cap recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeMergesetFileSetTableScanDuplicateWindowSampling(t *testing.T) {
+	dir := t.TempDir()
+	partPath1 := filepath.Join(dir, "3_1_1847A3A45055EEF0")
+	if err := writeTestMergesetPart(partPath1, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6164",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	partPath2 := filepath.Join(dir, "3_1_1847A3A45055EEF1")
+	if err := writeTestMergesetPart(partPath2, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6165",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := len(decode.CursorWindows), 2; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	duplicateWindowCount := 0
+	for _, window := range decode.CursorWindows {
+		if window.Reason == "duplicate_item_merge" {
+			duplicateWindowCount++
+		}
+	}
+	if got, want := duplicateWindowCount, 2; got != want {
+		t.Fatalf("duplicate merge windows = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "evicted 2 part-level cursor window sample") {
+		t.Fatalf("recommendations = %v, want cursor window eviction recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeMergesetFileSetTableScanDuplicateWindowCapRecommendation(t *testing.T) {
+	dir := t.TempDir()
+	items := [][]byte{[]byte("aa"), []byte("ab"), []byte("ac")}
+	partPath1 := filepath.Join(dir, "3_1_dupa")
+	if err := writeTestMergesetPartWithItems(partPath1, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+	partPath2 := filepath.Join(dir, "3_1_dupb")
+	if err := writeTestMergesetPartWithItems(partPath2, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := decode.MergeWindowKeys, 3; got != want {
+		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	duplicateWindowCount := 0
+	for _, window := range decode.CursorWindows {
+		if window.Reason == "duplicate_item_merge" {
+			duplicateWindowCount++
+		}
+	}
+	if got, want := duplicateWindowCount, 2; got != want {
+		t.Fatalf("duplicate merge windows = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "sampled 2 of 3 duplicate merge window") {
+		t.Fatalf("recommendations = %v, want duplicate merge window cap recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "evicted 2 part-level cursor window sample") {
+		t.Fatalf("recommendations = %v, want cursor window eviction recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeMergesetFileSetTableScanDuplicateWindowSamplingDisabled(t *testing.T) {
+	dir := t.TempDir()
+	items := [][]byte{[]byte("aa"), []byte("ab")}
+	partPath1 := filepath.Join(dir, "2_1_dupa")
+	if err := writeTestMergesetPartWithItems(partPath1, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+	partPath2 := filepath.Join(dir, "2_1_dupb")
+	if err := writeTestMergesetPartWithItems(partPath2, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		BlockSampleLimit: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := decode.MergeWindowKeys, 2; got != want {
+		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	if got := len(decode.CursorWindows); got != 0 {
+		t.Fatalf("cursor windows = %d, want 0", got)
+	}
+	if got := len(decode.CursorOutputSamples); got != 0 {
+		t.Fatalf("cursor output samples = %d, want 0", got)
+	}
+	if containsString(decode.Recommendations, "sampled 0 of") {
+		t.Fatalf("recommendations = %v, want no sampled-0 recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeMergesetFileSetTableScanDescendingDuplicateHeapOutput(t *testing.T) {
+	dir := t.TempDir()
+	partPath1 := filepath.Join(dir, "3_1_1847A3A45055EEF0")
+	if err := writeTestMergesetPart(partPath1, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6164",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	partPath2 := filepath.Join(dir, "3_1_1847A3A45055EEF1")
+	if err := writeTestMergesetPart(partPath2, mergesetPartMetadata{
+		ItemsCount:  3,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "6165",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		BlockSampleLimit: 6,
+		CursorDescending: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected top-level decode path")
+	}
+	if got, want := decode.Mode, "mergeset-file-set-table-scan-descending"; got != want {
+		t.Fatalf("decode mode = %q, want %q", got, want)
+	}
+	if got, want := decode.MergeWindowKeys, 2; got != want {
+		t.Fatalf("merge window keys = %d, want %d", got, want)
+	}
+	wantValues := []string{"ae", "ad"}
+	for i, want := range wantValues {
+		if got := decode.CursorOutputSamples[i].OptimizedValue; got != want {
+			t.Fatalf("cursor output sample[%d] = %q, want %q", i, got, want)
+		}
+		if decode.CursorOutputSamples[i].RequiresDedup {
+			t.Fatalf("cursor output sample[%d] should not require dedup", i)
+		}
+		if decode.CursorOutputSamples[i].RequiresMerge {
+			t.Fatalf("cursor output sample[%d] should not require merge", i)
+		}
+		if decode.CursorOutputSamples[i].MergeFiles != "" {
+			t.Fatalf("cursor output sample[%d] merge files = %q, want empty", i, decode.CursorOutputSamples[i].MergeFiles)
+		}
+	}
+	wantSecondOutput := []byte{'a', 'a', 0, 0, 0, 0, 0, 0, 0, 1}
+	for i := 2; i < 4; i++ {
+		if got := []byte(decode.CursorOutputSamples[i].OptimizedValue); !bytes.Equal(got, wantSecondOutput) {
+			t.Fatalf("cursor output sample[%d] = %x, want %x", i, got, wantSecondOutput)
+		}
+		if got, want := decode.CursorOutputSamples[i].MergeFiles, newDecodePathStringList([]string{partPath1, partPath2}); got != want {
+			t.Fatalf("cursor output sample[%d] merge files = %q, want %q", i, got, want)
+		}
+		if !decode.CursorOutputSamples[i].RequiresDedup {
+			t.Fatalf("cursor output sample[%d] should require dedup", i)
+		}
+		if !decode.CursorOutputSamples[i].RequiresMerge {
+			t.Fatalf("cursor output sample[%d] should require merge", i)
+		}
+	}
+	for i := 4; i < 6; i++ {
+		if got, want := decode.CursorOutputSamples[i].OptimizedValue, "aa"; got != want {
+			t.Fatalf("cursor output sample[%d] = %q, want %q", i, got, want)
+		}
+		if got, want := decode.CursorOutputSamples[i].MergeFiles, newDecodePathStringList([]string{partPath1, partPath2}); got != want {
+			t.Fatalf("cursor output sample[%d] merge files = %q, want %q", i, got, want)
+		}
+		if !decode.CursorOutputSamples[i].RequiresDedup {
+			t.Fatalf("cursor output sample[%d] should require dedup", i)
+		}
+		if !decode.CursorOutputSamples[i].RequiresMerge {
+			t.Fatalf("cursor output sample[%d] should require merge", i)
+		}
+	}
+	duplicateWindowCount := 0
+	for _, window := range decode.CursorWindows {
+		if window.Reason == "duplicate_item_merge" {
+			duplicateWindowCount++
+			if got, want := window.Files, []string{partPath1, partPath2}; !equalStrings(got, want) {
+				t.Fatalf("duplicate merge window files = %v, want %v", got, want)
+			}
+		}
+	}
+	if got, want := duplicateWindowCount, 2; got != want {
+		t.Fatalf("duplicate merge windows = %d, want %d", got, want)
 	}
 }
 
@@ -837,6 +1156,9 @@ func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	if got, want := decode.CursorOutputSamples[0].OptimizedValue, "aa"; got != want {
 		t.Fatalf("first cursor output sample value = %q, want %q", got, want)
 	}
+	if got, want := decode.CursorOutputSamples[0].File, partPath1; got != want {
+		t.Fatalf("first cursor output sample file = %q, want %q", got, want)
+	}
 	if decode.CursorOutputSamples[0].Matches {
 		t.Fatal("expected first cursor output sample to be a non-exact table seek result")
 	}
@@ -846,11 +1168,17 @@ func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	if !decode.CursorOutputSamples[1].Matches {
 		t.Fatal("expected second cursor output sample to match exactly")
 	}
+	if got, want := decode.CursorOutputSamples[1].File, partPath1; got != want {
+		t.Fatalf("second cursor output sample file = %q, want %q", got, want)
+	}
 	if got, want := decode.CursorOutputSamples[2].Key, "za"; got != want {
 		t.Fatalf("third cursor output sample key = %q, want %q", got, want)
 	}
 	if !decode.CursorOutputSamples[2].Matches {
 		t.Fatal("expected third cursor output sample to match exactly")
+	}
+	if got, want := decode.CursorOutputSamples[2].File, partPath2; got != want {
+		t.Fatalf("third cursor output sample file = %q, want %q", got, want)
 	}
 	if got, want := decode.TableSearchSeekCalls, 6; got != want {
 		t.Fatalf("table search seek calls = %d, want %d", got, want)
@@ -1813,7 +2141,7 @@ func writeTestMergesetPartWithItemBlocks(path string, blocks [][][]byte) error {
 		items = append(items, block...)
 	}
 	for i := 1; i < len(items); i++ {
-		if bytes.Compare(items[i-1], items[i]) >= 0 {
+		if bytes.Compare(items[i-1], items[i]) > 0 {
 			return fmt.Errorf("test mergeset item %d is not sorted: %x >= %x", i, items[i-1], items[i])
 		}
 	}
