@@ -19,6 +19,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		LocationBlocksByType: map[string]int{},
 		DecodeBlocksByType:   map[string]int{},
 	}
+	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	seriesSet := querySeriesIDSet(options.QuerySeriesIDs)
 	if len(seriesSet) > 0 {
 		summary.QuerySeriesIDs = append([]uint64(nil), options.QuerySeriesIDs...)
@@ -66,10 +67,12 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		for _, chunk := range tsspChunksForCursor(sidChunks, options.CursorDescending) {
 			minTime, maxTime := chunk.minMaxTime()
 			segmentCount := len(chunk.TimeRanges)
-			outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange)
+			columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns)
+			outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange, columnProjection)
 			baselineBytes := tsspChunkSegmentBytes(chunk)
-			baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0)
-			optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples)
+			baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0, tsspColumnProjection{})
+			optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples, columnProjection)
+			projectionMiss := columnProjection.missingAllColumns() && options.QueryRange.Overlaps(minTime, maxTime)
 			valueOutputChecked := false
 			valueOutputAvailable := false
 			valueUnavailableReason := ""
@@ -101,14 +104,16 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 				} else if valueOutputAvailable {
 					summary.OptimizedValueOutputPoints += valueOutputPoints
 				}
+			} else if projectionMiss {
+				summary.SkippedByProjectionBlocks++
 			} else if maxTime < options.QueryRange.Min {
 				summary.SkippedBeforeSeekBlocks++
 			} else {
 				summary.SkippedAfterRangeBlocks++
 			}
 			appendTSSPChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
-				baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, valueOutputChecked, valueOutputAvailable, valueOutputPoints, valueUnavailableReason, options.BlockSampleLimit)
-			appendTSSPChunkCursorWindow(summary, chunk, minTime, maxTime, segmentCount, outputSegments, options.BlockSampleLimit)
+				baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, valueOutputChecked, valueOutputAvailable, valueOutputPoints, valueUnavailableReason, projectionMiss, options.BlockSampleLimit)
+			appendTSSPChunkCursorWindow(summary, chunk, minTime, maxTime, segmentCount, outputSegments, projectionMiss, options.BlockSampleLimit)
 		}
 	}
 
@@ -152,6 +157,7 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 		DecodeBlocksByType:   map[string]int{},
 	}
 	matchedSeriesIDs := map[uint64]struct{}{}
+	matchedColumns := map[string]struct{}{}
 	included := false
 	for _, file := range tsspFilesForCursor(files, options.CursorDescending) {
 		included = true
@@ -159,10 +165,14 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 		for _, id := range file.DecodePath.MatchedSeriesIDs {
 			matchedSeriesIDs[id] = struct{}{}
 		}
+		for _, column := range file.DecodePath.MatchedColumns {
+			matchedColumns[column] = struct{}{}
+		}
 	}
 	if !included {
 		return nil
 	}
+	populateTSSPFileSetColumnProjectionMatches(summary, options.QueryColumns, matchedColumns)
 
 	if len(summary.QuerySeriesIDs) > 0 {
 		for _, id := range summary.QuerySeriesIDs {
@@ -271,6 +281,7 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.LocationBlocks += src.LocationBlocks
 	dst.FilteredDecodeBlocks += src.FilteredDecodeBlocks
 	dst.SkippedByKeyBlocks += src.SkippedByKeyBlocks
+	dst.SkippedByProjectionBlocks += src.SkippedByProjectionBlocks
 	dst.SkippedBeforeSeekBlocks += src.SkippedBeforeSeekBlocks
 	dst.SkippedAfterRangeBlocks += src.SkippedAfterRangeBlocks
 	dst.FullyTombstonedBlocks += src.FullyTombstonedBlocks
@@ -353,13 +364,15 @@ func appendTSSPMetaIndexDecodeSample(summary *DecodePathSummary, meta tsspMetaIn
 }
 
 func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32,
-	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, valueOutputPoints int, valueUnavailableReason string, sampleLimit int) {
+	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, valueOutputPoints int, valueUnavailableReason string, projectionMiss bool, sampleLimit int) {
 	if sampleLimit <= 0 || len(summary.Samples) >= sampleLimit {
 		return
 	}
 	reason := "outside_query_range"
 	decoded := outputSegments > 0
-	if decoded {
+	if projectionMiss {
+		reason = "projected_columns_unavailable"
+	} else if decoded {
 		reason = "segment_overlap"
 		if valueOutputChecked && !valueOutputAvailable {
 			reason = valueUnavailableReason
@@ -388,12 +401,14 @@ func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta
 	})
 }
 
-func appendTSSPChunkCursorWindow(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sampleLimit int) {
+func appendTSSPChunkCursorWindow(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, projectionMiss bool, sampleLimit int) {
 	if sampleLimit <= 0 || len(summary.CursorWindows) >= sampleLimit {
 		return
 	}
 	reason := "outside_query_range"
-	if outputSegments > 0 {
+	if projectionMiss {
+		reason = "projected_columns_unavailable"
+	} else if outputSegments > 0 {
 		reason = "segment_overlap"
 	}
 	summary.CursorWindows = append(summary.CursorWindows, DecodePathCursorWindow{
@@ -409,7 +424,7 @@ func appendTSSPChunkCursorWindow(summary *DecodePathSummary, chunk tsspChunkMeta
 	})
 }
 
-func tsspChunkOutputSegments(chunk tsspChunkMeta, queryRange TimeRange) (int, uint32) {
+func tsspChunkOutputSegments(chunk tsspChunkMeta, queryRange TimeRange, columnProjection tsspColumnProjection) (int, uint32) {
 	if !queryRange.Set {
 		return 0, 0
 	}
@@ -419,8 +434,12 @@ func tsspChunkOutputSegments(chunk tsspChunkMeta, queryRange TimeRange) (int, ui
 		if !queryRange.Overlaps(timeRange.Min, timeRange.Max) {
 			continue
 		}
+		segmentBytes := tsspChunkSegmentBytesAt(chunk, i, columnProjection)
+		if columnProjection.applied && segmentBytes == 0 {
+			continue
+		}
 		segments++
-		size += tsspChunkSegmentBytesAt(chunk, i)
+		size += segmentBytes
 	}
 	return segments, size
 }
@@ -428,14 +447,17 @@ func tsspChunkOutputSegments(chunk tsspChunkMeta, queryRange TimeRange) (int, ui
 func tsspChunkSegmentBytes(chunk tsspChunkMeta) uint32 {
 	var size uint32
 	for i := range chunk.TimeRanges {
-		size += tsspChunkSegmentBytesAt(chunk, i)
+		size += tsspChunkSegmentBytesAt(chunk, i, tsspColumnProjection{})
 	}
 	return size
 }
 
-func tsspChunkSegmentBytesAt(chunk tsspChunkMeta, segment int) uint32 {
+func tsspChunkSegmentBytesAt(chunk tsspChunkMeta, segment int, columnProjection tsspColumnProjection) uint32 {
 	var size uint32
 	for _, column := range chunk.Columns {
+		if !columnProjection.selectedColumn(column.Name) {
+			continue
+		}
 		if segment >= 0 && segment < len(column.Segments) {
 			size += column.Segments[segment].Size
 		}
@@ -443,7 +465,7 @@ func tsspChunkSegmentBytesAt(chunk tsspChunkMeta, segment int) uint32 {
 	return size
 }
 
-func tsspChunkReadAtPlan(chunk tsspChunkMeta, queryRange TimeRange, queryOnly bool, sampleLimit int) (int, []DecodePathReadAtRange) {
+func tsspChunkReadAtPlan(chunk tsspChunkMeta, queryRange TimeRange, queryOnly bool, sampleLimit int, columnProjection tsspColumnProjection) (int, []DecodePathReadAtRange) {
 	calls := 0
 	var ranges []DecodePathReadAtRange
 	for segment, timeRange := range chunk.TimeRanges {
@@ -451,6 +473,9 @@ func tsspChunkReadAtPlan(chunk tsspChunkMeta, queryRange TimeRange, queryOnly bo
 			continue
 		}
 		for _, column := range chunk.Columns {
+			if !columnProjection.selectedColumn(column.Name) {
+				continue
+			}
 			if segment < 0 || segment >= len(column.Segments) {
 				continue
 			}
@@ -477,6 +502,24 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"%d query series id(s) were not found in analyzed TSSP file(s)",
 			len(summary.MissingSeriesIDs),
+		))
+	}
+	if len(summary.MissingColumns) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"%d query column(s) were not found in analyzed TSSP chunk metadata",
+			len(summary.MissingColumns),
+		))
+	}
+	if len(summary.QueryColumns) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"column projection requested for %d TSSP column(s) before data ReadAt",
+			len(summary.QueryColumns),
+		))
+	}
+	if summary.SkippedByProjectionBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"column projection excludes %d in-range TSSP chunk(s) before data ReadAt",
+			summary.SkippedByProjectionBlocks,
 		))
 	}
 	if summary.SkippedByKeyBlocks > 0 {

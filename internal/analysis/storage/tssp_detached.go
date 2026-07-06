@@ -488,6 +488,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 			probe.chunkFailureReason[chunk.SID] = "segment_overlap_data_range_unavailable"
 			continue
 		}
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns)
 		chunkChecked := false
 		chunkAvailable := true
 		chunkFailureReason := ""
@@ -502,6 +503,9 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 			segmentRows := 0
 			segmentBlocks := map[string]tsspDetachedDataBlockInfo{}
 			for _, column := range chunk.Columns {
+				if !columnProjection.selectedColumn(column.Name) {
+					continue
+				}
 				if segment < 0 || segment >= len(column.Segments) {
 					continue
 				}
@@ -2101,6 +2105,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		LocationBlocksByType: map[string]int{},
 		DecodeBlocksByType:   map[string]int{},
 	}
+	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	idSet := queryMetaIndexIDSet(options.QueryMetaIndexIDs)
 	if len(idSet) > 0 {
 		summary.QueryMetaIndexIDs = append([]uint64(nil), options.QueryMetaIndexIDs...)
@@ -2136,10 +2141,12 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		}
 		minTime, maxTime := chunk.minMaxTime()
 		segmentCount := len(chunk.TimeRanges)
-		outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange)
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns)
+		outputSegments, outputBytes := tsspChunkOutputSegments(chunk, options.QueryRange, columnProjection)
 		baselineBytes := tsspChunkSegmentBytes(chunk)
-		baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0)
-		optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples)
+		baselineReadAtCalls, _ := tsspChunkReadAtPlan(chunk, TimeRange{}, false, 0, tsspColumnProjection{})
+		optimizedReadAtCalls, readAtRanges := tsspChunkReadAtPlan(chunk, options.QueryRange, true, maxTSSPReadAtRangeSamples, columnProjection)
+		projectionMiss := columnProjection.missingAllColumns() && options.QueryRange.Overlaps(minTime, maxTime)
 		valueOutputAvailable := false
 		valueOutputChecked := false
 		valueUnavailableReason := ""
@@ -2181,13 +2188,15 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 			} else if valueOutputAvailable {
 				summary.OptimizedValueOutputPoints += valueOutputPoints
 			}
+		} else if projectionMiss {
+			summary.SkippedByProjectionBlocks++
 		} else if maxTime < options.QueryRange.Min {
 			summary.SkippedBeforeSeekBlocks++
 		} else {
 			summary.SkippedAfterRangeBlocks++
 		}
 		appendTSSPDetachedChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
-			baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, valueOutputChecked, valueOutputAvailable, valueOutputPoints, valueUnavailableReason, options.BlockSampleLimit)
+			baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, valueOutputChecked, valueOutputAvailable, valueOutputPoints, valueUnavailableReason, projectionMiss, options.BlockSampleLimit)
 	}
 
 	if dataProbe != nil {
@@ -2217,13 +2226,15 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 }
 
 func appendTSSPDetachedChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32,
-	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, valueOutputPoints int, valueUnavailableReason string, sampleLimit int) {
+	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, valueOutputPoints int, valueUnavailableReason string, projectionMiss bool, sampleLimit int) {
 	if sampleLimit <= 0 || len(summary.Samples) >= sampleLimit {
 		return
 	}
 	reason := "outside_query_range"
 	decoded := outputSegments > 0
-	if decoded {
+	if projectionMiss {
+		reason = "projected_columns_unavailable"
+	} else if decoded {
 		reason = "segment_overlap"
 		if valueOutputChecked && !valueOutputAvailable {
 			reason = valueUnavailableReason
@@ -2478,16 +2489,35 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			len(summary.MissingMetaIndexIDs),
 		))
 	}
+	if len(summary.MissingColumns) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"%d query column(s) were not found in analyzed detached TSSP chunk metadata",
+			len(summary.MissingColumns),
+		))
+	}
+	if len(summary.QueryColumns) > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"column projection requested for %d detached TSSP column(s) before data ReadAt",
+			len(summary.QueryColumns),
+		))
+	}
+	if summary.SkippedByProjectionBlocks > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"column projection excludes %d in-range detached TSSP chunk(s) before data ReadAt",
+			summary.SkippedByProjectionBlocks,
+		))
+	}
 	if summary.SkippedByKeyBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"skip %d detached TSSP chunk(s) outside the requested meta-index ID set",
 			summary.SkippedByKeyBlocks,
 		))
 	}
-	if summary.SavedDecodeBlocks > 0 {
+	rangeFilteredBlocks := summary.SkippedBeforeSeekBlocks + summary.SkippedAfterRangeBlocks
+	if rangeFilteredBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"filter %d detached TSSP chunk candidate(s) outside the query range before data ReadAt",
-			summary.SavedDecodeBlocks,
+			rangeFilteredBlocks,
 		))
 	}
 	if summary.SavedReadSegments > 0 {

@@ -537,6 +537,138 @@ func TestAnalyzeTSSPDetachedMetaIndexSamplesOneRowValueBlocks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedColumnProjectionLimitsDataReadAt(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 42, minTime: 333, maxTime: 333, offset: 1000, size: 13, timeSize: 13},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedOneRowData(filepath.Join(dir, tsspDetachedDataFileName), 1200, chunks[0], 99, 333); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 333)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+		QueryColumns:     []string{"time"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "1"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_blocks"], "1"; got != want {
+		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "integer-one:1"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryColumns, []string{"time"}; !equalStrings(got, want) {
+		t.Fatalf("query columns = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedColumns, []string{"time"}; !equalStrings(got, want) {
+		t.Fatalf("matched columns = %v, want %v", got, want)
+	}
+	if len(decode.MissingColumns) != 0 {
+		t.Fatalf("missing columns = %v, want none", decode.MissingColumns)
+	}
+	if got, want := decode.BaselineReadAtCalls, 2; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 1; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].OptimizedReadAtRanges[0].Column, "time"; got != want {
+		t.Fatalf("projected ReadAt column = %q, want %q", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 0; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "column projection requested for 1 detached TSSP column") {
+		t.Fatalf("recommendations = %v, want detached column projection recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPDetachedColumnProjectionReportsMissingColumn(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 42, minTime: 333, maxTime: 333, offset: 1000, size: 13, timeSize: 13},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedOneRowData(filepath.Join(dir, tsspDetachedDataFileName), 1200, chunks[0], 99, 333); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 333)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+		QueryColumns:     []string{"missing"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "0"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if len(decode.MatchedColumns) != 0 {
+		t.Fatalf("matched columns = %v, want none", decode.MatchedColumns)
+	}
+	if got, want := decode.MissingColumns, []string{"missing"}; !equalStrings(got, want) {
+		t.Fatalf("missing columns = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 0; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedByProjectionBlocks, 1; got != want {
+		t.Fatalf("skipped by projection blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].Reason, "projected_columns_unavailable"; got != want {
+		t.Fatalf("sample reason = %q, want %q", got, want)
+	}
+	if !containsString(decode.Recommendations, "1 query column(s) were not found") {
+		t.Fatalf("recommendations = %v, want missing column recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "column projection excludes 1 in-range detached TSSP chunk") {
+		t.Fatalf("recommendations = %v, want projection skip recommendation", decode.Recommendations)
+	}
+	if containsString(decode.Recommendations, "outside the query range") {
+		t.Fatalf("recommendations = %v, want no range skip recommendation for projection miss", decode.Recommendations)
+	}
+}
+
 func TestInspectTSSPDetachedDataBlockEmptyRows(t *testing.T) {
 	payload := make([]byte, 5)
 	payload[0] = 42 // openGemini encoding.BlockIntegerEmpty.

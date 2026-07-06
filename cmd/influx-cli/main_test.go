@@ -142,6 +142,17 @@ func TestParseStorageCursorDescending(t *testing.T) {
 	}
 }
 
+func TestStorageAnalyzeColumnFlagRegistered(t *testing.T) {
+	cmd := newRootCommand()
+	found, _, err := cmd.Find([]string{"storage", "analyze"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flag := found.Flags().Lookup("column"); flag == nil {
+		t.Fatal("storage analyze --column flag is not registered")
+	}
+}
+
 func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--key", "cpu value", "missing.tsm"})
@@ -178,5 +189,14 @@ func TestStorageAnalyzeMetaIndexIDRequiresRange(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--meta-index-id requires --from and --to") {
 		t.Fatalf("error = %v, want meta-index id range requirement", err)
+	}
+}
+
+func TestStorageAnalyzeColumnRequiresRange(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--column", "value", "missing.tssp"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--column requires --from and --to") {
+		t.Fatalf("error = %v, want column range requirement", err)
 	}
 }

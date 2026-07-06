@@ -27,6 +27,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	options.QueryKeys = normalizeQueryKeys(options.QueryKeys)
 	options.QuerySeriesIDs = normalizeQuerySeriesIDs(options.QuerySeriesIDs)
 	options.QueryMetaIndexIDs = normalizeQuerySeriesIDs(options.QueryMetaIndexIDs)
+	options.QueryColumns = normalizeQueryKeys(options.QueryColumns)
 	options.QueryMeasurements = normalizeQueryKeys(options.QueryMeasurements)
 	options.QueryTags = normalizeTagFilters(options.QueryTags)
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set && options.Format != FormatMergeset {
@@ -37,6 +38,9 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	}
 	if len(options.QueryMetaIndexIDs) > 0 && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query meta-index id filter requires query range")
+	}
+	if len(options.QueryColumns) > 0 && !options.QueryRange.Set {
+		return Report{}, fmt.Errorf("query column filter requires query range")
 	}
 
 	files, err := expandPaths(ctx, paths, options)

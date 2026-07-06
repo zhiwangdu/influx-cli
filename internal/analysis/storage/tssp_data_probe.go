@@ -58,6 +58,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 		if !tsspQuerySeriesSelected(chunk.SID, seriesSet) {
 			continue
 		}
+		columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns)
 		chunkChecked := false
 		chunkAvailable := true
 		chunkFailureReason := ""
@@ -72,6 +73,9 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 			segmentRows := 0
 			segmentBlocks := map[string]tsspDetachedDataBlockInfo{}
 			for _, column := range chunk.Columns {
+				if !columnProjection.selectedColumn(column.Name) {
+					continue
+				}
 				if segment < 0 || segment >= len(column.Segments) {
 					continue
 				}

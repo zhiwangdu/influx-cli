@@ -38,6 +38,7 @@ type Options struct {
 	QueryKeys         []string
 	QuerySeriesIDs    []uint64
 	QueryMetaIndexIDs []uint64
+	QueryColumns      []string
 	QueryMeasurements []string
 	QueryTags         []TagFilter
 	CursorDescending  bool
@@ -295,6 +296,9 @@ type DecodePathSummary struct {
 	QueryRange                   TimeRange                 `json:"query_range,omitempty"`
 	QueryKeys                    []string                  `json:"query_keys,omitempty"`
 	QuerySeriesIDs               []uint64                  `json:"query_series_ids,omitempty"`
+	QueryColumns                 []string                  `json:"query_columns,omitempty"`
+	MatchedColumns               []string                  `json:"matched_columns,omitempty"`
+	MissingColumns               []string                  `json:"missing_columns,omitempty"`
 	MatchedKeys                  []string                  `json:"matched_keys,omitempty"`
 	MissingKeys                  []string                  `json:"missing_keys,omitempty"`
 	MatchedSeriesIDs             []uint64                  `json:"matched_series_ids,omitempty"`
@@ -350,6 +354,7 @@ type DecodePathSummary struct {
 	FilteredDecodeBlocks         int                       `json:"filtered_decode_blocks,omitempty"`
 	SavedDecodeBlocks            int                       `json:"saved_decode_blocks,omitempty"`
 	SkippedByKeyBlocks           int                       `json:"skipped_by_key_blocks,omitempty"`
+	SkippedByProjectionBlocks    int                       `json:"skipped_by_projection_blocks,omitempty"`
 	SkippedBeforeSeekBlocks      int                       `json:"skipped_before_seek_blocks,omitempty"`
 	SkippedAfterRangeBlocks      int                       `json:"skipped_after_range_blocks,omitempty"`
 	FullyTombstonedBlocks        int                       `json:"fully_tombstoned_blocks,omitempty"`

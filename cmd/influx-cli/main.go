@@ -191,6 +191,7 @@ type storageAnalyzeFlags struct {
 	keys         []string
 	seriesIDs    []string
 	metaIndexIDs []string
+	columns      []string
 	measurements []string
 	tags         []string
 	cursorOrder  string
@@ -236,6 +237,9 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if len(metaIndexIDs) > 0 && !queryRange.Set {
 				return fmt.Errorf("--meta-index-id requires --from and --to because decode-path planning needs a query range")
 			}
+			if hasNonEmptyValues(analyzeFlags.columns) && !queryRange.Set {
+				return fmt.Errorf("--column requires --from and --to because TSSP data ReadAt planning needs a query range")
+			}
 			tagFilters, err := parseStorageTagFilters(analyzeFlags.tags)
 			if err != nil {
 				return err
@@ -253,6 +257,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				QueryKeys:         analyzeFlags.keys,
 				QuerySeriesIDs:    seriesIDs,
 				QueryMetaIndexIDs: metaIndexIDs,
+				QueryColumns:      analyzeFlags.columns,
 				QueryMeasurements: analyzeFlags.measurements,
 				QueryTags:         tagFilters,
 				CursorDescending:  cursorDescending,
@@ -307,6 +312,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.keys, "key", nil, "TSM index key or mergeset item key to include in query/search planning; repeat for multiple keys")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.tags, "tag", nil, "TSI tag predicate as key=value; repeat for multiple tags")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.cursorOrder, "cursor-order", "asc", "TSM/openGemini TSSP cursor order for decode-path planning: asc or desc")
