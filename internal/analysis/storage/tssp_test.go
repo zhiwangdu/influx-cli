@@ -535,8 +535,24 @@ func TestAnalyzeTSSPFieldFilterMatchesNullPredicates(t *testing.T) {
 			wantValueOutCount: 1,
 		},
 		{
+			name:              "in-null",
+			filter:            FieldFilter{Key: "value", Op: "in", Value: "(null)"},
+			wantOutputPoints:  "1",
+			wantValueOutCount: 1,
+		},
+		{
 			name:             "not-null",
 			filter:           FieldFilter{Key: "value", Op: "!=", Value: "null"},
+			wantOutputPoints: "2",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "sid:7/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},
+				{Key: "sid:7/value", Time: 555, Type: "float", OptimizedValue: "3.75", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+		{
+			name:             "not-in-null",
+			filter:           FieldFilter{Key: "value", Op: "not-in", Value: "(null)"},
 			wantOutputPoints: "2",
 			wantSamples: []DecodePathCursorOutput{
 				{Key: "sid:7/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},
@@ -828,6 +844,55 @@ func TestAnalyzeTSSPFieldFilterMatchesFloatComparison(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterMatchesFloatInSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "in", Value: "(1.250,2.5)"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "2"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: "in", Value: "(1.250,2.5)"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 2; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordSamples, 2; got != want {
+		t.Fatalf("data block probe record samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].Time, times[0]; got != want {
+		t.Fatalf("first cursor output sample time = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[1].Time, times[1]; got != want {
+		t.Fatalf("second cursor output sample time = %d, want %d", got, want)
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "applied 1 TSSP field filter") {
+		t.Fatalf("recommendations = %v, want field filter recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterMatchesBooleanInequality(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)
@@ -865,6 +930,95 @@ func TestAnalyzeTSSPFieldFilterMatchesBooleanInequality(t *testing.T) {
 	}
 	if got, want := decode.CursorOutputSamples[0].Time, times[1]; got != want {
 		t.Fatalf("first cursor output sample time = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeTSSPFieldFilterMatchesBooleanNotInSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "status", Op: "not in", Value: "(true)"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "status", Op: "not-in", Value: "(true)"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[0].Time, times[1]; got != want {
+		t.Fatalf("first cursor output sample time = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeTSSPFieldFilterMatchesStringInSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithStringFullData(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "in", Value: "(blue,green)"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: "in", Value: "(blue,green)"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "sid:7/value",
+		Time:           444,
+		Type:           "string-full",
+		OptimizedValue: "blue",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "applied 1 TSSP field filter") {
+		t.Fatalf("recommendations = %v, want field filter recommendation", decode.Recommendations)
 	}
 }
 
@@ -2537,6 +2691,25 @@ func TestAnalyzeQueryFieldsRejectInvalidOperator(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported operator") {
 		t.Fatalf("error = %v, want unsupported operator guidance", err)
+	}
+}
+
+func TestAnalyzeQueryFieldsRejectEmptySetOperator(t *testing.T) {
+	for _, op := range []string{"in", "not-in"} {
+		t.Run(op, func(t *testing.T) {
+			queryRange, err := NewTimeRange(1, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Analyze(context.Background(), []string{"missing.tssp"}, Options{
+				Format:      FormatTSSP,
+				QueryRange:  queryRange,
+				QueryFields: []FieldFilter{{Key: "value", Op: op, Value: "()"}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "requires at least one value") {
+				t.Fatalf("error = %v, want empty set guidance", err)
+			}
+		})
 	}
 }
 

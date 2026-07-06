@@ -302,6 +302,23 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 
 func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter FieldFilter) bool {
 	op := fieldFilterOperator(filter)
+	if op == "in" || op == "not-in" {
+		values := fieldFilterSetValues(filter.Value)
+		if len(values) == 0 {
+			return op == "not-in"
+		}
+		matches := false
+		for _, value := range values {
+			if tsspDataBlockValueMatches(block, row, FieldFilter{Key: filter.Key, Value: value}) {
+				matches = true
+				break
+			}
+		}
+		if op == "not-in" {
+			return !matches
+		}
+		return matches
+	}
 	want := filter.Value
 	got := tsspDataProbeRecordValue(block, row)
 	if got == "null" || want == "null" {

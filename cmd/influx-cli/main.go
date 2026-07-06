@@ -445,7 +445,7 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key!=value, key>value, key>=value, key<value, or key<=value", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key!=value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2)", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -474,7 +474,40 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 			return key, op, filterValue, true
 		}
 	}
+	for _, operator := range []struct {
+		text string
+		op   string
+	}{
+		{text: "not-in", op: "not-in"},
+		{text: "not in", op: "not-in"},
+		{text: "in", op: "in"},
+	} {
+		key, filterValue, ok := splitStorageFieldWordOperator(value, operator.text)
+		if ok {
+			return key, operator.op, filterValue, true
+		}
+	}
 	return "", "", "", false
+}
+
+func splitStorageFieldWordOperator(value, operator string) (string, string, bool) {
+	lower := strings.ToLower(value)
+	for _, needle := range []string{" " + operator + " ", " " + operator + "("} {
+		index := strings.Index(lower, needle)
+		if index < 0 {
+			continue
+		}
+		key := value[:index]
+		if strings.ContainsAny(key, "=<>!") {
+			continue
+		}
+		if operator == "in" && strings.EqualFold(strings.TrimSpace(key), "not") {
+			continue
+		}
+		valueStart := index + 1 + len(operator)
+		return key, strings.TrimSpace(value[valueStart:]), true
+	}
+	return "", "", false
 }
 
 func parseStorageSeriesIDs(values []string) ([]uint64, error) {

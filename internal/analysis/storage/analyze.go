@@ -218,23 +218,28 @@ func normalizeFieldFilters(values []FieldFilter) []FieldFilter {
 }
 
 func normalizeFieldFilterOperator(op string) string {
-	op = strings.TrimSpace(op)
-	if op == "=" {
+	op = strings.ToLower(strings.TrimSpace(op))
+	switch op {
+	case "=", "":
 		return ""
+	case "not in", "not-in":
+		return "not-in"
+	default:
+		return op
+	}
+}
+
+func fieldFilterOperator(filter FieldFilter) string {
+	op := normalizeFieldFilterOperator(filter.Op)
+	if op == "" {
+		return "="
 	}
 	return op
 }
 
-func fieldFilterOperator(filter FieldFilter) string {
-	if filter.Op == "" {
-		return "="
-	}
-	return filter.Op
-}
-
 func validFieldFilterOperator(op string) bool {
-	switch op {
-	case "", "!=", ">", ">=", "<", "<=":
+	switch normalizeFieldFilterOperator(op) {
+	case "", "!=", ">", ">=", "<", "<=", "in", "not-in":
 		return true
 	default:
 		return false
@@ -246,11 +251,38 @@ func validateFieldFilters(filters []FieldFilter) error {
 		if !validFieldFilterOperator(filter.Op) {
 			return fmt.Errorf("query field filter %q has unsupported operator %q", filter.Key, filter.Op)
 		}
-		if filter.Value == "" && fieldFilterOperator(filter) != "=" && fieldFilterOperator(filter) != "!=" {
-			return fmt.Errorf("query field filter %q requires a value for operator %q", filter.Key, fieldFilterOperator(filter))
+		op := fieldFilterOperator(filter)
+		if op == "in" || op == "not-in" {
+			if len(fieldFilterSetValues(filter.Value)) == 0 {
+				return fmt.Errorf("query field filter %q requires at least one value for operator %q", filter.Key, op)
+			}
+			continue
+		}
+		if filter.Value == "" && op != "=" && op != "!=" {
+			return fmt.Errorf("query field filter %q requires a value for operator %q", filter.Key, op)
 		}
 	}
 	return nil
+}
+
+func fieldFilterSetValues(value string) []string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && value[0] == '(' && value[len(value)-1] == ')' {
+		value = strings.TrimSpace(value[1 : len(value)-1])
+	}
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		values = append(values, part)
+	}
+	return values
 }
 
 func expandPaths(ctx context.Context, paths []string, options Options) ([]string, error) {
