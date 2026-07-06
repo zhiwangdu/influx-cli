@@ -963,13 +963,15 @@ func parseMergesetVarUint64s(src []byte, count int) ([]uint64, []byte, error) {
 }
 
 type mergesetSearchPlan struct {
-	QueryKeys           []string
-	CandidateBlocks     map[int]struct{}
-	CandidateBlockByKey map[string]int
-	MatchedKeys         map[string]struct{}
-	SeekResults         map[string]mergesetSeekResult
-	SampleLimit         int
-	DecodePath          *DecodePathSummary
+	QueryKeys             []string
+	CandidateBlocks       map[int]struct{}
+	CandidateBlockByKey   map[string]int
+	AdvanceBlockByKey     map[string]int
+	CandidateDecodedByKey map[string]struct{}
+	MatchedKeys           map[string]struct{}
+	SeekResults           map[string]mergesetSeekResult
+	SampleLimit           int
+	DecodePath            *DecodePathSummary
 }
 
 type mergesetScanPlan struct {
@@ -985,6 +987,8 @@ func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options, first
 	plan.QueryKeys = append([]string(nil), options.QueryKeys...)
 	plan.CandidateBlocks = map[int]struct{}{}
 	plan.CandidateBlockByKey = map[string]int{}
+	plan.AdvanceBlockByKey = map[string]int{}
+	plan.CandidateDecodedByKey = map[string]struct{}{}
 	plan.MatchedKeys = map[string]struct{}{}
 	plan.SeekResults = map[string]mergesetSeekResult{}
 	plan.SampleLimit = options.BlockSampleLimit
@@ -1005,11 +1009,16 @@ func newMergesetSearchPlan(headers []mergesetBlockHeader, options Options, first
 			if bytes.Compare(queryItem, lastItem) > 0 {
 				continue
 			}
+			nextIdx := -1
 			idx = 0
 			if bytes.Compare(queryItem, firstItem) > 0 {
-				idx = sort.Search(len(headers), func(i int) bool {
+				nextIdx = sort.Search(len(headers), func(i int) bool {
 					return bytes.Compare(headers[i].FirstItem, queryItem) > 0
-				}) - 1
+				})
+				idx = nextIdx - 1
+			}
+			if nextIdx >= 0 && nextIdx < len(headers) {
+				plan.AdvanceBlockByKey[key] = nextIdx
 			}
 		}
 		if idx >= 0 {
@@ -1139,10 +1148,8 @@ func (p *mergesetSearchPlan) ObserveHeader(index int, header mergesetBlockHeader
 	summary.BaselineDecodeValues += uint64ToInt(uint64(header.ItemsCount))
 	summary.BaselineDecodeBytes += blockBytes
 
-	_, candidate := p.CandidateBlocks[index]
-	reason := "key_not_in_block_range"
+	candidate, reason := p.searchBlockCandidate(index)
 	if candidate {
-		reason = "key_range_candidate"
 		summary.OptimizedDecodeBlocks++
 		summary.FilteredDecodeBlocks++
 		summary.LocationBlocks++
@@ -1166,16 +1173,52 @@ func (p *mergesetSearchPlan) ObserveHeader(index int, header mergesetBlockHeader
 	}
 }
 
+func (p *mergesetSearchPlan) searchBlockCandidate(index int) (bool, string) {
+	if _, candidate := p.CandidateBlocks[index]; candidate {
+		return true, "key_range_candidate"
+	}
+	if p.hasPendingAdvanceBlock(index) {
+		return true, "cursor_advance_candidate"
+	}
+	return false, "key_not_in_block_range"
+}
+
+func (p *mergesetSearchPlan) hasPendingAdvanceBlock(index int) bool {
+	for _, key := range p.QueryKeys {
+		advanceBlock, ok := p.AdvanceBlockByKey[key]
+		if !ok || advanceBlock != index {
+			continue
+		}
+		if _, resolved := p.SeekResults[key]; !resolved {
+			if _, decoded := p.CandidateDecodedByKey[key]; !decoded {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
 func (p *mergesetSearchPlan) ObserveDecodedBlock(index int, decoded mergesetDecodedBlockItems) {
 	if p == nil || p.DecodePath == nil {
 		return
 	}
-	if _, candidate := p.CandidateBlocks[index]; !candidate {
+	if candidate, _ := p.searchBlockCandidate(index); !candidate {
 		return
 	}
 	for _, key := range p.QueryKeys {
-		candidateBlock, ok := p.CandidateBlockByKey[key]
-		if !ok || candidateBlock != index {
+		directCandidate := false
+		if candidateBlock, ok := p.CandidateBlockByKey[key]; ok && candidateBlock == index {
+			directCandidate = true
+			p.CandidateDecodedByKey[key] = struct{}{}
+		}
+		advanceCandidate := false
+		if advanceBlock, ok := p.AdvanceBlockByKey[key]; ok && advanceBlock == index {
+			_, resolved := p.SeekResults[key]
+			_, directDecoded := p.CandidateDecodedByKey[key]
+			advanceCandidate = directDecoded && !resolved
+		}
+		if !directCandidate && !advanceCandidate {
 			continue
 		}
 		result, ok := decoded.SeekResults[key]
@@ -1183,6 +1226,9 @@ func (p *mergesetSearchPlan) ObserveDecodedBlock(index int, decoded mergesetDeco
 			continue
 		}
 		p.SeekResults[key] = result
+		if advanceCandidate {
+			p.DecodePath.TableSearchCursorAdvances++
+		}
 		if !result.Matches {
 			if len(p.DecodePath.CursorOutputSamples) < p.SampleLimit {
 				p.DecodePath.CursorOutputSamples = append(p.DecodePath.CursorOutputSamples, DecodePathCursorOutput{
@@ -1270,6 +1316,9 @@ func mergesetSearchRecommendations(summary *DecodePathSummary, options Options) 
 	}
 	if summary.SavedDecodeBlocks > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("sorted item lookup skips %d mergeset block(s) before payload inspection", summary.SavedDecodeBlocks))
+	}
+	if summary.TableSearchCursorAdvances > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("advanced %d local mergeset cursor step(s) to reach the next item candidate", summary.TableSearchCursorAdvances))
 	}
 	if len(recommendations) == 0 && len(options.QueryKeys) > 0 {
 		recommendations = append(recommendations, "all query item keys mapped to decoded mergeset block candidates")

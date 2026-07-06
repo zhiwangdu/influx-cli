@@ -191,6 +191,8 @@ func addMergesetFileSearchSummary(dst, src *DecodePathSummary, path string, samp
 	dst.TableSearchHeapCandidates += src.TableSearchHeapCandidates
 	dst.TableSearchHeapInserts += src.TableSearchHeapInserts
 	dst.TableSearchHeapPops += src.TableSearchHeapPops
+	dst.TableSearchCursorAdvances += src.TableSearchCursorAdvances
+	dst.TableSearchCursorExhaustions += src.TableSearchCursorExhaustions
 	addTSSPDecodePathCounts(dst.LocationBlocksByType, src.LocationBlocksByType)
 	addTSSPDecodePathCounts(dst.DecodeBlocksByType, src.DecodeBlocksByType)
 	appendMergesetFileSearchSamples(dst, src, path, sampleLimit)
@@ -670,6 +672,9 @@ func mergesetFileSetSearchRecommendations(summary *DecodePathSummary, options Op
 	}
 	if summary.TableSearchHeapCandidates > summary.TableSearchOutputValues {
 		recommendations = append(recommendations, fmt.Sprintf("table search heap compares %d part candidate item(s) for %d table output seek(s)", summary.TableSearchHeapCandidates, summary.TableSearchOutputValues))
+	}
+	if summary.TableSearchCursorAdvances > 0 {
+		recommendations = append(recommendations, fmt.Sprintf("advanced %d local mergeset part cursor step(s) while seeking item candidates", summary.TableSearchCursorAdvances))
 	}
 	if exactMissWindows := countMergesetExactMissCursorWindows(summary.CursorWindows); exactMissWindows > 0 {
 		recommendations = append(recommendations, fmt.Sprintf("recorded %d exact-miss TableSearch seek window(s) with nearest local item candidates", exactMissWindows))

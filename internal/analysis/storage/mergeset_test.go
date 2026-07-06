@@ -1383,6 +1383,285 @@ func TestAnalyzeMergesetQueryKeySearchDescendingMultiBlockExactMatch(t *testing.
 	}
 }
 
+func TestAnalyzeMergesetQueryKeySearchAscendingExactMatchDoesNotAdvance(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_ascendingexact")
+	if err := writeTestMergesetPartWithItemBlocks(partPath, [][][]byte{
+		{
+			[]byte("aa"),
+			[]byte("ab"),
+		},
+		{
+			[]byte("az"),
+			[]byte("ba"),
+		},
+	}); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItemBlocks() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		QueryKeys:        []string{"ab"},
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("expected decode path")
+	}
+	if got, want := decode.MatchedKeys, []string{"ab"}; !equalStrings(got, want) {
+		t.Fatalf("matched keys = %v, want %v", got, want)
+	}
+	if got := len(decode.MissingKeys); got != 0 {
+		t.Fatalf("missing keys = %v, want none", decode.MissingKeys)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
+		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchCursorAdvances, 0; got != want {
+		t.Fatalf("table search cursor advances = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	wantSample := DecodePathCursorOutput{
+		Key:            "ab",
+		Type:           "mergeset-item",
+		OptimizedValue: "ab",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != wantSample {
+		t.Fatalf("cursor output sample = %+v, want %+v", got, wantSample)
+	}
+	if got, want := decode.Samples[1].Reason, "key_not_in_block_range"; got != want {
+		t.Fatalf("second block sample reason = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetQueryKeySearchAscendingInBlockMissDoesNotAdvance(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_ascendinginblock")
+	if err := writeTestMergesetPartWithItemBlocks(partPath, [][][]byte{
+		{
+			[]byte("aa"),
+			[]byte("az"),
+		},
+		{
+			[]byte("ba"),
+			[]byte("bb"),
+		},
+	}); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItemBlocks() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		QueryKeys:        []string{"ay"},
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("expected decode path")
+	}
+	if got, want := decode.MatchedKeys, []string(nil); !equalStrings(got, want) {
+		t.Fatalf("matched keys = %v, want %v", got, want)
+	}
+	if got, want := decode.MissingKeys, []string{"ay"}; !equalStrings(got, want) {
+		t.Fatalf("missing keys = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
+		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchCursorAdvances, 0; got != want {
+		t.Fatalf("table search cursor advances = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	wantSample := DecodePathCursorOutput{
+		Key:            "ay",
+		Type:           "mergeset-item",
+		OptimizedValue: "az",
+		Matches:        false,
+	}
+	if got := decode.CursorOutputSamples[0]; got != wantSample {
+		t.Fatalf("cursor output sample = %+v, want %+v", got, wantSample)
+	}
+	if got, want := decode.Samples[1].Reason, "key_not_in_block_range"; got != want {
+		t.Fatalf("second block sample reason = %q, want %q", got, want)
+	}
+}
+
+func TestMergesetSearchPlanDoesNotAdvanceWhenDirectCandidateIsUndecoded(t *testing.T) {
+	headers := []mergesetBlockHeader{
+		{
+			FirstItem:  []byte("aa"),
+			ItemsCount: 2,
+		},
+		{
+			FirstItem:  []byte("az"),
+			ItemsCount: 2,
+		},
+	}
+	options := Options{
+		QueryKeys:        []string{"ay"},
+		BlockSampleLimit: 4,
+	}
+	plan := newMergesetSearchPlan(headers, options, []byte("aa"), []byte("ba"))
+	plan.ObserveHeader(0, headers[0])
+	plan.ObserveHeader(1, headers[1])
+	decodedNext := newMergesetDecodedBlockItems([]byte("az"), 2, plan.QueryKeys, false)
+	if err := decodedNext.appendItem([]byte("ba"), 2); err != nil {
+		t.Fatal(err)
+	}
+	plan.ObserveDecodedBlock(1, decodedNext)
+	plan.Finish(options)
+
+	decode := plan.DecodePath
+	if decode == nil {
+		t.Fatal("expected decode path")
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
+		t.Fatalf("optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchCursorAdvances, 0; got != want {
+		t.Fatalf("table search cursor advances = %d, want %d", got, want)
+	}
+	if got, want := decode.TableSearchOutputValues, 0; got != want {
+		t.Fatalf("table search output values = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 0; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := decode.MissingKeys, []string{"ay"}; !equalStrings(got, want) {
+		t.Fatalf("missing keys = %v, want %v", got, want)
+	}
+	if got, want := decode.Samples[1].Reason, "key_not_in_block_range"; got != want {
+		t.Fatalf("second block sample reason = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetQueryKeySearchAscendingGapAdvancesToNextBlock(t *testing.T) {
+	dir := t.TempDir()
+	partPath := filepath.Join(dir, "4_2_ascendinggap")
+	if err := writeTestMergesetPartWithItemBlocks(partPath, [][][]byte{
+		{
+			[]byte("aa"),
+			[]byte("ab"),
+		},
+		{
+			[]byte("az"),
+			[]byte("ba"),
+		},
+	}); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItemBlocks() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatMergeset,
+		QueryKeys:        []string{"ay"},
+		BlockSampleLimit: 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileDecode := report.Files[0].DecodePath
+	if fileDecode == nil {
+		t.Fatal("expected file decode path")
+	}
+	if got, want := fileDecode.MatchedKeys, []string(nil); !equalStrings(got, want) {
+		t.Fatalf("file matched keys = %v, want %v", got, want)
+	}
+	if got, want := fileDecode.MissingKeys, []string{"ay"}; !equalStrings(got, want) {
+		t.Fatalf("file missing keys = %v, want %v", got, want)
+	}
+	if got, want := fileDecode.OptimizedDecodeBlocks, 2; got != want {
+		t.Fatalf("file optimized decode blocks = %d, want %d", got, want)
+	}
+	if got, want := fileDecode.TableSearchCursorAdvances, 1; got != want {
+		t.Fatalf("file table search cursor advances = %d, want %d", got, want)
+	}
+	if got, want := fileDecode.TableSearchHeapCandidates, 1; got != want {
+		t.Fatalf("file table search heap candidates = %d, want %d", got, want)
+	}
+	if got, want := fileDecode.TableSearchOutputValues, 1; got != want {
+		t.Fatalf("file table search output values = %d, want %d", got, want)
+	}
+	if got, want := len(fileDecode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("file cursor output samples = %d, want %d", got, want)
+	}
+	wantFileSample := DecodePathCursorOutput{
+		Key:            "ay",
+		Type:           "mergeset-item",
+		OptimizedValue: "az",
+		Matches:        false,
+	}
+	if got := fileDecode.CursorOutputSamples[0]; got != wantFileSample {
+		t.Fatalf("file cursor output sample = %+v, want %+v", got, wantFileSample)
+	}
+	if got, want := len(fileDecode.Samples), 2; got != want {
+		t.Fatalf("file block samples = %d, want %d", got, want)
+	}
+	if got, want := fileDecode.Samples[0].Reason, "key_range_candidate"; got != want {
+		t.Fatalf("first file block sample reason = %q, want %q", got, want)
+	}
+	if got, want := fileDecode.Samples[1].Reason, "cursor_advance_candidate"; got != want {
+		t.Fatalf("second file block sample reason = %q, want %q", got, want)
+	}
+	if !containsString(fileDecode.Recommendations, "advanced 1 local mergeset cursor step") {
+		t.Fatalf("file recommendations = %v, want cursor advance recommendation", fileDecode.Recommendations)
+	}
+
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected file-set decode path")
+	}
+	if got, want := decode.MissingKeys, []string{"ay"}; !equalStrings(got, want) {
+		t.Fatalf("file-set missing keys = %v, want %v", got, want)
+	}
+	if got, want := decode.TableSearchCursorAdvances, 1; got != want {
+		t.Fatalf("file-set cursor advances = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 1; got != want {
+		t.Fatalf("file-set cursor window count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 1; got != want {
+		t.Fatalf("file-set cursor windows = %d, want %d", got, want)
+	}
+	window := decode.CursorWindows[0]
+	if got, want := window.Key, "ay"; got != want {
+		t.Fatalf("file-set cursor window key = %q, want %q", got, want)
+	}
+	if got, want := window.Reason, "item_search_exact_miss"; got != want {
+		t.Fatalf("file-set cursor window reason = %q, want %q", got, want)
+	}
+	if got, want := window.Files, []string{partPath}; !equalStrings(got, want) {
+		t.Fatalf("file-set cursor window files = %v, want %v", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("file-set cursor output samples = %d, want %d", got, want)
+	}
+	wantSample := DecodePathCursorOutput{
+		Key:            "ay",
+		Type:           "mergeset-table-search-item",
+		File:           partPath,
+		OptimizedValue: "az",
+		Matches:        false,
+	}
+	if got := decode.CursorOutputSamples[0]; got != wantSample {
+		t.Fatalf("file-set cursor output sample = %+v, want %+v", got, wantSample)
+	}
+	if !containsString(decode.Recommendations, "advanced 1 local mergeset part cursor step") {
+		t.Fatalf("file-set recommendations = %v, want cursor advance recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "exact-miss TableSearch seek window") {
+		t.Fatalf("file-set recommendations = %v, want exact-miss seek window recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	dir := t.TempDir()
 	partPath1 := filepath.Join(dir, "41_2_1847A3A45055EEF0")
