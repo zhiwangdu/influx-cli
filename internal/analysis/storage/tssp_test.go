@@ -338,6 +338,15 @@ func TestAnalyzeTSSPSamplesAttachedOneRowValueBlocks(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_valid_blocks"], "2"; got != want {
 		t.Fatalf("data block probe valid blocks = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_short_blocks"], "0"; got != want {
+		t.Fatalf("data block probe short blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_unknown_block_types"], "0"; got != want {
+		t.Fatalf("data block probe unknown block types = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_read_errors"], "0"; got != want {
+		t.Fatalf("data block probe read errors = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_value_blocks"], "2"; got != want {
 		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
 	}
@@ -356,6 +365,15 @@ func TestAnalyzeTSSPSamplesAttachedOneRowValueBlocks(t *testing.T) {
 	}
 	if got, want := decode.DataBlockProbeValidBlocks, 2; got != want {
 		t.Fatalf("data block probe valid blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeShortBlocks, 0; got != want {
+		t.Fatalf("data block probe short blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeUnknownTypes, 0; got != want {
+		t.Fatalf("data block probe unknown block types = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeReadErrors, 0; got != want {
+		t.Fatalf("data block probe read errors = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeRowCountBlocks, 2; got != want {
 		t.Fatalf("data block probe row count blocks = %d, want %d", got, want)

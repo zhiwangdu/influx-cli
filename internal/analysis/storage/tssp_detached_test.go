@@ -2889,6 +2889,15 @@ func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_crc_mismatches"], "1"; got != want {
 		t.Fatalf("data block probe crc mismatches = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_short_blocks"], "0"; got != want {
+		t.Fatalf("data block probe short blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_unknown_block_types"], "0"; got != want {
+		t.Fatalf("data block probe unknown block types = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_read_errors"], "0"; got != want {
+		t.Fatalf("data block probe read errors = %q, want %q", got, want)
+	}
 	if !containsString(report.Notices, "detached data block probe found 1 invalid block") {
 		t.Fatalf("notices = %v, want data block probe notice", report.Notices)
 	}
@@ -2911,11 +2920,97 @@ func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
 	if got, want := decode.DataBlockProbeCRCMismatches, 1; got != want {
 		t.Fatalf("data block probe crc mismatches = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeShortBlocks, 0; got != want {
+		t.Fatalf("data block probe short blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeUnknownTypes, 0; got != want {
+		t.Fatalf("data block probe unknown block types = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeReadErrors, 0; got != want {
+		t.Fatalf("data block probe read errors = %d, want %d", got, want)
+	}
 	if got, want := decode.Samples[0].Reason, "segment_overlap_data_crc_unavailable"; got != want {
 		t.Fatalf("sample reason = %q, want %q", got, want)
 	}
 	if !containsString(decode.Recommendations, "detached TSSP data block probe found 1 invalid block") {
 		t.Fatalf("recommendations = %v, want data block probe failure recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPDetachedMetaIndexShortDataBlockBreakdown(t *testing.T) {
+	dir := t.TempDir()
+	chunks := []testTSSPChunkSpec{
+		{sid: 10, minTime: 100, maxTime: 150, offset: 1000, size: crc32.Size},
+	}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedData(filepath.Join(dir, tsspDetachedDataFileName), 1100, chunks...); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(100, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_valid_blocks"], "1"; got != want {
+		t.Fatalf("data block probe valid blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_failures"], "1"; got != want {
+		t.Fatalf("data block probe failures = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_crc_mismatches"], "0"; got != want {
+		t.Fatalf("data block probe crc mismatches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_short_blocks"], "1"; got != want {
+		t.Fatalf("data block probe short blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_unknown_block_types"], "0"; got != want {
+		t.Fatalf("data block probe unknown block types = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_read_errors"], "0"; got != want {
+		t.Fatalf("data block probe read errors = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.DataBlockProbeBlocks, 2; got != want {
+		t.Fatalf("data block probe blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeValidBlocks, 1; got != want {
+		t.Fatalf("data block probe valid blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFailures, 1; got != want {
+		t.Fatalf("data block probe failures = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeShortBlocks, 1; got != want {
+		t.Fatalf("data block probe short blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeUnknownTypes, 0; got != want {
+		t.Fatalf("data block probe unknown block types = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeReadErrors, 0; got != want {
+		t.Fatalf("data block probe read errors = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].Reason, "segment_overlap_data_header_unavailable"; got != want {
+		t.Fatalf("sample reason = %q, want %q", got, want)
 	}
 }
 

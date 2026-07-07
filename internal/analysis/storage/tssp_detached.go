@@ -136,6 +136,9 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["data_block_probe_valid_blocks"] = fmt.Sprint(dataProbe.ValidBlocks)
 			report.Extra["data_block_probe_failures"] = fmt.Sprint(dataProbe.Failures())
 			report.Extra["data_block_probe_crc_mismatches"] = fmt.Sprint(dataProbe.CRCMismatches)
+			report.Extra["data_block_probe_short_blocks"] = fmt.Sprint(dataProbe.ShortBlocks)
+			report.Extra["data_block_probe_unknown_block_types"] = fmt.Sprint(dataProbe.UnknownBlockTypes)
+			report.Extra["data_block_probe_read_errors"] = fmt.Sprint(dataProbe.ReadErrors)
 			report.Extra["data_block_probe_row_count_blocks"] = fmt.Sprint(dataProbe.RowCountBlocks)
 			report.Extra["data_block_probe_row_count_unknowns"] = fmt.Sprint(dataProbe.RowCountUnknowns)
 			report.Extra["data_block_probe_row_count_mismatches"] = fmt.Sprint(dataProbe.RowCountMismatches)
@@ -2302,6 +2305,9 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeValidBlocks = dataProbe.ValidBlocks
 		summary.DataBlockProbeFailures = dataProbe.Failures()
 		summary.DataBlockProbeCRCMismatches = dataProbe.CRCMismatches
+		summary.DataBlockProbeShortBlocks = dataProbe.ShortBlocks
+		summary.DataBlockProbeUnknownTypes = dataProbe.UnknownBlockTypes
+		summary.DataBlockProbeReadErrors = dataProbe.ReadErrors
 		summary.DataBlockProbeRowCountBlocks = dataProbe.RowCountBlocks
 		summary.DataBlockProbeRowUnknowns = dataProbe.RowCountUnknowns
 		summary.DataBlockProbeRowMismatches = dataProbe.RowCountMismatches
