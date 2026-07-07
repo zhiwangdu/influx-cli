@@ -1,13 +1,17 @@
 package storage
 
 import (
+	"fmt"
 	"math"
 	"sort"
 )
 
 type tsmCursorExecution struct {
-	Points    map[tsmOutputPointKey]tsmPoint
-	ReadCalls int
+	Points  map[tsmOutputPointKey]tsmPoint
+	Samples []DecodePathCursorStep
+
+	ReadCalls   int
+	cursorIndex int
 }
 
 type tsmCursorReadLocation struct {
@@ -19,7 +23,7 @@ type tsmCursorReadLocation struct {
 	readMax    int64
 }
 
-func executeTSMCandidateCursorOutputs(locationsByKey map[string][]tsmCursorCandidate, tombstones []tsmTombstoneEntry, queryRange TimeRange, decodedOnly bool, descending bool) tsmCursorExecution {
+func executeTSMCandidateCursorOutputs(locationsByKey map[string][]tsmCursorCandidate, tombstones []tsmTombstoneEntry, queryRange TimeRange, decodedOnly bool, descending bool, sampleLimit int) tsmCursorExecution {
 	locations := map[string][]tsmCursorReadLocation{}
 	for key, candidates := range locationsByKey {
 		for _, candidate := range candidates {
@@ -29,10 +33,10 @@ func executeTSMCandidateCursorOutputs(locationsByKey map[string][]tsmCursorCandi
 			locations[key] = append(locations[key], newTSMCursorReadLocation("", candidate.index, candidate.entry, tombstones, queryRange, descending))
 		}
 	}
-	return executeTSMCursorOutputs(locations, queryRange, descending)
+	return executeTSMCursorOutputs(locations, queryRange, descending, sampleLimit)
 }
 
-func executeTSMFileStoreCursorOutputs(locationsByKey map[string][]tsmFileStoreLocation, queryRange TimeRange, decodedOnly bool, descending bool) tsmCursorExecution {
+func executeTSMFileStoreCursorOutputs(locationsByKey map[string][]tsmFileStoreLocation, queryRange TimeRange, decodedOnly bool, descending bool, sampleLimit int) tsmCursorExecution {
 	locations := map[string][]tsmCursorReadLocation{}
 	for key, fileLocations := range locationsByKey {
 		for _, location := range fileLocations {
@@ -42,7 +46,7 @@ func executeTSMFileStoreCursorOutputs(locationsByKey map[string][]tsmFileStoreLo
 			locations[key] = append(locations[key], newTSMCursorReadLocation(location.path, location.index, location.entry, location.tombstones, queryRange, descending))
 		}
 	}
-	return executeTSMCursorOutputs(locations, queryRange, descending)
+	return executeTSMCursorOutputs(locations, queryRange, descending, sampleLimit)
 }
 
 func newTSMCursorReadLocation(path string, index int, entry tsmIndexEntry, tombstones []tsmTombstoneEntry, queryRange TimeRange, descending bool) tsmCursorReadLocation {
@@ -65,7 +69,7 @@ func newTSMCursorReadLocation(path string, index int, entry tsmIndexEntry, tombs
 	}
 }
 
-func executeTSMCursorOutputs(locationsByKey map[string][]tsmCursorReadLocation, queryRange TimeRange, descending bool) tsmCursorExecution {
+func executeTSMCursorOutputs(locationsByKey map[string][]tsmCursorReadLocation, queryRange TimeRange, descending bool, sampleLimit int) tsmCursorExecution {
 	execution := tsmCursorExecution{Points: map[tsmOutputPointKey]tsmPoint{}}
 	if !queryRange.Set {
 		return execution
@@ -80,7 +84,7 @@ func executeTSMCursorOutputs(locationsByKey map[string][]tsmCursorReadLocation, 
 	for _, key := range keys {
 		cursor := newTSMKeyCursor(locationsByKey[key], queryRange, descending)
 		for {
-			points, ok := cursor.readBlock()
+			points, first, currentBlocks, ok := cursor.readBlock()
 			if !ok {
 				break
 			}
@@ -88,9 +92,46 @@ func executeTSMCursorOutputs(locationsByKey map[string][]tsmCursorReadLocation, 
 			points = includeTSMPoints(points, queryRange.Min, queryRange.Max)
 			addTSMOutputPoints(execution.Points, key, points)
 			cursor.next()
+			appendTSMCursorExecutionSample(&execution, sampleLimit, key, first, points, currentBlocks, len(cursor.current) == 0)
 		}
 	}
 	return execution
+}
+
+func appendTSMCursorExecutionSample(execution *tsmCursorExecution, sampleLimit int, key string, first *tsmCursorReadLocation, points []tsmPoint, currentBlocks int, exhausted bool) {
+	if sampleLimit <= 0 || execution == nil || first == nil || len(execution.Samples) >= sampleLimit {
+		if execution != nil {
+			execution.cursorIndex += currentBlocks
+		}
+		return
+	}
+	action := "read_block"
+	if currentBlocks > 1 {
+		action = "read_merge_window"
+	}
+	cursorIndexBefore := execution.cursorIndex
+	cursorIndexAfter := cursorIndexBefore + currentBlocks
+	execution.cursorIndex = cursorIndexAfter
+	execution.Samples = append(execution.Samples, DecodePathCursorStep{
+		Step:              len(execution.Samples) + 1,
+		Type:              "tsm-key-cursor-step",
+		Action:            action,
+		Key:               key,
+		CandidateValue:    formatTSMCursorExecutionCandidate(first, points, currentBlocks),
+		File:              first.path,
+		CursorIndexBefore: cursorIndexBefore,
+		CursorIndexAfter:  cursorIndexAfter,
+		CursorAdvanced:    true,
+		CursorExhausted:   exhausted,
+	})
+}
+
+func formatTSMCursorExecutionCandidate(first *tsmCursorReadLocation, points []tsmPoint, currentBlocks int) string {
+	if first == nil {
+		return ""
+	}
+	return fmt.Sprintf("block_index=%d time_range=%d:%d points=%d current_blocks=%d",
+		first.index, first.entry.MinTime, first.entry.MaxTime, len(points), currentBlocks)
 }
 
 type tsmKeyCursor struct {
@@ -204,10 +245,10 @@ func (c *tsmKeyCursor) nextDescending() {
 	}
 }
 
-func (c *tsmKeyCursor) readBlock() ([]tsmPoint, bool) {
+func (c *tsmKeyCursor) readBlock() ([]tsmPoint, *tsmCursorReadLocation, int, bool) {
 	for {
 		if len(c.current) == 0 {
-			return nil, false
+			return nil, nil, 0, false
 		}
 
 		first := c.current[0]
@@ -223,15 +264,17 @@ func (c *tsmKeyCursor) readBlock() ([]tsmPoint, bool) {
 			if len(values) > 0 {
 				first.markRead(pointsMinTime(values), pointsMaxTime(values))
 			}
-			return values, true
+			return values, first, 1, true
 		}
 
+		currentBlocks := len(c.current)
 		minT, maxT := first.readMin, first.readMax
 		if len(values) > 0 {
 			minT, maxT = pointsMinTime(values), pointsMaxTime(values)
 		}
 		if c.descending {
-			return c.readDescendingWindow(values, minT, maxT, first)
+			values, ok := c.readDescendingWindow(values, minT, maxT, first)
+			return values, first, currentBlocks, ok
 		}
 		for i := 1; i < len(c.current); i++ {
 			cur := c.current[i]
@@ -266,7 +309,7 @@ func (c *tsmKeyCursor) readBlock() ([]tsmPoint, bool) {
 			cur.markRead(minT, maxT)
 		}
 		first.markRead(minT, maxT)
-		return values, true
+		return values, first, currentBlocks, true
 	}
 }
 

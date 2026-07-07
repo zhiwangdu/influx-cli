@@ -146,8 +146,8 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
 	summary.DeduplicatedOutputValues = countTSMOutputTimestamps(outputByKey)
 	summary.DuplicateOutputValues = summary.OptimizedOutputValues - summary.DeduplicatedOutputValues
-	baselineExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, false, options.CursorDescending)
-	optimizedExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, true, options.CursorDescending)
+	baselineExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, false, options.CursorDescending, 0)
+	optimizedExecution := executeTSMCandidateCursorOutputs(locationsByKey, tombstones, options.QueryRange, true, options.CursorDescending, options.BlockSampleLimit)
 	summarizeTSMCursorOutput(summary, baselineExecution, optimizedExecution, options.BlockSampleLimit)
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
@@ -235,6 +235,7 @@ func summarizeTSMCursorOutput(summary *DecodePathSummary, baseline, optimized ts
 	summary.OptimizedCursorOutputPoints = len(optimized.Points)
 	summary.BaselineCursorReadCalls = baseline.ReadCalls
 	summary.OptimizedCursorReadCalls = optimized.ReadCalls
+	summary.CursorExecutionSamples = append(summary.CursorExecutionSamples, optimized.Samples...)
 	summary.ComparedValueOutputPoints, summary.ValueOutputMismatches, summary.CursorOutputSamples = compareTSMOutputPoints(baseline.Points, optimized.Points, sampleLimit)
 	summary.CursorFinalOutputSamples = sampleTSMFinalOutputPoints(baseline.Points, optimized.Points, sampleLimit)
 }
@@ -551,6 +552,9 @@ func tsmDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(recommendations) == 0 {
 		recommendations = append(recommendations, "query range has no decodable TSM block candidates in this file")
+	}
+	if len(summary.CursorExecutionSamples) > 0 {
+		recommendations = append(recommendations, "TSM KeyCursor execution samples show local block read/advance steps")
 	}
 	return recommendations
 }

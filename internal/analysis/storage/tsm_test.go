@@ -421,7 +421,7 @@ func TestTSMDescendingCursorNextDoesNotDuplicateCurrentLocation(t *testing.T) {
 	if got, want := len(cursor.current), 2; got != want {
 		t.Fatalf("initial current locations = %d, want %d", got, want)
 	}
-	if _, ok := cursor.readBlock(); !ok {
+	if _, _, _, ok := cursor.readBlock(); !ok {
 		t.Fatal("expected first descending block")
 	}
 	cursor.next()
@@ -481,6 +481,24 @@ func TestAnalyzeTSMFileStoreFinalOutputSamplesFollowDescendingWinner(t *testing.
 		if got != want {
 			t.Fatalf("cursor final output sample[%d] = %+v, want %+v", i, got, want)
 		}
+	}
+	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tsm-key-cursor-step",
+		Action:            "read_merge_window",
+		Key:               "cpu,host=a value",
+		CandidateValue:    "block_index=1 time_range=20:40 points=2 current_blocks=2",
+		File:              path2,
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  2,
+		CursorAdvanced:    true,
+		CursorExhausted:   true,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantStep {
+		t.Fatalf("cursor execution sample = %+v, want %+v", got, wantStep)
 	}
 }
 
@@ -720,6 +738,12 @@ func TestAnalyzeTSMDecodePathMissingQueryKey(t *testing.T) {
 	if got, want := decode.MissingKeys, []string{"disk value"}; !equalStrings(got, want) {
 		t.Fatalf("missing keys = %v, want %v", got, want)
 	}
+	if got := len(decode.CursorExecutionSamples); got != 0 {
+		t.Fatalf("cursor execution samples = %d, want 0", got)
+	}
+	if containsString(decode.Recommendations, "TSM KeyCursor execution samples") {
+		t.Fatalf("recommendations = %v, want no cursor execution recommendation", decode.Recommendations)
+	}
 }
 
 func TestAnalyzeTSMDecodePathDoesNotMergeNonOverlappingBlocks(t *testing.T) {
@@ -858,6 +882,26 @@ func TestAnalyzeTSMDecodePathComparesIntegerValueOutput(t *testing.T) {
 			t.Fatalf("cursor final output sample[%d] = %+v, want %+v", i, got, want)
 		}
 	}
+	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tsm-key-cursor-step",
+		Action:            "read_merge_window",
+		Key:               "cpu,host=a value",
+		CandidateValue:    "block_index=0 time_range=10:30 points=2 current_blocks=2",
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  2,
+		CursorAdvanced:    true,
+		CursorExhausted:   true,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantStep {
+		t.Fatalf("cursor execution sample = %+v, want %+v", got, wantStep)
+	}
+	if !containsString(decode.Recommendations, "TSM KeyCursor execution samples") {
+		t.Fatalf("recommendations = %v, want cursor execution recommendation", decode.Recommendations)
+	}
 
 	data, err := readTSMFileStoreData(path)
 	if err != nil {
@@ -879,6 +923,81 @@ func TestAnalyzeTSMDecodePathComparesIntegerValueOutput(t *testing.T) {
 		if point.Value != want {
 			t.Fatalf("merged point at %d = %q, want %q", timestamp, point.Value, want)
 		}
+	}
+}
+
+func TestAnalyzeTSMDecodePathSamplesSingleBlockExecutionStep(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 10, maxTime: 30, timestamps: []int64{10, 20, 30}, values: []int64{1, 2, 3}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tsm-key-cursor-step",
+		Action:            "read_block",
+		Key:               "cpu,host=a value",
+		CandidateValue:    "block_index=0 time_range=10:30 points=1 current_blocks=1",
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  1,
+		CursorAdvanced:    true,
+		CursorExhausted:   true,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantStep {
+		t.Fatalf("cursor execution sample = %+v, want %+v", got, wantStep)
+	}
+}
+
+func TestAnalyzeTSMDecodePathLimitsCursorExecutionSamples(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 10, maxTime: 30, timestamps: []int64{20}, values: []int64{2}},
+		{key: "mem,host=a value", typ: tsmBlockInteger, minTime: 10, maxTime: 30, timestamps: []int64{20}, values: []int64{3}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if got, want := decode.OptimizedCursorReadCalls, 2; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	if got := decode.CursorExecutionSamples[0].Step; got != 1 {
+		t.Fatalf("cursor execution sample step = %d, want 1", got)
 	}
 }
 

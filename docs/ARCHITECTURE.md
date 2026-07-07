@@ -531,7 +531,7 @@ TSM 窄范围查询诊断所需字段：
 | overlap with query range | 是否应进入 cursor |
 | decoded blocks | 实际解码数量 |
 
-InfluxDB TSM analyzer 覆盖本地 TSM file metadata、index entry、tombstone range/impact、基于 query range/key 的 KeyCursor/FileStore cursor window/merge-window simulation、optimized/baseline value-output comparison，以及本地 optimized cursor final output sample；FileStore 汇总的 final output sample 会记录被本地 cursor merge/dedup 后保留的 TSM 文件来源。它只读取调用方传入的本地 `.tsm`/`.tombstone` 文件，不调用 tsdb engine、shard runtime、HTTP query API 或数据库服务。
+InfluxDB TSM analyzer 覆盖本地 TSM file metadata、index entry、tombstone range/impact、基于 query range/key 的 KeyCursor/FileStore cursor window/merge-window simulation、optimized/baseline value-output comparison、本地 KeyCursor block read/merge-window execution step sample，以及本地 optimized cursor final output sample；FileStore 汇总的 execution/final output sample 会记录被本地 cursor merge/dedup 后保留的 TSM 文件来源。它只读取调用方传入的本地 `.tsm`/`.tombstone` 文件，不调用 tsdb engine、shard runtime、HTTP query API 或数据库服务。
 
 InfluxDB WAL analyzer 覆盖 TSM1 WAL segment 的本地 entry 解码：entry type、snappy payload size、key samples、write point time range/value sample、delete/delete-range target，以及基于 query range/key 的 replay candidate filtering 和本地 write/delete replay candidate output sample。WAL analyzer 不直接调用 engine cache 或 WAL replay runtime。
 
