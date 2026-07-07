@@ -193,6 +193,9 @@ func TestAnalyzeOpenGeminiPKMetaInvalidFirstSpanSeedsRangeFromNextValidBlock(t *
 			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
 		}
 	}
+	if !containsOpenGeminiPKNotice(file.Notices, "end_block_id before start_block_id") {
+		t.Fatalf("notices = %v, want invalid block-id span notice", file.Notices)
+	}
 }
 
 func TestAnalyzeOpenGeminiPKMetaAllInvalidSpansLeaveRangeUnset(t *testing.T) {

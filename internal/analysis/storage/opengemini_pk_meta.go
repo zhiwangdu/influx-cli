@@ -224,6 +224,9 @@ func parseOpenGeminiPKMeta(data []byte) (opengeminiPKMetaAnalysis, error) {
 		observeOpenGeminiPKMetaBlock(&analysis, &block)
 		analysis.Blocks = append(analysis.Blocks, block)
 	}
+	if analysis.InvalidBlockIDSpans > 0 {
+		analysis.Notices = append(analysis.Notices, fmt.Sprintf("primary.meta has %d meta block(s) with end_block_id before start_block_id", analysis.InvalidBlockIDSpans))
+	}
 	return analysis, nil
 }
 
