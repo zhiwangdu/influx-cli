@@ -632,7 +632,10 @@ func (r Report) Result() result.Result {
 }
 
 func fileDetailsText(file FileReport) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
+	if blocksByType := countMapText(file.BlocksByType); blocksByType != "" {
+		parts = append(parts, "block_types "+blocksByType)
+	}
 	if file.Index != nil {
 		parts = append(parts, indexDetailsText(file.Index))
 	}

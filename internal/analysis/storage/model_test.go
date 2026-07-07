@@ -207,6 +207,11 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 			{
 				Path:   "L0-00000001.tsi",
 				Format: FormatTSI,
+				BlocksByType: map[string]int{
+					"measurement": 2,
+					"tag-key":     3,
+					"ignored":     0,
+				},
 				Index: &IndexSummary{
 					MeasurementCount:                2,
 					DeletedMeasurementCount:         1,
@@ -220,6 +225,11 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 			{
 				Path:   "fields.idx",
 				Format: FormatFieldsIndex,
+				BlocksByType: map[string]int{
+					"field":              4,
+					"measurement-fields": 2,
+					"ignored":            -1,
+				},
 				Fields: &FieldIndexSummary{
 					MeasurementCount:   2,
 					FieldCount:         4,
@@ -232,6 +242,10 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 			{
 				Path:   "primary.meta",
 				Format: FormatOpenGeminiPKMeta,
+				BlocksByType: map[string]int{
+					"primary-key-meta-block":    2,
+					"primary-key-schema-column": 3,
+				},
 				PrimaryKey: &PrimaryKeySummary{
 					Type:                    "opengemini-detached-primary-meta",
 					ColumnCount:             3,
@@ -250,6 +264,10 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 			{
 				Path:   "00000001-0001-00000001.content.bf",
 				Format: FormatOpenGeminiBloom,
+				BlocksByType: map[string]int{
+					"bloom-filter-crc-mismatch": 1,
+					"bloom-filter-line-block":   2,
+				},
 				SecondaryIndex: &SecondaryIndexSummary{
 					Type:                  "opengemini-bloom-filter",
 					Layout:                "attached-line-filter",
@@ -263,6 +281,10 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 			{
 				Path:   "41_1_part",
 				Format: FormatMergeset,
+				BlocksByType: map[string]int{
+					"mergeset-block":         2,
+					"mergeset-metaindex-row": 1,
+				},
 				SecondaryIndex: &SecondaryIndexSummary{
 					Type:            "opengemini-clv-text-mergeset",
 					Layout:          "mergeset-namespace",
@@ -279,11 +301,11 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 	result := report.Result()
 	detailsColumn := tableColumnIndex(t, result.Table.Columns, "details")
 	wants := [][]string{
-		{"index measurements=2", "series_refs=10", "series_ids=7", "tags=3 values=4", "deleted measurements=1 tag_keys=0 tag_values=0 series_ids=2"},
-		{"fields measurements=2 fields=4", "types=float:1 integer:1 string:1 unsigned:1", "changes=3 adds=2 deletes=1"},
-		{"primary_key type=opengemini-detached-primary-meta", "columns=3", "rows=4", "block_ids=10..13", "data=120 valid=112", "crc=1 data_oob=2 column_oob=3 column_unordered=1"},
-		{"secondary_index type=opengemini-bloom-filter", "layout=attached-line-filter", "field=content", "blocks=2", "crc=1 trailing=3 data_oob=1"},
-		{"secondary_index type=opengemini-clv-text-mergeset", "layout=mergeset-namespace", "items=4", "documents=1", "terms=1", "dictionaries=1", "positions=2"},
+		{"block_types measurement:2 tag-key:3", "index measurements=2", "series_refs=10", "series_ids=7", "tags=3 values=4", "deleted measurements=1 tag_keys=0 tag_values=0 series_ids=2"},
+		{"block_types field:4 measurement-fields:2", "fields measurements=2 fields=4", "types=float:1 integer:1 string:1 unsigned:1", "changes=3 adds=2 deletes=1"},
+		{"block_types primary-key-meta-block:2 primary-key-schema-column:3", "primary_key type=opengemini-detached-primary-meta", "columns=3", "rows=4", "block_ids=10..13", "data=120 valid=112", "crc=1 data_oob=2 column_oob=3 column_unordered=1"},
+		{"block_types bloom-filter-crc-mismatch:1 bloom-filter-line-block:2", "secondary_index type=opengemini-bloom-filter", "layout=attached-line-filter", "field=content", "blocks=2", "crc=1 trailing=3 data_oob=1"},
+		{"block_types mergeset-block:2 mergeset-metaindex-row:1", "secondary_index type=opengemini-clv-text-mergeset", "layout=mergeset-namespace", "items=4", "documents=1", "terms=1", "dictionaries=1", "positions=2"},
 	}
 	for rowIndex, wantParts := range wants {
 		details := result.Table.Rows[rowIndex][detailsColumn].(string)
