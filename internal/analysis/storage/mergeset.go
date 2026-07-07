@@ -596,6 +596,7 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	var zstdBlocks int
 	var itemsOutOfBounds int
 	var lensOutOfBounds int
+	var invalidCommonPrefix int
 	itemsSize := uint64(0)
 	if componentSizes[mergesetItemsFile] > 0 {
 		itemsSize = uint64(componentSizes[mergesetItemsFile])
@@ -620,6 +621,9 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 		if header.LensBlockOffset > lensSize || uint64(header.LensBlockSize) > lensSize-header.LensBlockOffset {
 			lensOutOfBounds++
 		}
+		if !bytes.HasPrefix(header.FirstItem, header.CommonPrefix) {
+			invalidCommonPrefix++
+		}
 	}
 	report.Extra["index_first_block_item_hex"] = hex.EncodeToString(summary.Headers[0].FirstItem)
 	report.Extra["index_last_block_item_hex"] = hex.EncodeToString(summary.Headers[len(summary.Headers)-1].FirstItem)
@@ -628,6 +632,7 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	report.Extra["lens_block_bytes"] = fmt.Sprint(lensBytes)
 	report.Extra["plain_block_headers"] = fmt.Sprint(plainBlocks)
 	report.Extra["zstd_block_headers"] = fmt.Sprint(zstdBlocks)
+	report.Extra["invalid_common_prefix_headers"] = fmt.Sprint(invalidCommonPrefix)
 	if uint64(len(summary.Headers)) != metaindexBlockHeaders(metaindex.Rows) {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded index block headers=%d differs from metaindex block_headers=%d", len(summary.Headers), metaindexBlockHeaders(metaindex.Rows)))
 	}
@@ -639,6 +644,10 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	}
 	if lensOutOfBounds > 0 {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset index has %d lens block header(s) outside lens.bin bounds", lensOutOfBounds))
+	}
+	if invalidCommonPrefix > 0 {
+		report.BlocksByType["mergeset-invalid-common-prefix"] = invalidCommonPrefix
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset index has %d block header(s) whose first_item does not start with common_prefix", invalidCommonPrefix))
 	}
 
 	for i, header := range summary.Headers {

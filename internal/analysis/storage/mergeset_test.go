@@ -1178,6 +1178,78 @@ func TestAnalyzeMergesetZSTDItemPayload(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetInvalidCommonPrefixHeaderNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_1_badprefix")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, []byte{mergesetMarshalTypeZSTD})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers[0].CommonPrefix = []byte("zz")
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexData)),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(partPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadataData, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, write := range []struct {
+		name string
+		data []byte
+	}{
+		{name: mergesetMetadataFile, data: metadataData},
+		{name: mergesetMetaindexFile, data: metaindex},
+		{name: mergesetIndexFile, data: indexData},
+		{name: mergesetItemsFile, data: itemsData},
+		{name: mergesetLensFile, data: lensData},
+	} {
+		if err := os.WriteFile(filepath.Join(partPath, write.name), write.data, 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", write.name, err)
+		}
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["invalid_common_prefix_headers"], "1"; got != want {
+		t.Fatalf("invalid common-prefix headers = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-invalid-common-prefix"], 1; got != want {
+		t.Fatalf("invalid common-prefix block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "first_item does not start with common_prefix") {
+		t.Fatalf("notices = %v, want common-prefix notice", file.Notices)
+	}
+	if !containsString(file.Notices, "firstItem does not start with commonPrefix") {
+		t.Fatalf("notices = %v, want payload decode common-prefix notice", file.Notices)
+	}
+	if got, want := file.Extra["item_payload_blocks_decoded"], "0"; got != want {
+		t.Fatalf("payload blocks decoded = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeMergesetZSTDItemPayloadBadCompressedBlockNotice(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
