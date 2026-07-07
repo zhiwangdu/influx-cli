@@ -150,6 +150,291 @@ func TestAnalyzeSeriesFileSeriesIDFilterWithoutRange(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSeriesFileQueryFilters(t *testing.T) {
+	seriesDir := writeTestSeriesFile(t)
+
+	report, err := Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:            FormatSeriesFile,
+		QueryMeasurements: []string{"mem", "cpu", "cpu"},
+		QueryTags: []TagFilter{
+			{Key: " host ", Value: " a "},
+			{Key: "host", Value: "a"},
+		},
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected series-file query summary")
+	}
+	if !query.MeasurementFilterApplied || !query.TagFilterApplied {
+		t.Fatalf("query flags = measurement:%t tag:%t, want both true", query.MeasurementFilterApplied, query.TagFilterApplied)
+	}
+	if got, want := query.QueryMeasurements, []string{"cpu", "mem"}; !equalStrings(got, want) {
+		t.Fatalf("query measurements = %v, want %v", got, want)
+	}
+	if got, want := query.QueryTags, []TagFilter{{Key: "host", Value: "a"}}; !equalTagFilters(got, want) {
+		t.Fatalf("query tags = %+v, want %+v", got, want)
+	}
+	if got, want := query.MatchedMeasurements, []string{"cpu"}; !equalStrings(got, want) {
+		t.Fatalf("matched measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MissingMeasurements, []string{"mem"}; !equalStrings(got, want) {
+		t.Fatalf("missing measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if len(query.MissingTags) != 0 {
+		t.Fatalf("missing tags = %+v, want none", query.MissingTags)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(1); got != want {
+		t.Fatalf("series refs = %d, want %d", got, want)
+	}
+	if got, want := len(query.MeasurementSamples), 1; got != want {
+		t.Fatalf("measurement samples = %d, want %d", got, want)
+	}
+	sample := query.MeasurementSamples[0]
+	if got, want := sample.Name, "cpu"; got != want {
+		t.Fatalf("sample name = %q, want %q", got, want)
+	}
+	if got, want := sample.SeriesCount, uint64(1); got != want {
+		t.Fatalf("sample series count = %d, want %d", got, want)
+	}
+	if got, want := len(sample.Tags), 1; got != want {
+		t.Fatalf("sample tags = %d, want %d", got, want)
+	}
+	if got, want := sample.Tags[0].Key, "host"; got != want {
+		t.Fatalf("sample tag key = %q, want %q", got, want)
+	}
+	if got, want := sample.Tags[0].Values[0].Value, "a"; got != want {
+		t.Fatalf("sample tag value = %q, want %q", got, want)
+	}
+	if got, want := sample.Tags[0].Values[0].SeriesCount, uint64(1); got != want {
+		t.Fatalf("sample tag series count = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeSeriesFileQueryFiltersReportMissingTags(t *testing.T) {
+	seriesDir := writeTestSeriesFile(t)
+
+	report, err := Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:            FormatSeriesFile,
+		QueryMeasurements: []string{"cpu"},
+		QueryTags:         []TagFilter{{Key: "host", Value: "missing"}},
+		KeySampleLimit:    5,
+		BlockSampleLimit:  5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected series-file query summary")
+	}
+	if got, want := query.MatchedMeasurements, []string{"cpu"}; !equalStrings(got, want) {
+		t.Fatalf("matched measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MissingTags, []TagFilter{{Key: "host", Value: "missing"}}; !equalTagFilters(got, want) {
+		t.Fatalf("missing tags = %+v, want %+v", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(0); got != want {
+		t.Fatalf("series refs = %d, want %d", got, want)
+	}
+	if len(query.MeasurementSamples) != 0 {
+		t.Fatalf("measurement samples = %+v, want none", query.MeasurementSamples)
+	}
+}
+
+func TestAnalyzeSeriesFileQueryFiltersRequireAllTagsOnSameSeries(t *testing.T) {
+	seriesDir := writeTestSeriesFile(t)
+
+	report, err := Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:            FormatSeriesFile,
+		QueryMeasurements: []string{"cpu"},
+		QueryTags: []TagFilter{
+			{Key: "host", Value: "a"},
+			{Key: "region", Value: "us"},
+		},
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected series-file query summary")
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(1); got != want {
+		t.Fatalf("series refs = %d, want %d", got, want)
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "us"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+
+	report, err = Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:            FormatSeriesFile,
+		QueryMeasurements: []string{"cpu"},
+		QueryTags: []TagFilter{
+			{Key: "host", Value: "a"},
+			{Key: "region", Value: "missing"},
+		},
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query = report.Files[0].Index.Query
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(0); got != want {
+		t.Fatalf("series refs = %d, want %d", got, want)
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if got, want := query.MissingTags, []TagFilter{{Key: "region", Value: "missing"}}; !equalTagFilters(got, want) {
+		t.Fatalf("missing tags = %+v, want %+v", got, want)
+	}
+}
+
+func TestAnalyzeSeriesFileQueryMeasurementOnlyEnumeratesTagSamples(t *testing.T) {
+	seriesDir := writeTestSeriesFile(t)
+
+	report, err := Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:            FormatSeriesFile,
+		QueryMeasurements: []string{"cpu"},
+		KeySampleLimit:    5,
+		BlockSampleLimit:  5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected series-file query summary")
+	}
+	if !query.MeasurementFilterApplied || query.TagFilterApplied {
+		t.Fatalf("query flags = measurement:%t tag:%t, want measurement only", query.MeasurementFilterApplied, query.TagFilterApplied)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(2); got != want {
+		t.Fatalf("series refs = %d, want %d", got, want)
+	}
+	if got, want := len(query.MeasurementSamples), 1; got != want {
+		t.Fatalf("measurement samples = %d, want %d", got, want)
+	}
+	tags := query.MeasurementSamples[0].Tags
+	if got, want := len(tags), 2; got != want {
+		t.Fatalf("sample tags = %d, want %d", got, want)
+	}
+	if got, want := tags[0].Key, "host"; got != want {
+		t.Fatalf("first sample tag key = %q, want %q", got, want)
+	}
+	if got, want := tags[0].Values[0].Value, "a"; got != want {
+		t.Fatalf("first host value = %q, want %q", got, want)
+	}
+	if got, want := tags[0].Values[1].Value, "b"; got != want {
+		t.Fatalf("second host value = %q, want %q", got, want)
+	}
+	if got, want := tags[1].Key, "region"; got != want {
+		t.Fatalf("second sample tag key = %q, want %q", got, want)
+	}
+	if got, want := tags[1].Values[0].Value, "us"; got != want {
+		t.Fatalf("region value = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeSeriesFileQueryTagOnlyScansAllMeasurements(t *testing.T) {
+	seriesDir := writeTestSeriesFile(t)
+
+	report, err := Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:           FormatSeriesFile,
+		QueryTags:        []TagFilter{{Key: "host", Value: "a"}},
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected series-file query summary")
+	}
+	if query.MeasurementFilterApplied || !query.TagFilterApplied {
+		t.Fatalf("query flags = measurement:%t tag:%t, want tag only", query.MeasurementFilterApplied, query.TagFilterApplied)
+	}
+	if len(query.MatchedMeasurements) != 0 || len(query.MissingMeasurements) != 0 {
+		t.Fatalf("measurement matches = %v/%v, want none without measurement filter", query.MatchedMeasurements, query.MissingMeasurements)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(1); got != want {
+		t.Fatalf("series refs = %d, want %d", got, want)
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+}
+
+func TestAnalyzeSeriesFileQuerySampleLimitDoesNotCapCounts(t *testing.T) {
+	seriesDir := filepath.Join(t.TempDir(), "_series")
+	partition0 := filepath.Join(seriesDir, "00")
+	partition1 := filepath.Join(seriesDir, "01")
+	if err := os.MkdirAll(partition0, 0o755); err != nil {
+		t.Fatalf("mkdir partition 00: %v", err)
+	}
+	if err := os.MkdirAll(partition1, 0o755); err != nil {
+		t.Fatalf("mkdir partition 01: %v", err)
+	}
+	writeTestSeriesSegment(t, filepath.Join(partition0, "0000"), testSeriesInsert(1, "cpu"))
+	writeTestSeriesSegment(t, filepath.Join(partition1, "0000"), testSeriesInsert(2, "disk"))
+
+	report, err := Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:            FormatSeriesFile,
+		QueryMeasurements: []string{"cpu", "disk"},
+		KeySampleLimit:    1,
+		BlockSampleLimit:  5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected series-file query summary")
+	}
+	if got, want := query.CandidateMeasurements, 2; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(2); got != want {
+		t.Fatalf("series refs = %d, want %d", got, want)
+	}
+	if got, want := len(query.MeasurementSamples), 1; got != want {
+		t.Fatalf("measurement samples = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].Name, "cpu"; got != want {
+		t.Fatalf("first capped sample = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeSeriesFileReportsPartitionMismatches(t *testing.T) {
 	seriesDir := filepath.Join(t.TempDir(), "_series")
 	partition1 := filepath.Join(seriesDir, "01")

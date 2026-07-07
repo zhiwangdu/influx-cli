@@ -82,9 +82,10 @@ type seriesFileState struct {
 }
 
 type seriesFileMeasurement struct {
-	Name      string
-	SeriesIDs map[uint64]struct{}
-	TagValues map[string]map[string]struct{}
+	Name              string
+	SeriesIDs         map[uint64]struct{}
+	TagValues         map[string]map[string]struct{}
+	TagValueSeriesIDs map[string]map[string]map[uint64]struct{}
 }
 
 func analyzeSeriesFile(path string, info os.FileInfo, options Options) (FileReport, error) {
@@ -580,9 +581,10 @@ func buildSeriesFileIndexSummary(state *seriesFileState, options Options) (Index
 		measurement := measurements[series.Key.Measurement]
 		if measurement == nil {
 			measurement = &seriesFileMeasurement{
-				Name:      series.Key.Measurement,
-				SeriesIDs: map[uint64]struct{}{},
-				TagValues: map[string]map[string]struct{}{},
+				Name:              series.Key.Measurement,
+				SeriesIDs:         map[uint64]struct{}{},
+				TagValues:         map[string]map[string]struct{}{},
+				TagValueSeriesIDs: map[string]map[string]map[uint64]struct{}{},
 			}
 			measurements[series.Key.Measurement] = measurement
 		}
@@ -594,6 +596,17 @@ func buildSeriesFileIndexSummary(state *seriesFileState, options Options) (Index
 				measurement.TagValues[tag.Key] = values
 			}
 			values[tag.Value] = struct{}{}
+			seriesByValue := measurement.TagValueSeriesIDs[tag.Key]
+			if seriesByValue == nil {
+				seriesByValue = map[string]map[uint64]struct{}{}
+				measurement.TagValueSeriesIDs[tag.Key] = seriesByValue
+			}
+			seriesIDs := seriesByValue[tag.Value]
+			if seriesIDs == nil {
+				seriesIDs = map[uint64]struct{}{}
+				seriesByValue[tag.Value] = seriesIDs
+			}
+			seriesIDs[series.ID] = struct{}{}
 		}
 	}
 
@@ -622,6 +635,9 @@ func buildSeriesFileIndexSummary(state *seriesFileState, options Options) (Index
 			})
 		}
 	}
+	if query := buildSeriesFileIndexQuerySummary(measurements, names, options); query != nil {
+		summary.Query = query
+	}
 	return summary, names
 }
 
@@ -631,6 +647,159 @@ func (m *seriesFileMeasurement) TagCounts() (tagKeyCount, tagValueCount int) {
 		tagValueCount += len(values)
 	}
 	return tagKeyCount, tagValueCount
+}
+
+func buildSeriesFileIndexQuerySummary(measurements map[string]*seriesFileMeasurement, names []string, options Options) *IndexQuerySummary {
+	if len(options.QueryMeasurements) == 0 && len(options.QueryTags) == 0 {
+		return nil
+	}
+	query := &IndexQuerySummary{
+		MeasurementFilterApplied: len(options.QueryMeasurements) > 0,
+		TagFilterApplied:         len(options.QueryTags) > 0,
+		QueryMeasurements:        append([]string(nil), options.QueryMeasurements...),
+		QueryTags:                append([]TagFilter(nil), options.QueryTags...),
+	}
+	measurementSet := queryKeySet(options.QueryMeasurements)
+	for _, measurement := range query.QueryMeasurements {
+		if _, ok := measurements[measurement]; ok {
+			query.MatchedMeasurements = append(query.MatchedMeasurements, measurement)
+		} else {
+			query.MissingMeasurements = append(query.MissingMeasurements, measurement)
+		}
+	}
+
+	matchedTags := map[string]TagFilter{}
+	for _, name := range names {
+		measurement := measurements[name]
+		if len(measurementSet) > 0 {
+			if _, ok := measurementSet[name]; !ok {
+				continue
+			}
+		}
+		for _, filter := range query.QueryTags {
+			if seriesFileMeasurementHasTagValue(measurement, filter) {
+				matchedTags[tagFilterID(filter.Key, filter.Value)] = filter
+			}
+		}
+		matchingSeriesIDs := seriesFileMeasurementMatchingSeriesIDs(measurement, query.QueryTags)
+		if len(matchingSeriesIDs) == 0 {
+			continue
+		}
+		tagKeyCount, tagValueCount := measurement.TagCounts()
+		query.CandidateMeasurements++
+		// The series file has decoded live series keys, so unlike TSI metadata
+		// this can report the exact live series matching all requested tag filters.
+		query.SeriesRefs += int64(len(matchingSeriesIDs))
+		query.TagKeyCount += tagKeyCount
+		query.TagValueCount += tagValueCount
+		if len(query.MeasurementSamples) < options.KeySampleLimit {
+			query.MeasurementSamples = append(query.MeasurementSamples, IndexQueryMeasurementReport{
+				Name:        name,
+				SeriesCount: uint64(len(matchingSeriesIDs)),
+				Tags:        seriesFileQueryTagReports(measurement, query.QueryTags),
+			})
+		}
+	}
+	for _, filter := range query.QueryTags {
+		id := tagFilterID(filter.Key, filter.Value)
+		if matched, ok := matchedTags[id]; ok {
+			query.MatchedTags = append(query.MatchedTags, matched)
+		} else {
+			query.MissingTags = append(query.MissingTags, filter)
+		}
+	}
+	return query
+}
+
+func seriesFileMeasurementHasTagValue(measurement *seriesFileMeasurement, filter TagFilter) bool {
+	if measurement == nil {
+		return false
+	}
+	values := measurement.TagValueSeriesIDs[filter.Key]
+	if len(values) == 0 {
+		return false
+	}
+	seriesIDs := values[filter.Value]
+	return len(seriesIDs) > 0
+}
+
+func seriesFileMeasurementMatchingSeriesIDs(measurement *seriesFileMeasurement, filters []TagFilter) map[uint64]struct{} {
+	if measurement == nil {
+		return nil
+	}
+	matches := make(map[uint64]struct{}, len(measurement.SeriesIDs))
+	for id := range measurement.SeriesIDs {
+		matches[id] = struct{}{}
+	}
+	for _, filter := range filters {
+		seriesByValue := measurement.TagValueSeriesIDs[filter.Key]
+		if len(seriesByValue) == 0 {
+			return nil
+		}
+		filterIDs := seriesByValue[filter.Value]
+		if len(filterIDs) == 0 {
+			return nil
+		}
+		for id := range matches {
+			if _, ok := filterIDs[id]; !ok {
+				delete(matches, id)
+			}
+		}
+		if len(matches) == 0 {
+			return nil
+		}
+	}
+	return matches
+}
+
+func seriesFileQueryTagReports(measurement *seriesFileMeasurement, filters []TagFilter) []IndexQueryTagReport {
+	if measurement == nil {
+		return nil
+	}
+	if len(filters) > 0 {
+		reports := make([]IndexQueryTagReport, 0, len(filters))
+		for _, filter := range filters {
+			valueSeries := measurement.TagValueSeriesIDs[filter.Key][filter.Value]
+			if len(valueSeries) == 0 {
+				continue
+			}
+			reports = append(reports, IndexQueryTagReport{
+				Key: filter.Key,
+				Values: []IndexQueryTagValueReport{{
+					Value:       filter.Value,
+					SeriesCount: uint64(len(valueSeries)),
+				}},
+			})
+		}
+		return reports
+	}
+	tagKeys := make([]string, 0, len(measurement.TagValues))
+	for key := range measurement.TagValues {
+		tagKeys = append(tagKeys, key)
+	}
+	sort.Strings(tagKeys)
+	reports := make([]IndexQueryTagReport, 0, len(tagKeys))
+	for _, key := range tagKeys {
+		values := sortedSeriesFileTagValues(measurement.TagValues[key])
+		report := IndexQueryTagReport{Key: key}
+		for _, value := range values {
+			report.Values = append(report.Values, IndexQueryTagValueReport{
+				Value:       value,
+				SeriesCount: uint64(len(measurement.TagValueSeriesIDs[key][value])),
+			})
+		}
+		reports = append(reports, report)
+	}
+	return reports
+}
+
+func sortedSeriesFileTagValues(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func seriesFileKeySamples(state *seriesFileState, options Options) []string {
