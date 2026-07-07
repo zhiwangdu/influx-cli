@@ -1171,6 +1171,91 @@ func TestAnalyzeTSSPDetachedSamplesZSTDIntegerFullBlocks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedSamplesLZ4StringFullBlocks(t *testing.T) {
+	dir := t.TempDir()
+	values := []string{
+		strings.Repeat("red-", 32),
+		strings.Repeat("blue-", 24),
+	}
+	timestamps := []int64{700, 730}
+	valueSize, err := testTSSPDetachedStringFullBlockSizeWithCodec(values, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := []testTSSPChunkSpec{{
+		sid:      45,
+		minTime:  timestamps[0],
+		maxTime:  timestamps[len(timestamps)-1],
+		offset:   1200,
+		size:     valueSize,
+		timeSize: testTSSPDetachedIntegerFullBlockSize(timestamps),
+	}}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedStringFullDataWithCodec(filepath.Join(dir, tsspDetachedDataFileName), 1800, chunks[0], values, 3, timestamps); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(timestamps[0], timestamps[len(timestamps)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: len(values) + 2,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_blocks"], "2"; got != want {
+		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_unknowns"], "0"; got != want {
+		t.Fatalf("data block probe value unknowns = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "integer-full:1,string-full:1"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_output_points"], "2"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, len(values); got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), len(values); got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, value := range values {
+		want := DecodePathCursorOutput{
+			Key:            "meta-index-id:45/value",
+			Time:           timestamps[i],
+			Type:           "string-full",
+			OptimizedValue: value,
+			Matches:        true,
+		}
+		if got := decode.CursorOutputSamples[i]; got != want {
+			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
 func TestAnalyzeTSSPDetachedColumnProjectionLimitsDataReadAt(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
@@ -3030,7 +3115,11 @@ func writeTestTSSPDetachedOneRowData(path string, size int, chunk testTSSPChunkS
 }
 
 func writeTestTSSPDetachedStringFullData(path string, size int, chunk testTSSPChunkSpec, values []string, timestamps []int64) error {
-	valuePayload, err := testTSSPStringFullPayload(values, 0)
+	return writeTestTSSPDetachedStringFullDataWithCodec(path, size, chunk, values, 0, timestamps)
+}
+
+func writeTestTSSPDetachedStringFullDataWithCodec(path string, size int, chunk testTSSPChunkSpec, values []string, codec byte, timestamps []int64) error {
+	valuePayload, err := testTSSPStringFullPayload(values, codec)
 	if err != nil {
 		return err
 	}
@@ -3114,7 +3203,11 @@ func writeTestTSSPDetachedNullableRegularFloatData(path string, size int, chunk 
 }
 
 func testTSSPDetachedStringFullBlockSize(values []string) (uint32, error) {
-	payload, err := testTSSPStringFullPayload(values, 0)
+	return testTSSPDetachedStringFullBlockSizeWithCodec(values, 0)
+}
+
+func testTSSPDetachedStringFullBlockSizeWithCodec(values []string, codec byte) (uint32, error) {
+	payload, err := testTSSPStringFullPayload(values, codec)
 	if err != nil {
 		return 0, err
 	}
