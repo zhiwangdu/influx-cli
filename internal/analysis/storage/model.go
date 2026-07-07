@@ -795,6 +795,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary.Mode != "" {
 		parts = append(parts, summary.Mode)
 	}
+	if query := queryContextSummaryText(summary); query != "" {
+		parts = append(parts, query)
+	}
 	if summary.BaselineDecodeBlocks > 0 || summary.OptimizedDecodeBlocks > 0 || summary.SavedDecodeBlocks > 0 {
 		parts = append(parts, fmt.Sprintf("blocks %d->%d", summary.BaselineDecodeBlocks, summary.OptimizedDecodeBlocks))
 	}
@@ -880,6 +883,37 @@ func decodePathText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func queryContextSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if summary.QueryRange.Set {
+		parts = append(parts, fmt.Sprintf("range=%s..%s", FormatUnixNano(summary.QueryRange.Min), FormatUnixNano(summary.QueryRange.Max)))
+	}
+	if summary.CursorSeekTime != 0 || (summary.QueryRange.Set && decodePathModeHasSeek(summary.Mode)) {
+		seekTime := summary.CursorSeekTime
+		if seekTime == 0 {
+			seekTime = summary.QueryRange.Min
+			if strings.HasSuffix(summary.Mode, "descending") {
+				seekTime = summary.QueryRange.Max
+			}
+		}
+		parts = append(parts, fmt.Sprintf("seek=%s", FormatUnixNano(seekTime)))
+	}
+	if summary.KeyFilterApplied {
+		parts = append(parts, "target_filter=true")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "query " + strings.Join(parts, " ")
+}
+
+func decodePathModeHasSeek(mode string) bool {
+	return strings.Contains(mode, "cursor") || strings.HasPrefix(mode, "tssp-detached-meta-index")
 }
 
 func blockFilterSummaryText(summary *DecodePathSummary) string {

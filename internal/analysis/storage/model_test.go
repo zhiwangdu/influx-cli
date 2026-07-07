@@ -13,6 +13,9 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 			Format: FormatTSSP,
 			DecodePath: &DecodePathSummary{
 				Mode:                         "tssp-location-cursor-ascending",
+				QueryRange:                   TimeRange{Min: 100, Max: 200, Set: true},
+				CursorSeekTime:               100,
+				KeyFilterApplied:             true,
 				BaselineDecodeBlocks:         3,
 				OptimizedDecodeBlocks:        1,
 				SavedDecodeBlocks:            2,
@@ -146,6 +149,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)
 	for _, want := range []string{
 		"tssp-location-cursor-ascending",
+		"query range=1970-01-01T00:00:00.0000001Z..1970-01-01T00:00:00.0000002Z seek=1970-01-01T00:00:00.0000001Z target_filter=true",
 		"blocks 3->1",
 		"block_filter locations=3 decoded=1 skipped_key=1 skipped_projection=1 skipped_before=1 skipped_after=1 tombstoned=1",
 		"keys=2/1/1 series_ids=2/1/1 meta_index_ids=2/1/1 columns=2/1/1",
@@ -185,10 +189,104 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 
 func TestDecodePathTextOmitsEmptyOutputSummaries(t *testing.T) {
 	text := decodePathText(&DecodePathSummary{})
-	for _, notWant := range []string{"value_output", "cursor_output", "block_filter", "values"} {
+	for _, notWant := range []string{"value_output", "cursor_output", "block_filter", "values", "query "} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("decode path text = %q, want no %s segment", text, notWant)
 		}
+	}
+}
+
+func TestDecodePathTextIncludesQueryContext(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		QueryRange:       TimeRange{Min: 100, Max: 200, Set: true},
+		CursorSeekTime:   100,
+		KeyFilterApplied: true,
+	})
+	want := "query range=1970-01-01T00:00:00.0000001Z..1970-01-01T00:00:00.0000002Z seek=1970-01-01T00:00:00.0000001Z target_filter=true"
+	if !strings.Contains(text, want) {
+		t.Fatalf("decode path text = %q, want %q", text, want)
+	}
+}
+
+func TestDecodePathTextIncludesSparseQueryContext(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		summary  DecodePathSummary
+		want     string
+		notWants []string
+	}{
+		{
+			name: "range-only",
+			summary: DecodePathSummary{
+				QueryRange: TimeRange{Min: 100, Max: 200, Set: true},
+			},
+			want:     "query range=1970-01-01T00:00:00.0000001Z..1970-01-01T00:00:00.0000002Z",
+			notWants: []string{"seek=", "target_filter"},
+		},
+		{
+			name: "wal-range-has-no-cursor-seek",
+			summary: DecodePathSummary{
+				Mode:       "wal-replay-filter",
+				QueryRange: TimeRange{Min: 100, Max: 200, Set: true},
+			},
+			want:     "query range=1970-01-01T00:00:00.0000001Z..1970-01-01T00:00:00.0000002Z",
+			notWants: []string{"seek=", "target_filter"},
+		},
+		{
+			name: "epoch-cursor-seek",
+			summary: DecodePathSummary{
+				Mode:       "tsm-key-cursor-ascending",
+				QueryRange: TimeRange{Min: 0, Max: 200, Set: true},
+			},
+			want:     "query range=1970-01-01T00:00:00Z..1970-01-01T00:00:00.0000002Z seek=1970-01-01T00:00:00Z",
+			notWants: []string{"target_filter"},
+		},
+		{
+			name: "recorded-seek",
+			summary: DecodePathSummary{
+				QueryRange:     TimeRange{Min: 100, Max: 200, Set: true},
+				CursorSeekTime: 150,
+			},
+			want:     "query range=1970-01-01T00:00:00.0000001Z..1970-01-01T00:00:00.0000002Z seek=1970-01-01T00:00:00.00000015Z",
+			notWants: []string{"target_filter"},
+		},
+		{
+			name: "descending-epoch-cursor-seek",
+			summary: DecodePathSummary{
+				Mode:       "tssp-location-cursor-descending",
+				QueryRange: TimeRange{Min: -100, Max: 0, Set: true},
+			},
+			want:     "query range=1969-12-31T23:59:59.9999999Z..1970-01-01T00:00:00Z seek=1970-01-01T00:00:00Z",
+			notWants: []string{"target_filter"},
+		},
+		{
+			name: "seek-only",
+			summary: DecodePathSummary{
+				CursorSeekTime: 200,
+			},
+			want:     "query seek=1970-01-01T00:00:00.0000002Z",
+			notWants: []string{"range=", "target_filter"},
+		},
+		{
+			name: "target-filter-only",
+			summary: DecodePathSummary{
+				KeyFilterApplied: true,
+			},
+			want:     "query target_filter=true",
+			notWants: []string{"range=", "seek="},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := decodePathText(&tc.summary)
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("decode path text = %q, want %q", text, tc.want)
+			}
+			for _, notWant := range tc.notWants {
+				if strings.Contains(text, notWant) {
+					t.Fatalf("decode path text = %q, want no %q", text, notWant)
+				}
+			}
+		})
 	}
 }
 
