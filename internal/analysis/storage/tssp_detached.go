@@ -590,16 +590,16 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				matchingRows, matchedRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows)
+				matchingRows, matchedRows, filterRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange)
 				if !ok {
 					chunkAvailable = false
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
 					continue
 				}
 				if len(options.QueryFields) > 0 || len(options.QueryAnyFields) > 0 || len(options.QueryNoneFields) > 0 {
-					probe.FilterRows += segmentRows
+					probe.FilterRows += filterRows
 					probe.FilterMatches += matchedRows
-					probe.FilterRejects += segmentRows - matchedRows
+					probe.FilterRejects += filterRows - matchedRows
 				}
 				chunkOutputPoints += matchedRows
 				appendTSSPDetachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, matchingRows, options.QueryRange, options.BlockSampleLimit)

@@ -401,6 +401,59 @@ func TestAnalyzeTSSPSamplesAttachedRegularFloatBlocks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDataProbeFiltersDecodedRowsByQueryRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	values := []float64{1.25, 2.5, 3.75}
+	times, err := writeTestTSSPWithRegularFloatValues(path, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[1], times[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: len(values) + 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rows"], "0"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q without field predicates", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].ValueOutputPoints, 1; got != want {
+		t.Fatalf("decode sample value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "sid:7/value",
+		Time:           times[1],
+		Type:           "float",
+		OptimizedValue: "2.5",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("cursor output sample = %+v, want %+v", got, want)
+	}
+}
+
 func TestAnalyzeTSSPSamplesAttachedNullableRegularFloatBlocks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	values := []float64{1.25, 0, 3.75}
