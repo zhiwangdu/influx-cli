@@ -484,6 +484,79 @@ func TestAnalyzeTSMFileStoreFinalOutputSamplesFollowDescendingWinner(t *testing.
 	}
 }
 
+func TestAnalyzeTSMFileStoreFinalOutputSamplesFallBackToOlderFileOnTombstonedPoints(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "000000001-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path1, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 10, maxTime: 30, timestamps: []int64{10, 10, 10}, values: []int64{1, 2, 3}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path2 := filepath.Join(dir, "000000002-000000001.tsm")
+	if err := writeTestTSMWithBlocks(path2, []testTSMBlockSpec{
+		{key: "cpu,host=a value", typ: tsmBlockInteger, minTime: 20, maxTime: 40, timestamps: []int64{20, 10, 10}, values: []int64{20, 30, 40}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSMTombstoneV3(tsmTombstonePath(path2),
+		tsmTombstoneEntry{Key: "cpu,host=a value", Min: 20, Max: 30},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(20, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSM,
+		QueryRange:       queryRange,
+		QueryKeys:        []string{"cpu,host=a value"},
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level decode path summary")
+	}
+	if got, want := decode.LocationBlocks, 2; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.FullyTombstonedBlocks, 0; got != want {
+		t.Fatalf("fully tombstoned blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineValueOutputPoints, 2; got != want {
+		t.Fatalf("baseline value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 2; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineCursorOutputPoints, 2; got != want {
+		t.Fatalf("baseline cursor output points = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorOutputPoints, 2; got != want {
+		t.Fatalf("optimized cursor output points = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputMismatches, 0; got != want {
+		t.Fatalf("value output mismatches = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorFinalOutputSamples), 2; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "cpu,host=a value", Time: 20, Type: "integer", File: path1, OptimizedValue: "2", Matches: true},
+		{Key: "cpu,host=a value", Time: 30, Type: "integer", File: path1, OptimizedValue: "3", Matches: true},
+	} {
+		got := decode.CursorFinalOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor final output sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
 func TestTSMFileStoreCursorWindowsFollowDescendingOrder(t *testing.T) {
 	summary := &DecodePathSummary{}
 	populateTSMFileStoreCursorWindows(summary, map[string][]tsmFileStoreLocation{
