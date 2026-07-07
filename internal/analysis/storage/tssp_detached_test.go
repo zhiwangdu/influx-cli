@@ -1474,6 +1474,174 @@ func TestAnalyzeTSSPDetachedFieldFilterMatchesStringRegex(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedFieldFilterMatchesNullPredicates(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		filter            FieldFilter
+		wantFilter        FieldFilter
+		wantOutputPoints  string
+		wantMatches       string
+		wantRejects       string
+		wantSamples       []DecodePathCursorOutput
+		wantValueOutCount int
+	}{
+		{
+			name:              "equals-null",
+			filter:            FieldFilter{Key: "value", Value: "null"},
+			wantFilter:        FieldFilter{Key: "value", Value: "null"},
+			wantOutputPoints:  "1",
+			wantMatches:       "1",
+			wantRejects:       "2",
+			wantValueOutCount: 1,
+		},
+		{
+			name:              "is-null",
+			filter:            FieldFilter{Key: "value", Op: "is", Value: "null"},
+			wantFilter:        FieldFilter{Key: "value", Value: "null"},
+			wantOutputPoints:  "1",
+			wantMatches:       "1",
+			wantRejects:       "2",
+			wantValueOutCount: 1,
+		},
+		{
+			name:              "in-null",
+			filter:            FieldFilter{Key: "value", Op: "in", Value: "(null)"},
+			wantFilter:        FieldFilter{Key: "value", Op: "in", Value: "(null)"},
+			wantOutputPoints:  "1",
+			wantMatches:       "1",
+			wantRejects:       "2",
+			wantValueOutCount: 1,
+		},
+		{
+			name:             "not-null",
+			filter:           FieldFilter{Key: "value", Op: "!=", Value: "null"},
+			wantFilter:       FieldFilter{Key: "value", Op: "!=", Value: "null"},
+			wantOutputPoints: "2",
+			wantMatches:      "2",
+			wantRejects:      "1",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "meta-index-id:42/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},
+				{Key: "meta-index-id:42/value", Time: 555, Type: "float", OptimizedValue: "3.75", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+		{
+			name:             "is-not-null",
+			filter:           FieldFilter{Key: "value", Op: "is-not", Value: "null"},
+			wantFilter:       FieldFilter{Key: "value", Op: "!=", Value: "null"},
+			wantOutputPoints: "2",
+			wantMatches:      "2",
+			wantRejects:      "1",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "meta-index-id:42/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},
+				{Key: "meta-index-id:42/value", Time: 555, Type: "float", OptimizedValue: "3.75", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+		{
+			name:             "not-in-null",
+			filter:           FieldFilter{Key: "value", Op: "not-in", Value: "(null)"},
+			wantFilter:       FieldFilter{Key: "value", Op: "not-in", Value: "(null)"},
+			wantOutputPoints: "2",
+			wantMatches:      "2",
+			wantRejects:      "1",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "meta-index-id:42/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},
+				{Key: "meta-index-id:42/value", Time: 555, Type: "float", OptimizedValue: "3.75", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			values := []float64{1.25, 0, 3.75}
+			present := []bool{true, false, true}
+			timestamps := []int64{333, 444, 555}
+			valueSize, err := testTSSPDetachedNullableRegularFloatBlockSize(values, present)
+			if err != nil {
+				t.Fatal(err)
+			}
+			chunks := []testTSSPChunkSpec{{
+				sid:      42,
+				minTime:  333,
+				maxTime:  555,
+				offset:   1200,
+				size:     valueSize,
+				timeSize: testTSSPDetachedIntegerFullBlockSize(timestamps),
+			}}
+			metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeTestTSSPDetachedNullableRegularFloatData(filepath.Join(dir, tsspDetachedDataFileName), 1600, chunks[0], values, present, timestamps); err != nil {
+				t.Fatal(err)
+			}
+			queryRange, err := NewTimeRange(333, 555)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+				Format:           FormatTSSPDetachedIndex,
+				QueryRange:       queryRange,
+				QueryFields:      []FieldFilter{tc.filter},
+				KeySampleLimit:   3,
+				BlockSampleLimit: 8,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := report.Files[0]
+			if got, want := file.Extra["data_block_probe_null_values"], "1"; got != want {
+				t.Fatalf("data block probe null values = %q, want %q", got, want)
+			}
+			if got := file.Extra["data_block_probe_output_points"]; got != tc.wantOutputPoints {
+				t.Fatalf("data block probe output points = %q, want %q", got, tc.wantOutputPoints)
+			}
+			if got, want := file.Extra["data_block_probe_filter_rows"], "3"; got != want {
+				t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+			}
+			if got := file.Extra["data_block_probe_filter_matches"]; got != tc.wantMatches {
+				t.Fatalf("data block probe filter matches = %q, want %q", got, tc.wantMatches)
+			}
+			if got := file.Extra["data_block_probe_filter_rejects"]; got != tc.wantRejects {
+				t.Fatalf("data block probe filter rejects = %q, want %q", got, tc.wantRejects)
+			}
+			decode := file.DecodePath
+			if decode == nil {
+				t.Fatal("decode path is nil")
+			}
+			if got, want := decode.QueryFields, []FieldFilter{tc.wantFilter}; !equalFieldFilters(got, want) {
+				t.Fatalf("query fields = %v, want %v", got, want)
+			}
+			if got, want := decode.MatchedFields, []FieldFilter{tc.wantFilter}; !equalFieldFilters(got, want) {
+				t.Fatalf("matched fields = %v, want %v", got, want)
+			}
+			if got := decode.OptimizedValueOutputPoints; got != tc.wantValueOutCount {
+				t.Fatalf("optimized value output points = %d, want %d", got, tc.wantValueOutCount)
+			}
+			if got, want := decode.DataBlockProbeFilterRows, 3; got != want {
+				t.Fatalf("data block probe filter rows = %d, want %d", got, want)
+			}
+			if got, want := len(decode.CursorOutputSamples), len(tc.wantSamples); got != want {
+				t.Fatalf("cursor output samples = %d, want %d", got, want)
+			}
+			for i, want := range tc.wantSamples {
+				got := decode.CursorOutputSamples[i]
+				if got != want {
+					t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+				}
+			}
+			if !decode.Samples[0].ValueOutputAvailable {
+				t.Fatal("expected null predicate result to remain available")
+			}
+		})
+	}
+}
+
 func TestInspectTSSPDetachedDataBlockEmptyRows(t *testing.T) {
 	payload := make([]byte, 5)
 	payload[0] = 42 // openGemini encoding.BlockIntegerEmpty.
@@ -2148,12 +2316,41 @@ func writeTestTSSPDetachedStringFullData(path string, size int, chunk testTSSPCh
 	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+func writeTestTSSPDetachedNullableRegularFloatData(path string, size int, chunk testTSSPChunkSpec, values []float64, present []bool, timestamps []int64) error {
+	var valuePayload bytes.Buffer
+	if _, err := writeTestTSSPAttachedNullableRegularFloatBlock(&valuePayload, values, present, 0); err != nil {
+		return err
+	}
+	timePayload := testTSSPIntegerFullPayload(timestamps)
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+	for buf.Len() < size {
+		buf.WriteByte(0)
+	}
+	if err := writeTestTSSPDetachedPayloadBlock(buf.Bytes(), chunk.offset, chunk.size, valuePayload.Bytes()); err != nil {
+		return err
+	}
+	if err := writeTestTSSPDetachedPayloadBlock(buf.Bytes(), chunk.offset+int64(chunk.size), chunk.testTimeSize(), timePayload); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
 func testTSSPDetachedStringFullBlockSize(values []string) (uint32, error) {
 	payload, err := testTSSPStringFullPayload(values, 0)
 	if err != nil {
 		return 0, err
 	}
 	return uint32(crc32.Size + len(payload)), nil
+}
+
+func testTSSPDetachedNullableRegularFloatBlockSize(values []float64, present []bool) (uint32, error) {
+	var payload bytes.Buffer
+	if _, err := writeTestTSSPAttachedNullableRegularFloatBlock(&payload, values, present, 0); err != nil {
+		return 0, err
+	}
+	return uint32(crc32.Size + payload.Len()), nil
 }
 
 func testTSSPDetachedIntegerFullBlockSize(values []int64) uint32 {
