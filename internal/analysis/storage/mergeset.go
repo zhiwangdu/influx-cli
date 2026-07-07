@@ -56,6 +56,19 @@ type mergesetMetaindexRow struct {
 	IndexBlockSize    uint32
 }
 
+type mergesetMetaindexIndexRangeSummary struct {
+	OutOfBounds     int
+	OrderViolations int
+	Overlaps        int
+	GapRanges       int
+	GapBytes        uint64
+}
+
+type mergesetMetaindexIndexRange struct {
+	Start uint64
+	End   uint64
+}
+
 type mergesetIndexSummary struct {
 	Headers                      []mergesetBlockHeader
 	IndexBlocks                  int
@@ -409,7 +422,6 @@ func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindex
 
 	var totalHeaders uint64
 	var totalIndexBytes uint64
-	outOfBounds := 0
 	indexSizeUint := uint64(0)
 	if indexSize > 0 {
 		indexSizeUint = uint64(indexSize)
@@ -417,18 +429,98 @@ func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindex
 	for _, row := range rows {
 		totalHeaders += uint64(row.BlockHeadersCount)
 		totalIndexBytes += uint64(row.IndexBlockSize)
-		if row.IndexBlockOffset > indexSizeUint || uint64(row.IndexBlockSize) > indexSizeUint-row.IndexBlockOffset {
-			outOfBounds++
-		}
 	}
+	rangeSummary := summarizeMergesetMetaindexIndexRanges(rows, indexSizeUint)
 	report.Extra["metaindex_block_headers"] = fmt.Sprint(totalHeaders)
 	report.Extra["metaindex_index_bytes"] = fmt.Sprint(totalIndexBytes)
+	report.Extra["metaindex_index_range_order_violations"] = fmt.Sprint(rangeSummary.OrderViolations)
+	report.Extra["metaindex_index_range_overlaps"] = fmt.Sprint(rangeSummary.Overlaps)
+	report.Extra["metaindex_index_range_gaps"] = fmt.Sprint(rangeSummary.GapRanges)
+	report.Extra["metaindex_index_gap_bytes"] = fmt.Sprint(rangeSummary.GapBytes)
 	if totalHeaders != metadataBlockCount {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex block_headers_count total=%d differs from metadata blocks_count=%d", totalHeaders, metadataBlockCount))
 	}
-	if outOfBounds > 0 {
-		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex has %d row(s) outside index.bin bounds", outOfBounds))
+	if rangeSummary.OutOfBounds > 0 {
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex has %d row(s) outside index.bin bounds", rangeSummary.OutOfBounds))
 	}
+	if rangeSummary.OrderViolations > 0 {
+		report.BlocksByType["mergeset-metaindex-index-range-order-violation"] = rangeSummary.OrderViolations
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex has %d row(s) whose index.bin offset is before a previous valid row", rangeSummary.OrderViolations))
+	}
+	if rangeSummary.Overlaps > 0 {
+		report.BlocksByType["mergeset-metaindex-index-range-overlap"] = rangeSummary.Overlaps
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex has %d overlapping index.bin row range(s)", rangeSummary.Overlaps))
+	}
+	if rangeSummary.GapRanges > 0 {
+		report.BlocksByType["mergeset-metaindex-index-range-gap"] = rangeSummary.GapRanges
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex leaves %d index.bin byte(s) across %d valid row range gap(s)", rangeSummary.GapBytes, rangeSummary.GapRanges))
+	}
+}
+
+func summarizeMergesetMetaindexIndexRanges(rows []mergesetMetaindexRow, indexSize uint64) mergesetMetaindexIndexRangeSummary {
+	var summary mergesetMetaindexIndexRangeSummary
+	ranges := make([]mergesetMetaindexIndexRange, 0, len(rows))
+	var maxSeenValidOffset uint64
+	haveSeenValidOffset := false
+	for _, row := range rows {
+		size := uint64(row.IndexBlockSize)
+		if row.IndexBlockOffset > indexSize || size > indexSize-row.IndexBlockOffset {
+			summary.OutOfBounds++
+			continue
+		}
+		if haveSeenValidOffset && row.IndexBlockOffset < maxSeenValidOffset {
+			summary.OrderViolations++
+		}
+		if !haveSeenValidOffset || row.IndexBlockOffset > maxSeenValidOffset {
+			maxSeenValidOffset = row.IndexBlockOffset
+		}
+		haveSeenValidOffset = true
+		ranges = append(ranges, mergesetMetaindexIndexRange{
+			Start: row.IndexBlockOffset,
+			End:   row.IndexBlockOffset + size,
+		})
+	}
+	if len(ranges) == 0 {
+		if indexSize > 0 {
+			summary.GapRanges = 1
+			summary.GapBytes = indexSize
+		}
+		return summary
+	}
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].Start == ranges[j].Start {
+			return ranges[i].End < ranges[j].End
+		}
+		return ranges[i].Start < ranges[j].Start
+	})
+	coveredEnd := uint64(0)
+	for i, rowRange := range ranges {
+		if i == 0 {
+			if rowRange.Start > 0 {
+				summary.GapRanges++
+				summary.GapBytes += rowRange.Start
+			}
+			coveredEnd = rowRange.End
+			continue
+		}
+		if rowRange.Start < coveredEnd {
+			summary.Overlaps++
+			if rowRange.End > coveredEnd {
+				coveredEnd = rowRange.End
+			}
+			continue
+		}
+		if rowRange.Start > coveredEnd {
+			summary.GapRanges++
+			summary.GapBytes += rowRange.Start - coveredEnd
+		}
+		coveredEnd = rowRange.End
+	}
+	if coveredEnd < indexSize {
+		summary.GapRanges++
+		summary.GapBytes += indexSize - coveredEnd
+	}
+	return summary
 }
 
 func readMergesetIndexBlocks(path string, rows []mergesetMetaindexRow, componentSizes map[string]int64) (mergesetIndexSummary, []string) {

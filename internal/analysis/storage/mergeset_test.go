@@ -75,6 +75,18 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got, want := file.Extra["metaindex_index_bytes"], file.Extra["index_size"]; got == "" || got != want {
 		t.Fatalf("metaindex index bytes extra = %q, want index size %q", got, want)
 	}
+	if got, want := file.Extra["metaindex_index_range_order_violations"], "0"; got != want {
+		t.Fatalf("metaindex index range order violations extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_overlaps"], "0"; got != want {
+		t.Fatalf("metaindex index range overlaps extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_gaps"], "0"; got != want {
+		t.Fatalf("metaindex index range gaps extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_gap_bytes"], "0"; got != want {
+		t.Fatalf("metaindex index gap bytes extra = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["index_block_count"], "1"; got != want {
 		t.Fatalf("index block count extra = %q, want %q", got, want)
 	}
@@ -1207,27 +1219,7 @@ func TestAnalyzeMergesetInvalidCommonPrefixHeaderNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(partPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	metadataData, err := json.Marshal(metadata)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, write := range []struct {
-		name string
-		data []byte
-	}{
-		{name: mergesetMetadataFile, data: metadataData},
-		{name: mergesetMetaindexFile, data: metaindex},
-		{name: mergesetIndexFile, data: indexData},
-		{name: mergesetItemsFile, data: itemsData},
-		{name: mergesetLensFile, data: lensData},
-	} {
-		if err := os.WriteFile(filepath.Join(partPath, write.name), write.data, 0o600); err != nil {
-			t.Fatalf("WriteFile(%s) error = %v", write.name, err)
-		}
-	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
 		Format: FormatMergeset,
@@ -1298,27 +1290,7 @@ func TestAnalyzeMergesetMetaindexFirstItemMismatchNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(partPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	metadataData, err := json.Marshal(metadata)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, write := range []struct {
-		name string
-		data []byte
-	}{
-		{name: mergesetMetadataFile, data: metadataData},
-		{name: mergesetMetaindexFile, data: metaindex},
-		{name: mergesetIndexFile, data: indexData},
-		{name: mergesetItemsFile, data: itemsData},
-		{name: mergesetLensFile, data: lensData},
-	} {
-		if err := os.WriteFile(filepath.Join(partPath, write.name), write.data, 0o600); err != nil {
-			t.Fatalf("WriteFile(%s) error = %v", write.name, err)
-		}
-	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
 		Format: FormatMergeset,
@@ -1341,6 +1313,508 @@ func TestAnalyzeMergesetMetaindexFirstItemMismatchNotice(t *testing.T) {
 	}
 	if got, want := file.Extra["item_payload_blocks_decoded"], "3"; got != want {
 		t.Fatalf("payload blocks decoded = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexIndexRangeOverlapAndGapNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "6_3_badranges")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  6,
+		BlocksCount: 3,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBlocks := make([][]byte, 0, len(headers))
+	var indexData []byte
+	for _, header := range headers {
+		indexBlockData, err := encodeTestMergesetIndexBlock([]mergesetBlockHeader{header})
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexBlocks = append(indexBlocks, indexBlockData)
+		indexData = append(indexData, indexBlockData...)
+	}
+	if len(indexBlocks[2]) < 2 {
+		t.Fatalf("third index block size = %d, want at least 2", len(indexBlocks[2]))
+	}
+	firstEnd := uint64(len(indexBlocks[0]))
+	secondEnd := firstEnd + uint64(len(indexBlocks[1]))
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexBlocks[0])),
+	}, {
+		FirstItem:         append([]byte(nil), headers[1].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  firstEnd - 1,
+		IndexBlockSize:    uint32(len(indexBlocks[1]) + 1),
+	}, {
+		FirstItem:         append([]byte(nil), headers[2].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  secondEnd + 1,
+		IndexBlockSize:    uint32(len(indexBlocks[2]) - 1),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_overlaps"], "1"; got != want {
+		t.Fatalf("metaindex index range overlaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_gaps"], "1"; got != want {
+		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_gap_bytes"], "1"; got != want {
+		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-overlap"], 1; got != want {
+		t.Fatalf("metaindex range overlap block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 1; got != want {
+		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "metaindex has 1 overlapping index.bin row range") {
+		t.Fatalf("notices = %v, want index range overlap notice", file.Notices)
+	}
+	if !containsString(file.Notices, "metaindex leaves 1 index.bin byte(s) across 1 valid row range gap") {
+		t.Fatalf("notices = %v, want index range gap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexIndexRangeAllOutOfBoundsGapNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "2_1_badrange")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  2,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  uint64(len(indexData) + 1),
+		IndexBlockSize:    1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_gaps"], "1"; got != want {
+		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_gap_bytes"], fmt.Sprint(len(indexData)); got != want {
+		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 1; got != want {
+		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "metaindex has 1 row(s) outside index.bin bounds") {
+		t.Fatalf("notices = %v, want out-of-bounds notice", file.Notices)
+	}
+	if !containsString(file.Notices, "metaindex leaves") {
+		t.Fatalf("notices = %v, want index range gap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexIndexRangeTrailingGapNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "2_1_trailinggap")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  2,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexData) < 2 {
+		t.Fatalf("index data size = %d, want at least 2", len(indexData))
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexData) - 1),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_gaps"], "1"; got != want {
+		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_gap_bytes"], "1"; got != want {
+		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 1; got != want {
+		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "metaindex leaves 1 index.bin byte(s) across 1 valid row range gap") {
+		t.Fatalf("notices = %v, want trailing index range gap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexIndexRangePureLeadingGapNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "2_1_leadinggap")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  2,
+		BlocksCount: 1,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexData) < 2 {
+		t.Fatalf("index data size = %d, want at least 2", len(indexData))
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  1,
+		IndexBlockSize:    uint32(len(indexData) - 1),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_order_violations"], "0"; got != want {
+		t.Fatalf("metaindex index range order violations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_gaps"], "1"; got != want {
+		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_gap_bytes"], "1"; got != want {
+		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 1; got != want {
+		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "metaindex leaves 1 index.bin byte(s) across 1 valid row range gap") {
+		t.Fatalf("notices = %v, want leading index range gap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexIndexRangeLeadingGapWithOutOfBoundsNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_leadinggap")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexData) < 2 {
+		t.Fatalf("index data size = %d, want at least 2", len(indexData))
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  uint64(len(indexData) + 1),
+		IndexBlockSize:    1,
+	}, {
+		FirstItem:         append([]byte(nil), headers[1].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  1,
+		IndexBlockSize:    uint32(len(indexData) - 1),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_order_violations"], "0"; got != want {
+		t.Fatalf("metaindex index range order violations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_gaps"], "1"; got != want {
+		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_gap_bytes"], "1"; got != want {
+		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 1; got != want {
+		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "metaindex has 1 row(s) outside index.bin bounds") {
+		t.Fatalf("notices = %v, want out-of-bounds notice", file.Notices)
+	}
+	if !containsString(file.Notices, "metaindex leaves 1 index.bin byte(s) across 1 valid row range gap") {
+		t.Fatalf("notices = %v, want leading index range gap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexIndexRangeOutOfBoundsBetweenValidRows(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "6_3_oobmiddle")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  6,
+		BlocksCount: 3,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBlocks := make([][]byte, 0, len(headers))
+	var indexData []byte
+	for _, header := range headers {
+		indexBlockData, err := encodeTestMergesetIndexBlock([]mergesetBlockHeader{header})
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexBlocks = append(indexBlocks, indexBlockData)
+		indexData = append(indexData, indexBlockData...)
+	}
+	firstEnd := uint64(len(indexBlocks[0]))
+	secondEnd := firstEnd + uint64(len(indexBlocks[1]))
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  firstEnd,
+		IndexBlockSize:    uint32(len(indexBlocks[1])),
+	}, {
+		FirstItem:         append([]byte(nil), headers[1].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  uint64(len(indexData) + 1),
+		IndexBlockSize:    1,
+	}, {
+		FirstItem:         append([]byte(nil), headers[2].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexBlocks[0])),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_order_violations"], "1"; got != want {
+		t.Fatalf("metaindex index range order violations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_gaps"], "1"; got != want {
+		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_gap_bytes"], fmt.Sprint(len(indexData)-int(secondEnd)); got != want {
+		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-order-violation"], 1; got != want {
+		t.Fatalf("metaindex range order violation block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "metaindex has 1 row(s) outside index.bin bounds") {
+		t.Fatalf("notices = %v, want out-of-bounds notice", file.Notices)
+	}
+	if !containsString(file.Notices, "index.bin offset is before a previous valid row") {
+		t.Fatalf("notices = %v, want index range order violation notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexIndexRangeOrderViolationAndOverlap(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_badorderoverlap")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexData) < 3 {
+		t.Fatalf("index data size = %d, want at least 3", len(indexData))
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  1,
+		IndexBlockSize:    uint32(len(indexData) - 1),
+	}, {
+		FirstItem:         append([]byte(nil), headers[1].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  0,
+		IndexBlockSize:    2,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_order_violations"], "1"; got != want {
+		t.Fatalf("metaindex index range order violations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_overlaps"], "1"; got != want {
+		t.Fatalf("metaindex index range overlaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_gaps"], "0"; got != want {
+		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-order-violation"], 1; got != want {
+		t.Fatalf("metaindex range order violation block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-overlap"], 1; got != want {
+		t.Fatalf("metaindex range overlap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "index.bin offset is before a previous valid row") {
+		t.Fatalf("notices = %v, want index range order violation notice", file.Notices)
+	}
+	if !containsString(file.Notices, "metaindex has 1 overlapping index.bin row range") {
+		t.Fatalf("notices = %v, want index range overlap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexIndexRangeOrderViolationNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "6_3_badorder")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  6,
+		BlocksCount: 3,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBlocks := make([][]byte, 0, len(headers))
+	var indexData []byte
+	for _, header := range headers {
+		indexBlockData, err := encodeTestMergesetIndexBlock([]mergesetBlockHeader{header})
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexBlocks = append(indexBlocks, indexBlockData)
+		indexData = append(indexData, indexBlockData...)
+	}
+	firstEnd := uint64(len(indexBlocks[0]))
+	secondEnd := firstEnd + uint64(len(indexBlocks[1]))
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  secondEnd,
+		IndexBlockSize:    uint32(len(indexBlocks[2])),
+	}, {
+		FirstItem:         append([]byte(nil), headers[1].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexBlocks[0])),
+	}, {
+		FirstItem:         append([]byte(nil), headers[2].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  firstEnd,
+		IndexBlockSize:    uint32(len(indexBlocks[1])),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_order_violations"], "2"; got != want {
+		t.Fatalf("metaindex index range order violations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_overlaps"], "0"; got != want {
+		t.Fatalf("metaindex index range overlaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_gaps"], "0"; got != want {
+		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-order-violation"], 2; got != want {
+		t.Fatalf("metaindex range order violation block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "index.bin offset is before a previous valid row") {
+		t.Fatalf("notices = %v, want index range order violation notice", file.Notices)
 	}
 }
 
@@ -4086,6 +4560,31 @@ func TestAnalyzeMergesetOpenGeminiFieldIndexFieldValueMayContainSeparatorByte(t 
 
 func writeTestMergesetPart(path string, metadata mergesetPartMetadata) error {
 	return writeTestMergesetPartWithMarshalTypes(path, metadata, nil)
+}
+
+func writeTestMergesetPartComponents(t *testing.T, path string, metadata mergesetPartMetadata, metaindex, indexData, itemsData, lensData []byte) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadataData, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, write := range []struct {
+		name string
+		data []byte
+	}{
+		{name: mergesetMetadataFile, data: metadataData},
+		{name: mergesetMetaindexFile, data: metaindex},
+		{name: mergesetIndexFile, data: indexData},
+		{name: mergesetItemsFile, data: itemsData},
+		{name: mergesetLensFile, data: lensData},
+	} {
+		if err := os.WriteFile(filepath.Join(path, write.name), write.data, 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", write.name, err)
+		}
+	}
 }
 
 func writeTestMergesetPartWithItems(path string, items [][]byte) error {
