@@ -36,6 +36,12 @@ type tsspAttachedDataProbe struct {
 	FilterNoneEvals     int
 	FilterEvalMatches   int
 	FilterEvalMisses    int
+	FilterRequiredHits  int
+	FilterRequiredMiss  int
+	FilterAnyHits       int
+	FilterAnyMiss       int
+	FilterNoneHits      int
+	FilterNoneMiss      int
 	FilterOperators     map[string]int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
@@ -183,6 +189,12 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 					probe.FilterNoneEvals += filterStats.NoneEvaluations
 					probe.FilterEvalMatches += filterStats.MatchEvaluations
 					probe.FilterEvalMisses += filterStats.MissEvaluations
+					probe.FilterRequiredHits += filterStats.RequiredMatches
+					probe.FilterRequiredMiss += filterStats.RequiredMisses
+					probe.FilterAnyHits += filterStats.AnyMatches
+					probe.FilterAnyMiss += filterStats.AnyMisses
+					probe.FilterNoneHits += filterStats.NoneMatches
+					probe.FilterNoneMiss += filterStats.NoneMisses
 					addTSSPFilterOperatorCounts(probe.FilterOperators, filterStats.OperatorEvaluations)
 				}
 				chunkOutputPoints += matchedRows
@@ -288,6 +300,12 @@ type tsspDataBlockFilterStats struct {
 	NoneEvaluations     int
 	MatchEvaluations    int
 	MissEvaluations     int
+	RequiredMatches     int
+	RequiredMisses      int
+	AnyMatches          int
+	AnyMisses           int
+	NoneMatches         int
+	NoneMisses          int
 	OperatorEvaluations map[string]int
 }
 
@@ -306,10 +324,25 @@ func (s *tsspDataBlockFilterStats) observe(filter FieldFilter, clause string, ma
 	switch clause {
 	case "required":
 		s.RequiredEvaluations++
+		if matched {
+			s.RequiredMatches++
+		} else {
+			s.RequiredMisses++
+		}
 	case "any":
 		s.AnyEvaluations++
+		if matched {
+			s.AnyMatches++
+		} else {
+			s.AnyMisses++
+		}
 	case "none":
 		s.NoneEvaluations++
+		if matched {
+			s.NoneMatches++
+		} else {
+			s.NoneMisses++
+		}
 	}
 }
 

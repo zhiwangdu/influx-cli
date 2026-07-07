@@ -139,6 +139,12 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeNoneEvals = dataProbe.FilterNoneEvals
 		summary.DataBlockProbeFilterEvalHits = dataProbe.FilterEvalMatches
 		summary.DataBlockProbeFilterEvalMiss = dataProbe.FilterEvalMisses
+		summary.DataBlockProbeRequiredHits = dataProbe.FilterRequiredHits
+		summary.DataBlockProbeRequiredMiss = dataProbe.FilterRequiredMiss
+		summary.DataBlockProbeAnyHits = dataProbe.FilterAnyHits
+		summary.DataBlockProbeAnyMiss = dataProbe.FilterAnyMiss
+		summary.DataBlockProbeNoneHits = dataProbe.FilterNoneHits
+		summary.DataBlockProbeNoneMiss = dataProbe.FilterNoneMiss
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
@@ -401,6 +407,12 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeNoneEvals += src.DataBlockProbeNoneEvals
 	dst.DataBlockProbeFilterEvalHits += src.DataBlockProbeFilterEvalHits
 	dst.DataBlockProbeFilterEvalMiss += src.DataBlockProbeFilterEvalMiss
+	dst.DataBlockProbeRequiredHits += src.DataBlockProbeRequiredHits
+	dst.DataBlockProbeRequiredMiss += src.DataBlockProbeRequiredMiss
+	dst.DataBlockProbeAnyHits += src.DataBlockProbeAnyHits
+	dst.DataBlockProbeAnyMiss += src.DataBlockProbeAnyMiss
+	dst.DataBlockProbeNoneHits += src.DataBlockProbeNoneHits
+	dst.DataBlockProbeNoneMiss += src.DataBlockProbeNoneMiss
 	addTSSPDecodePathCounts(dst.DataBlockProbeFilterOps, src.DataBlockProbeFilterOps)
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
@@ -796,13 +808,19 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if summary.DataBlockProbeFilterEvals > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"executed %d TSSP decoded-row field predicate evaluation(s): matches=%d misses=%d required=%d any=%d none=%d",
+			"executed %d TSSP decoded-row field predicate evaluation(s): matches=%d misses=%d required=%d required_matches=%d required_misses=%d any=%d any_matches=%d any_misses=%d none=%d none_matches=%d none_misses=%d",
 			summary.DataBlockProbeFilterEvals,
 			summary.DataBlockProbeFilterEvalHits,
 			summary.DataBlockProbeFilterEvalMiss,
 			summary.DataBlockProbeRequiredEvals,
+			summary.DataBlockProbeRequiredHits,
+			summary.DataBlockProbeRequiredMiss,
 			summary.DataBlockProbeAnyEvals,
+			summary.DataBlockProbeAnyHits,
+			summary.DataBlockProbeAnyMiss,
 			summary.DataBlockProbeNoneEvals,
+			summary.DataBlockProbeNoneHits,
+			summary.DataBlockProbeNoneMiss,
 		))
 	}
 	if summary.SkippedByKeyBlocks > 0 {

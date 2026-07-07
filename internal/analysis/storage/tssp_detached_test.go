@@ -1218,6 +1218,24 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_filter_evaluation_misses"], "1"; got != want {
 		t.Fatalf("data block probe filter evaluation misses = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_required_filter_evaluation_matches"], "0"; got != want {
+		t.Fatalf("data block probe required filter evaluation matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_required_filter_evaluation_misses"], "0"; got != want {
+		t.Fatalf("data block probe required filter evaluation misses = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_any_filter_evaluation_matches"], "1"; got != want {
+		t.Fatalf("data block probe any filter evaluation matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_any_filter_evaluation_misses"], "1"; got != want {
+		t.Fatalf("data block probe any filter evaluation misses = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_none_filter_evaluation_matches"], "0"; got != want {
+		t.Fatalf("data block probe none filter evaluation matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_none_filter_evaluation_misses"], "0"; got != want {
+		t.Fatalf("data block probe none filter evaluation misses = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "=:2"; got != want {
 		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
 	}
@@ -1243,6 +1261,12 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if got, want := decode.DataBlockProbeFilterEvalMiss, 1; got != want {
 		t.Fatalf("decode filter evaluation misses = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeAnyHits, 1; got != want {
+		t.Fatalf("decode any filter evaluation matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeAnyMiss, 1; got != want {
+		t.Fatalf("decode any filter evaluation misses = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeFilterOps["="], 2; got != want {
 		t.Fatalf("decode equality filter evaluations = %d, want %d", got, want)
 	}
@@ -1265,8 +1289,8 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if !containsString(decode.Recommendations, "executed 2 detached TSSP decoded-row field predicate evaluation") {
 		t.Fatalf("recommendations = %v, want detached predicate evaluation recommendation", decode.Recommendations)
 	}
-	if !containsString(decode.Recommendations, "required=0 any=2 none=0") {
-		t.Fatalf("recommendations = %v, want detached predicate clause breakdown", decode.Recommendations)
+	if !containsString(decode.Recommendations, "required=0 required_matches=0 required_misses=0 any=2 any_matches=1 any_misses=1 none=0 none_matches=0 none_misses=0") {
+		t.Fatalf("recommendations = %v, want detached predicate clause/result breakdown", decode.Recommendations)
 	}
 	if !containsString(decode.Recommendations, "matches=1 misses=1") {
 		t.Fatalf("recommendations = %v, want detached predicate match/miss breakdown", decode.Recommendations)

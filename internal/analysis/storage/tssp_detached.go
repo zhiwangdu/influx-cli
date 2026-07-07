@@ -153,6 +153,12 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["data_block_probe_none_filter_evaluations"] = fmt.Sprint(dataProbe.FilterNoneEvals)
 			report.Extra["data_block_probe_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterEvalMatches)
 			report.Extra["data_block_probe_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterEvalMisses)
+			report.Extra["data_block_probe_required_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterRequiredHits)
+			report.Extra["data_block_probe_required_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterRequiredMiss)
+			report.Extra["data_block_probe_any_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterAnyHits)
+			report.Extra["data_block_probe_any_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterAnyMiss)
+			report.Extra["data_block_probe_none_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterNoneHits)
+			report.Extra["data_block_probe_none_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterNoneMiss)
 			if len(dataProbe.FilterOperators) > 0 {
 				report.Extra["data_block_probe_filter_operator_evaluations"] = tsspDetachedDataProbeTypeSummary(dataProbe.FilterOperators)
 			}
@@ -393,6 +399,12 @@ type tsspDetachedDataProbe struct {
 	FilterNoneEvals     int
 	FilterEvalMatches   int
 	FilterEvalMisses    int
+	FilterRequiredHits  int
+	FilterRequiredMiss  int
+	FilterAnyHits       int
+	FilterAnyMiss       int
+	FilterNoneHits      int
+	FilterNoneMiss      int
 	FilterOperators     map[string]int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
@@ -623,6 +635,12 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 					probe.FilterNoneEvals += filterStats.NoneEvaluations
 					probe.FilterEvalMatches += filterStats.MatchEvaluations
 					probe.FilterEvalMisses += filterStats.MissEvaluations
+					probe.FilterRequiredHits += filterStats.RequiredMatches
+					probe.FilterRequiredMiss += filterStats.RequiredMisses
+					probe.FilterAnyHits += filterStats.AnyMatches
+					probe.FilterAnyMiss += filterStats.AnyMisses
+					probe.FilterNoneHits += filterStats.NoneMatches
+					probe.FilterNoneMiss += filterStats.NoneMisses
 					addTSSPFilterOperatorCounts(probe.FilterOperators, filterStats.OperatorEvaluations)
 				}
 				chunkOutputPoints += matchedRows
@@ -2268,6 +2286,12 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeNoneEvals = dataProbe.FilterNoneEvals
 		summary.DataBlockProbeFilterEvalHits = dataProbe.FilterEvalMatches
 		summary.DataBlockProbeFilterEvalMiss = dataProbe.FilterEvalMisses
+		summary.DataBlockProbeRequiredHits = dataProbe.FilterRequiredHits
+		summary.DataBlockProbeRequiredMiss = dataProbe.FilterRequiredMiss
+		summary.DataBlockProbeAnyHits = dataProbe.FilterAnyHits
+		summary.DataBlockProbeAnyMiss = dataProbe.FilterAnyMiss
+		summary.DataBlockProbeNoneHits = dataProbe.FilterNoneHits
+		summary.DataBlockProbeNoneMiss = dataProbe.FilterNoneMiss
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
@@ -2614,13 +2638,19 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 	}
 	if summary.DataBlockProbeFilterEvals > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"executed %d detached TSSP decoded-row field predicate evaluation(s): matches=%d misses=%d required=%d any=%d none=%d",
+			"executed %d detached TSSP decoded-row field predicate evaluation(s): matches=%d misses=%d required=%d required_matches=%d required_misses=%d any=%d any_matches=%d any_misses=%d none=%d none_matches=%d none_misses=%d",
 			summary.DataBlockProbeFilterEvals,
 			summary.DataBlockProbeFilterEvalHits,
 			summary.DataBlockProbeFilterEvalMiss,
 			summary.DataBlockProbeRequiredEvals,
+			summary.DataBlockProbeRequiredHits,
+			summary.DataBlockProbeRequiredMiss,
 			summary.DataBlockProbeAnyEvals,
+			summary.DataBlockProbeAnyHits,
+			summary.DataBlockProbeAnyMiss,
 			summary.DataBlockProbeNoneEvals,
+			summary.DataBlockProbeNoneHits,
+			summary.DataBlockProbeNoneMiss,
 		))
 	}
 	if summary.SkippedByKeyBlocks > 0 {
