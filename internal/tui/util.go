@@ -6,6 +6,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/zhiwangdu/influx-cli/internal/history"
 	"github.com/zhiwangdu/influx-cli/internal/schema"
 )
@@ -145,6 +147,33 @@ func truncateRunes(value string, width int) string {
 		return strings.Repeat(".", width)
 	}
 	return string(runes[:width-3]) + "..."
+}
+
+func truncateCells(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	if width <= 3 {
+		return strings.Repeat(".", width)
+	}
+	limit := width - 3
+	var builder strings.Builder
+	used := 0
+	for _, r := range value {
+		runeWidth := lipgloss.Width(string(r))
+		if used+runeWidth > limit {
+			break
+		}
+		builder.WriteRune(r)
+		used += runeWidth
+	}
+	if builder.Len() == 0 {
+		return strings.Repeat(".", width)
+	}
+	return builder.String() + "..."
 }
 
 func formatDuration(value time.Duration) string {

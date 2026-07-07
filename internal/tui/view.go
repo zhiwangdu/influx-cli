@@ -7,12 +7,20 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/zhiwangdu/influx-cli/internal/app"
 )
 
 var (
-	statusStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("62"))
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	statusBaseStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("235"))
+	statusBrandStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("30"))
+	statusContextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("24"))
+	statusMetricStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("239"))
+	statusOKStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("16")).Background(lipgloss.Color("40"))
+	statusRunStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("16")).Background(lipgloss.Color("214"))
+	statusErrorStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("160"))
+	titleStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	dimStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 )
 
 func (m Model) View() string {
@@ -123,17 +131,116 @@ func (m Model) statusView(width int) string {
 	if m.loading {
 		state = "running"
 	}
-	status := fmt.Sprintf("%s | format: %s | watch: %s | %s",
-		m.executor.Session.StatusLine(),
+	snapshot := m.executor.Session.Snapshot()
+	health := "ok"
+	if snapshot.LastError != nil {
+		health = "error: " + oneLine(snapshot.LastError.Error())
+	}
+	status := fmt.Sprintf("db: %s | rp: %s | mode: %s | latency: %s | %s | format: %s | watch: %s | %s",
+		printValue(snapshot.Database),
+		printValue(snapshot.RP),
+		printValue(string(snapshot.Dialect)),
+		formatDuration(snapshot.LastLatency),
+		health,
 		printValue(m.renderMode),
 		watch,
 		state,
 	)
-	status = truncateRunes(status, width)
 	if !m.renderOptions.Color {
-		return status
+		return truncateCells(status, width)
 	}
-	return statusStyle.Width(width).Render(status)
+	return m.colorStatusView(width, watch, state, status, snapshot)
+}
+
+func (m Model) colorStatusView(width int, watch, state, plainStatus string, snapshot app.SessionSnapshot) string {
+	// Below this width, a compact single segment is easier to read than clipped pills.
+	if width < 32 {
+		return statusBaseStyle.Width(width).Render(truncateCells(plainStatus, width))
+	}
+	// Use compact labels so the segmented layout remains useful at common widths.
+	segments := []string{
+		statusBrandStyle.Render(" influx-cli "),
+		statusContextStyle.Render(" db:" + printValue(snapshot.Database) + " "),
+		statusContextStyle.Render(" rp:" + printValue(snapshot.RP) + " "),
+		statusMetricStyle.Render(" " + printValue(string(snapshot.Dialect)) + " "),
+		statusMetricStyle.Render(" fmt:" + printValue(m.renderMode) + " "),
+		statusMetricStyle.Render(" W:" + watch + " "),
+		statusMetricStyle.Render(" " + formatDuration(snapshot.LastLatency) + " "),
+		statusHealthStyle(snapshot.LastError, state).Render(" " + statusHealthText(snapshot.LastError, state) + " "),
+	}
+	prefix := strings.Join(segments, "")
+	prefixWidth := lipgloss.Width(prefix)
+
+	stateText := statusActivityText(snapshot.LastError, state)
+	available := width - prefixWidth - 1
+	// Keep enough room for a meaningful state label before using the segmented layout.
+	if available < 8 {
+		return statusBaseStyle.Width(width).Render(truncateCells(plainStatus, width))
+	}
+	stateText = truncateCells(stateText, available-2)
+	line := prefix + statusBaseStyle.Render(" ") + statusActivityStyle(snapshot.LastError, state).Render(" "+stateText+" ")
+	if fill := width - lipgloss.Width(line); fill > 0 {
+		line += statusBaseStyle.Render(strings.Repeat(" ", fill))
+	}
+	return line
+}
+
+func statusHealthText(lastErr error, state string) string {
+	if statusStateError(lastErr, state) {
+		return "error"
+	}
+	return "ok"
+}
+
+func statusHealthStyle(lastErr error, state string) lipgloss.Style {
+	if statusStateError(lastErr, state) {
+		return statusErrorStyle
+	}
+	return statusOKStyle
+}
+
+func statusActivityText(lastErr error, state string) string {
+	if statusStateActive(state) {
+		return state
+	}
+	if lastErr != nil {
+		return oneLine(lastErr.Error())
+	}
+	if strings.TrimSpace(state) == "" {
+		return "idle"
+	}
+	return state
+}
+
+func statusActivityStyle(lastErr error, state string) lipgloss.Style {
+	switch {
+	case statusStateActive(state):
+		return statusRunStyle
+	case statusStateError(lastErr, state):
+		return statusErrorStyle
+	default:
+		return statusOKStyle
+	}
+}
+
+func statusStateActive(state string) bool {
+	lower := strings.ToLower(state)
+	switch lower {
+	case "running", "query running", "query is running", "watch refresh running",
+		"watch on; query running", "query cancelling", "watch refresh cancelling",
+		"watch off; cancelling refresh":
+		return true
+	default:
+		return false
+	}
+}
+
+func statusStateError(lastErr error, state string) bool {
+	if statusStateActive(state) {
+		return false
+	}
+	lower := strings.ToLower(state)
+	return lastErr != nil || strings.Contains(lower, "fail") || strings.Contains(lower, "error")
 }
 
 func (m Model) resultPanel() string {

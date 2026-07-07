@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/zhiwangdu/influx-cli/internal/adapter"
 	"github.com/zhiwangdu/influx-cli/internal/app"
@@ -56,6 +57,63 @@ func TestModelRunsQueryAndRendersTable(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(model.schemaLines(), "\n"), "usage_idle:float") {
 		t.Fatalf("expected schema lines to include usage_idle, got %v", model.schemaLines())
+	}
+}
+
+func TestStatusViewUsesSegmentedColorBar(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.renderOptions.Color = true
+
+	status := model.statusView(90)
+	for _, want := range []string{"influx-cli", "db:metrics", "rp:autogen", "influxql", "fmt:table", "W:off", "ok", "ready"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status bar missing %q:\n%q", want, status)
+		}
+	}
+	if width := lipgloss.Width(status); width != 90 {
+		t.Fatalf("status bar width = %d, want 90:\n%q", width, status)
+	}
+}
+
+func TestStatusViewNoColorUsesPlainStatusText(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.renderOptions.Color = false
+
+	status := model.statusView(120)
+	want := "db: metrics | rp: autogen | mode: influxql | latency: - | ok | format: table | watch: off | ready"
+	if status != want {
+		t.Fatalf("status = %q, want %q", status, want)
+	}
+	if strings.Contains(status, "\x1b[") {
+		t.Fatalf("plain status should not include ANSI styling:\n%q", status)
+	}
+}
+
+func TestStatusViewTruncatesWideStateTextByDisplayWidth(t *testing.T) {
+	model := newTestModel(&fakeAdapter{})
+	model.renderOptions.Color = true
+	model.statusMessage = strings.Repeat("查询", 12)
+
+	status := model.statusView(90)
+	if width := lipgloss.Width(status); width != 90 {
+		t.Fatalf("status bar width = %d, want 90:\n%q", width, status)
+	}
+}
+
+func TestStatusViewRunningDoesNotShowStaleErrorHealth(t *testing.T) {
+	model := newTestModel(&fakeAdapter{queryErr: errors.New("previous failure")})
+	model.renderOptions.Color = true
+	_, _ = model.executor.Execute(context.Background(), "select value from cpu")
+	model.loading = true
+
+	status := model.statusView(90)
+	if strings.Contains(status, "error") || strings.Contains(status, "previous failure") {
+		t.Fatalf("running status should not show stale error:\n%q", status)
+	}
+	for _, want := range []string{"ok", "running"} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("running status missing %q:\n%q", want, status)
+		}
 	}
 }
 
