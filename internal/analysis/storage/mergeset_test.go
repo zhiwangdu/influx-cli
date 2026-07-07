@@ -3531,6 +3531,114 @@ func TestAnalyzeMergesetOpenGeminiFieldIndexItems(t *testing.T) {
 	if got, want := file.BlocksByType["opengemini-field-index-field-pid"], 1; got != want {
 		t.Fatalf("field index pid blocks = %d, want %d", got, want)
 	}
+	if file.Fields == nil {
+		t.Fatal("expected openGemini field index summary")
+	}
+	if got, want := file.Fields.Type, "opengemini-field-mergeset"; got != want {
+		t.Fatalf("field summary type = %q, want %q", got, want)
+	}
+	if got, want := file.Fields.MeasurementCount, 1; got != want {
+		t.Fatalf("field summary measurement count = %d, want %d", got, want)
+	}
+	if got, want := file.Fields.FieldCount, 1; got != want {
+		t.Fatalf("field summary field count = %d, want %d", got, want)
+	}
+	if got, want := file.Fields.FieldsByType, map[string]int{"string": 1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("field summary types = %+v, want %+v", got, want)
+	}
+	if got, want := file.Fields.MeasurementSamples, []FieldIndexMeasurementReport{{
+		Name:       "cpu",
+		FieldCount: 1,
+		Fields: []FieldIndexFieldReport{{
+			Name: "region",
+			Type: "string",
+		}},
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("field summary measurement samples = %+v, want %+v", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiFieldIndexSummarySampleLimits(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiFieldIndexMeasurement("cpu", "region"),
+		encodeTestOpenGeminiFieldIndexMeasurement("mem", "host"),
+		encodeTestOpenGeminiFieldIndexMeasurement("disk", "path"),
+	}
+	partPath := filepath.Join(t.TempDir(), "3_1_fieldindexlimits")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   1,
+		BlockSampleLimit: 0,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	fields := report.Files[0].Fields
+	if fields == nil {
+		t.Fatal("expected openGemini field index summary")
+	}
+	if got, want := fields.MeasurementCount, 3; got != want {
+		t.Fatalf("field summary measurement count = %d, want %d", got, want)
+	}
+	if got, want := fields.FieldCount, 3; got != want {
+		t.Fatalf("field summary field count = %d, want %d", got, want)
+	}
+	if got, want := fields.FieldsByType, map[string]int{"string": 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("field summary types = %+v, want %+v", got, want)
+	}
+	if got, want := fields.MeasurementSamples, []FieldIndexMeasurementReport{{
+		Name:       "cpu",
+		FieldCount: 1,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("field summary samples = %+v, want %+v", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiFieldIndexSummaryDuplicateMeasurementKey(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiFieldIndexMeasurement("cpu", "host"),
+		encodeTestOpenGeminiFieldIndexMeasurement("cpu", "region"),
+	}
+	partPath := filepath.Join(t.TempDir(), "2_1_fieldindexdup")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.BlocksByType["opengemini-field-index-duplicate-measurement-key"], 1; got != want {
+		t.Fatalf("duplicate measurement key blocks = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "duplicate measurement field-key") {
+		t.Fatalf("notices = %v, want duplicate field-key notice", file.Notices)
+	}
+	if file.Fields == nil {
+		t.Fatal("expected openGemini field index summary")
+	}
+	if got, want := file.Fields.FieldCount, 1; got != want {
+		t.Fatalf("field summary field count = %d, want %d", got, want)
+	}
+	if got, want := file.Fields.MeasurementSamples, []FieldIndexMeasurementReport{{
+		Name:       "cpu",
+		FieldCount: 1,
+		Fields: []FieldIndexFieldReport{{
+			Name: "region",
+			Type: "string",
+		}},
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("field summary samples = %+v, want %+v", got, want)
+	}
 }
 
 func TestAnalyzeMergesetOpenGeminiFieldIndexInvalidItem(t *testing.T) {

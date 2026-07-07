@@ -1399,7 +1399,7 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 	}
 	addMergesetCLVTextIndexSummary(report, summary.CLVText)
 	addMergesetTSIIndexSummary(report, summary.TSIIndex, options)
-	addMergesetFieldIndexSummary(report, summary.FieldIndex)
+	addMergesetFieldIndexSummary(report, summary.FieldIndex, options)
 	if summary.ItemsDecoded != metadataItemsCount {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded item payload count=%d differs from metadata items_count=%d", summary.ItemsDecoded, metadataItemsCount))
 	}
@@ -2599,9 +2599,12 @@ func isMergesetFieldIndexPrefix(item []byte) bool {
 	}
 }
 
-func addMergesetFieldIndexSummary(report *FileReport, summary mergesetFieldIndexSummary) {
+func addMergesetFieldIndexSummary(report *FileReport, summary mergesetFieldIndexSummary, options Options) {
 	if !summary.Detected {
 		return
+	}
+	if fields := buildMergesetFieldIndexReport(summary, options); fields != nil {
+		report.Fields = fields
 	}
 	report.Extra["opengemini_field_index_detected"] = "true"
 	report.Extra["opengemini_field_index_measurements"] = fmt.Sprint(len(summary.MeasurementFieldKeys))
@@ -2628,6 +2631,48 @@ func addMergesetFieldIndexSummary(report *FileReport, summary mergesetFieldIndex
 		report.BlocksByType["opengemini-field-index-duplicate-measurement-key"] = summary.DuplicateMeasurementKey
 		report.Notices = append(report.Notices, fmt.Sprintf("openGemini field index has %d duplicate measurement field-key mapping(s)", summary.DuplicateMeasurementKey))
 	}
+}
+
+func buildMergesetFieldIndexReport(summary mergesetFieldIndexSummary, options Options) *FieldIndexSummary {
+	if len(summary.MeasurementFieldKeys) == 0 {
+		return nil
+	}
+	names := sortedMergesetFieldIndexMeasurementNames(summary.MeasurementFieldKeys)
+	fields := &FieldIndexSummary{
+		Type:             "opengemini-field-mergeset",
+		MeasurementCount: len(names),
+		// openGemini FieldIndex stores one indexed string field key per measurement; conflicting duplicates are reported separately.
+		FieldCount: len(names),
+		FieldsByType: map[string]int{
+			"string": len(names),
+		},
+	}
+	for _, name := range names {
+		if len(fields.MeasurementSamples) >= options.KeySampleLimit {
+			continue
+		}
+		sample := FieldIndexMeasurementReport{
+			Name:       name,
+			FieldCount: 1,
+		}
+		if options.BlockSampleLimit > 0 {
+			sample.Fields = []FieldIndexFieldReport{{
+				Name: summary.MeasurementFieldKeys[name],
+				Type: "string",
+			}}
+		}
+		fields.MeasurementSamples = append(fields.MeasurementSamples, sample)
+	}
+	return fields
+}
+
+func sortedMergesetFieldIndexMeasurementNames(fields map[string]string) []string {
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func metaindexBlockHeaders(rows []mergesetMetaindexRow) uint64 {
