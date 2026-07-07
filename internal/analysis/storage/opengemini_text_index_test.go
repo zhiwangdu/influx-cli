@@ -397,9 +397,86 @@ func TestAnalyzeOpenGeminiTextIndexDetectsOutOfBoundsRanges(t *testing.T) {
 	}
 }
 
-func TestAnalyzeOpenGeminiTextIndexPartBoundaryMismatch(t *testing.T) {
+func TestAnalyzeOpenGeminiTextIndexBlockRangeIssues(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "00000001-0001-00000009.tssp.content")
+	writeTestOpenGeminiTextIndex(t, base, []testOpenGeminiTextBlockHeader{
+		{
+			First:      "aa",
+			Last:       "zz",
+			ItemsCount: 1,
+			KeysOffset: 0,
+			KeysUnpack: 4,
+			KeysPack:   2,
+			KeysSize:   2,
+			PostOffset: 2,
+			PostUnpack: 4,
+			PostPack:   2,
+			PostSize:   2,
+		},
+		{
+			First:      "ab",
+			Last:       "ac",
+			ItemsCount: 1,
+			KeysOffset: 4,
+			KeysUnpack: 4,
+			KeysPack:   2,
+			KeysSize:   2,
+			PostOffset: 6,
+			PostUnpack: 4,
+			PostPack:   2,
+			PostSize:   2,
+		},
+		{
+			First:      "zy",
+			Last:       "zx",
+			ItemsCount: 1,
+			KeysOffset: 8,
+			KeysUnpack: 4,
+			KeysPack:   2,
+			KeysSize:   2,
+			PostOffset: 10,
+			PostUnpack: 4,
+			PostPack:   2,
+			PostSize:   2,
+		},
+	}, 12)
+
+	report, err := Analyze(context.Background(), []string{base + opengeminiTextIndexPartSuffix}, Options{
+		Format: FormatOpenGeminiText,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["invalid_block_ranges"], "1"; got != want {
+		t.Fatalf("invalid block ranges = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["unsorted_block_ranges"], "1"; got != want {
+		t.Fatalf("unsorted block ranges = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["part_boundary_mismatches"], "0"; got != want {
+		t.Fatalf("part boundary mismatches = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["text-index-invalid-block-range"], 1; got != want {
+		t.Fatalf("invalid block range count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["text-index-unsorted-block-range"], 1; got != want {
+		t.Fatalf("unsorted block range count = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["valid_payload_size_bytes"], "12"; got != want {
+		t.Fatalf("valid payload bytes = %q, want %q", got, want)
+	}
+	for _, want := range []string{"first_item greater than last_item", "not sorted within a part"} {
+		if !containsOpenGeminiTextNotice(file.Notices, want) {
+			t.Fatalf("notices %v do not contain %q", file.Notices, want)
+		}
+	}
+}
+
+func TestAnalyzeOpenGeminiTextIndexPartBoundaryMismatch(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "00000001-0001-00000010.tssp.content")
 	writeTestOpenGeminiTextIndex(t, base, []testOpenGeminiTextBlockHeader{
 		{
 			First:      "aa",
@@ -463,7 +540,7 @@ func TestAnalyzeOpenGeminiTextIndexPartBoundaryMismatch(t *testing.T) {
 
 func TestAnalyzeOpenGeminiTextIndexDirectoryExpansionUsesPartHeaderOnly(t *testing.T) {
 	dir := t.TempDir()
-	base := filepath.Join(dir, "00000001-0001-00000010.tssp.content")
+	base := filepath.Join(dir, "00000001-0001-00000011.tssp.content")
 	writeTestOpenGeminiTextIndex(t, base, []testOpenGeminiTextBlockHeader{{
 		First:      "aa",
 		Last:       "az",
