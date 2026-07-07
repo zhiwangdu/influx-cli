@@ -37,6 +37,11 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				DataBlockProbeRangeRejects:  2,
 				DataBlockProbeFilterSkips:   4,
 				DataBlockProbeAnySkips:      4,
+				DataBlockProbeFilterOps: map[string]int{
+					"between":     2,
+					"not-between": 1,
+					"=":           3,
+				},
 				Recommendations: []string{
 					"read 1 overlapping TSSP segment(s) instead of 3 meta-index candidate segment(s)",
 				},
@@ -56,6 +61,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"read_at calls 6->2",
 		"iterator_cost files=1 blocks=3 bytes=273",
 		"field_filter rows=5 matches=3 rejects=2",
+		"field_filter_ops =:3 between:2 not-between:1",
 		"row_range rows=7 matches=5 rejects=2",
 		"field_filter_short_circuit skips=4 required=0 any=4 none=0",
 	} {
@@ -66,6 +72,24 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 	advice := row[tableColumnIndex(t, result.Table.Columns, "advice")].(string)
 	if !strings.Contains(advice, "read 1 overlapping TSSP segment") {
 		t.Fatalf("advice = %q, want TSSP segment recommendation", advice)
+	}
+}
+
+func TestDecodePathTextOmitsEmptyFilterOperatorCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		counts map[string]int
+	}{
+		{name: "nil"},
+		{name: "empty", counts: map[string]int{}},
+		{name: "zero", counts: map[string]int{"between": 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := decodePathText(&DecodePathSummary{DataBlockProbeFilterOps: tc.counts})
+			if strings.Contains(text, "field_filter_ops") {
+				t.Fatalf("decode path text = %q, want no field_filter_ops segment", text)
+			}
+		})
 	}
 }
 

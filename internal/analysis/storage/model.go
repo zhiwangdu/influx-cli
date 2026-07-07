@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -648,6 +649,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary.DataBlockProbeFilterRows > 0 || summary.DataBlockProbeFilterMatches > 0 || summary.DataBlockProbeFilterRejects > 0 {
 		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d evals=%d eval_matches=%d eval_misses=%d required=%d required_matches=%d required_misses=%d any=%d any_matches=%d any_misses=%d none=%d none_matches=%d none_misses=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects, summary.DataBlockProbeFilterEvals, summary.DataBlockProbeFilterEvalHits, summary.DataBlockProbeFilterEvalMiss, summary.DataBlockProbeRequiredEvals, summary.DataBlockProbeRequiredHits, summary.DataBlockProbeRequiredMiss, summary.DataBlockProbeAnyEvals, summary.DataBlockProbeAnyHits, summary.DataBlockProbeAnyMiss, summary.DataBlockProbeNoneEvals, summary.DataBlockProbeNoneHits, summary.DataBlockProbeNoneMiss))
 	}
+	if ops := countMapText(summary.DataBlockProbeFilterOps); ops != "" {
+		parts = append(parts, "field_filter_ops "+ops)
+	}
 	if summary.DataBlockProbeRangeRows > 0 {
 		parts = append(parts, fmt.Sprintf("row_range rows=%d matches=%d rejects=%d", summary.DataBlockProbeRangeRows, summary.DataBlockProbeRangeMatches, summary.DataBlockProbeRangeRejects))
 	}
@@ -658,6 +662,25 @@ func decodePathText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func countMapText(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(counts))
+	for key, count := range counts {
+		if count <= 0 {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s:%d", key, counts[key]))
+	}
+	return strings.Join(parts, " ")
 }
 
 func decodePathRecommendations(summary *DecodePathSummary) []string {
