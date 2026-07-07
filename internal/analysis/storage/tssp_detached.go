@@ -2187,12 +2187,14 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                    tsspCursorMode("tssp-detached-location-cursor", options),
-		QueryRange:              options.QueryRange,
-		CursorSeekTime:          tsspCursorSeekTime(options),
-		LocationBlocksByType:    map[string]int{},
-		DecodeBlocksByType:      map[string]int{},
-		DataBlockProbeFilterOps: map[string]int{},
+		Mode:                       tsspCursorMode("tssp-detached-location-cursor", options),
+		QueryRange:                 options.QueryRange,
+		CursorSeekTime:             tsspCursorSeekTime(options),
+		LocationBlocksByType:       map[string]int{},
+		DecodeBlocksByType:         map[string]int{},
+		DataBlockProbeTypes:        map[string]int{},
+		DataBlockProbeValueReasons: map[string]int{},
+		DataBlockProbeFilterOps:    map[string]int{},
 	}
 	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	populateTSSPFieldFilterMatches(summary, chunks, options.QueryFields)
@@ -2301,6 +2303,8 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeCRCMismatches = dataProbe.CRCMismatches
 		summary.DataBlockProbeValueBlocks = dataProbe.ValueBlocks
 		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
+		addTSSPDecodePathCounts(summary.DataBlockProbeTypes, dataProbe.BlockTypes)
+		addTSSPDecodePathCounts(summary.DataBlockProbeValueReasons, dataProbe.ValueUnknownReasons)
 		summary.DataBlockProbeNullValues = dataProbe.NullValues
 		summary.DataBlockProbeRecordSamples = dataProbe.RecordSamples
 		summary.DataBlockProbeRangeRows = dataProbe.RangeRows

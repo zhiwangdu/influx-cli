@@ -360,8 +360,10 @@ type DecodePathSummary struct {
 	DataBlockProbeBytes          int64                     `json:"data_block_probe_bytes,omitempty"`
 	DataBlockProbeFailures       int                       `json:"data_block_probe_failures,omitempty"`
 	DataBlockProbeCRCMismatches  int                       `json:"data_block_probe_crc_mismatches,omitempty"`
+	DataBlockProbeTypes          map[string]int            `json:"data_block_probe_types,omitempty"`
 	DataBlockProbeValueBlocks    int                       `json:"data_block_probe_value_blocks,omitempty"`
 	DataBlockProbeValueUnknowns  int                       `json:"data_block_probe_value_unknowns,omitempty"`
+	DataBlockProbeValueReasons   map[string]int            `json:"data_block_probe_value_unknown_reasons,omitempty"`
 	DataBlockProbeNullValues     int                       `json:"data_block_probe_null_values,omitempty"`
 	DataBlockProbeRecordSamples  int                       `json:"data_block_probe_record_samples,omitempty"`
 	DataBlockProbeRangeRows      int                       `json:"data_block_probe_range_rows,omitempty"`
@@ -819,6 +821,15 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.DeduplicatedOutputValues > 0 || summary.DuplicateOutputValues > 0 {
 		parts = append(parts, fmt.Sprintf("dedup outputs=%d duplicates=%d", summary.DeduplicatedOutputValues, summary.DuplicateOutputValues))
+	}
+	if summary.DataBlockProbeBlocks > 0 || summary.DataBlockProbeBytes > 0 || summary.DataBlockProbeFailures > 0 || summary.DataBlockProbeCRCMismatches > 0 || summary.DataBlockProbeValueBlocks > 0 || summary.DataBlockProbeValueUnknowns > 0 || summary.DataBlockProbeNullValues > 0 || summary.DataBlockProbeRecordSamples > 0 {
+		parts = append(parts, fmt.Sprintf("data_probe blocks=%d bytes=%d failures=%d crc_mismatches=%d value_blocks=%d value_unknowns=%d nulls=%d record_samples=%d", summary.DataBlockProbeBlocks, summary.DataBlockProbeBytes, summary.DataBlockProbeFailures, summary.DataBlockProbeCRCMismatches, summary.DataBlockProbeValueBlocks, summary.DataBlockProbeValueUnknowns, summary.DataBlockProbeNullValues, summary.DataBlockProbeRecordSamples))
+	}
+	if probeTypes := countMapText(summary.DataBlockProbeTypes); probeTypes != "" {
+		parts = append(parts, "data_probe_types "+probeTypes)
+	}
+	if unknownReasons := countMapText(summary.DataBlockProbeValueReasons); unknownReasons != "" {
+		parts = append(parts, "data_probe_value_unknown_reasons "+unknownReasons)
 	}
 	if summary.DataBlockProbeFilterRows > 0 || summary.DataBlockProbeFilterMatches > 0 || summary.DataBlockProbeFilterRejects > 0 {
 		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d evals=%d eval_matches=%d eval_misses=%d required=%d required_matches=%d required_misses=%d any=%d any_matches=%d any_misses=%d none=%d none_matches=%d none_misses=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects, summary.DataBlockProbeFilterEvals, summary.DataBlockProbeFilterEvalHits, summary.DataBlockProbeFilterEvalMiss, summary.DataBlockProbeRequiredEvals, summary.DataBlockProbeRequiredHits, summary.DataBlockProbeRequiredMiss, summary.DataBlockProbeAnyEvals, summary.DataBlockProbeAnyHits, summary.DataBlockProbeAnyMiss, summary.DataBlockProbeNoneEvals, summary.DataBlockProbeNoneHits, summary.DataBlockProbeNoneMiss))

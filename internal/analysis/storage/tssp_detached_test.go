@@ -754,6 +754,9 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if got, want := decode.DataBlockProbeCRCMismatches, 0; got != want {
 		t.Fatalf("data block probe crc mismatches = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeTypes["integer-full"], 2; got != want {
+		t.Fatalf("decode data block probe integer-full blocks = %d, want %d", got, want)
+	}
 	if got, want := decode.LocationBlocksByType["detached-chunk-meta"], 2; got != want {
 		t.Fatalf("location detached chunk metadata blocks = %d, want %d", got, want)
 	}

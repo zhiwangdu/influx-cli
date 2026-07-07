@@ -14,12 +14,14 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                    tsspCursorMode("tssp-location-cursor", options),
-		QueryRange:              options.QueryRange,
-		CursorSeekTime:          tsspCursorSeekTime(options),
-		LocationBlocksByType:    map[string]int{},
-		DecodeBlocksByType:      map[string]int{},
-		DataBlockProbeFilterOps: map[string]int{},
+		Mode:                       tsspCursorMode("tssp-location-cursor", options),
+		QueryRange:                 options.QueryRange,
+		CursorSeekTime:             tsspCursorSeekTime(options),
+		LocationBlocksByType:       map[string]int{},
+		DecodeBlocksByType:         map[string]int{},
+		DataBlockProbeTypes:        map[string]int{},
+		DataBlockProbeValueReasons: map[string]int{},
+		DataBlockProbeFilterOps:    map[string]int{},
 	}
 	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	populateTSSPFieldFilterMatches(summary, chunks, options.QueryFields)
@@ -135,6 +137,8 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeFailures = dataProbe.Failures()
 		summary.DataBlockProbeValueBlocks = dataProbe.ValueBlocks
 		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
+		addTSSPDecodePathCounts(summary.DataBlockProbeTypes, dataProbe.BlockTypes)
+		addTSSPDecodePathCounts(summary.DataBlockProbeValueReasons, dataProbe.ValueUnknownReasons)
 		summary.DataBlockProbeNullValues = dataProbe.NullValues
 		summary.DataBlockProbeRecordSamples = dataProbe.RecordSamples
 		summary.DataBlockProbeRangeRows = dataProbe.RangeRows
@@ -185,14 +189,16 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                    tsspCursorMode("tssp-file-set-location-cursor", options),
-		QueryRange:              options.QueryRange,
-		CursorSeekTime:          tsspCursorSeekTime(options),
-		QuerySeriesIDs:          append([]uint64(nil), options.QuerySeriesIDs...),
-		KeyFilterApplied:        len(options.QuerySeriesIDs) > 0,
-		LocationBlocksByType:    map[string]int{},
-		DecodeBlocksByType:      map[string]int{},
-		DataBlockProbeFilterOps: map[string]int{},
+		Mode:                       tsspCursorMode("tssp-file-set-location-cursor", options),
+		QueryRange:                 options.QueryRange,
+		CursorSeekTime:             tsspCursorSeekTime(options),
+		QuerySeriesIDs:             append([]uint64(nil), options.QuerySeriesIDs...),
+		KeyFilterApplied:           len(options.QuerySeriesIDs) > 0,
+		LocationBlocksByType:       map[string]int{},
+		DecodeBlocksByType:         map[string]int{},
+		DataBlockProbeTypes:        map[string]int{},
+		DataBlockProbeValueReasons: map[string]int{},
+		DataBlockProbeFilterOps:    map[string]int{},
 	}
 	matchedSeriesIDs := map[uint64]struct{}{}
 	matchedColumns := map[string]struct{}{}
@@ -257,14 +263,16 @@ func buildTSSPDetachedFileSetDecodePathSummary(files []FileReport, options Optio
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                    tsspCursorMode("tssp-detached-file-set-location-cursor", options),
-		QueryRange:              options.QueryRange,
-		CursorSeekTime:          tsspCursorSeekTime(options),
-		QueryMetaIndexIDs:       append([]uint64(nil), options.QueryMetaIndexIDs...),
-		KeyFilterApplied:        len(options.QueryMetaIndexIDs) > 0,
-		LocationBlocksByType:    map[string]int{},
-		DecodeBlocksByType:      map[string]int{},
-		DataBlockProbeFilterOps: map[string]int{},
+		Mode:                       tsspCursorMode("tssp-detached-file-set-location-cursor", options),
+		QueryRange:                 options.QueryRange,
+		CursorSeekTime:             tsspCursorSeekTime(options),
+		QueryMetaIndexIDs:          append([]uint64(nil), options.QueryMetaIndexIDs...),
+		KeyFilterApplied:           len(options.QueryMetaIndexIDs) > 0,
+		LocationBlocksByType:       map[string]int{},
+		DecodeBlocksByType:         map[string]int{},
+		DataBlockProbeTypes:        map[string]int{},
+		DataBlockProbeValueReasons: map[string]int{},
+		DataBlockProbeFilterOps:    map[string]int{},
 	}
 	matchedMetaIndexIDs := map[uint64]struct{}{}
 	matchedColumns := map[string]struct{}{}
@@ -414,6 +422,8 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeCRCMismatches += src.DataBlockProbeCRCMismatches
 	dst.DataBlockProbeValueBlocks += src.DataBlockProbeValueBlocks
 	dst.DataBlockProbeValueUnknowns += src.DataBlockProbeValueUnknowns
+	addTSSPDecodePathCounts(dst.DataBlockProbeTypes, src.DataBlockProbeTypes)
+	addTSSPDecodePathCounts(dst.DataBlockProbeValueReasons, src.DataBlockProbeValueReasons)
 	dst.DataBlockProbeNullValues += src.DataBlockProbeNullValues
 	dst.DataBlockProbeRecordSamples += src.DataBlockProbeRecordSamples
 	dst.DataBlockProbeRangeRows += src.DataBlockProbeRangeRows

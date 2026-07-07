@@ -31,6 +31,21 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				IteratorCostFiles:           1,
 				IteratorCostBlocks:          3,
 				IteratorCostBytes:           273,
+				DataBlockProbeBlocks:        4,
+				DataBlockProbeBytes:         256,
+				DataBlockProbeFailures:      1,
+				DataBlockProbeCRCMismatches: 1,
+				DataBlockProbeTypes: map[string]int{
+					"float-full":   2,
+					"integer-full": 1,
+				},
+				DataBlockProbeValueBlocks:   2,
+				DataBlockProbeValueUnknowns: 1,
+				DataBlockProbeValueReasons: map[string]int{
+					"float-full-codec-7": 1,
+				},
+				DataBlockProbeNullValues:    3,
+				DataBlockProbeRecordSamples: 1,
 				DataBlockProbeFilterRows:    5,
 				DataBlockProbeFilterMatches: 3,
 				DataBlockProbeFilterRejects: 2,
@@ -64,6 +79,9 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"cursor_reads 3->1",
 		"read_at calls 6->2",
 		"iterator_cost files=1 blocks=3 bytes=273",
+		"data_probe blocks=4 bytes=256 failures=1 crc_mismatches=1 value_blocks=2 value_unknowns=1 nulls=3 record_samples=1",
+		"data_probe_types float-full:2 integer-full:1",
+		"data_probe_value_unknown_reasons float-full-codec-7:1",
 		"field_filter rows=5 matches=3 rejects=2",
 		"field_filter_ops =:3 between:2 not-between:1",
 		"row_range rows=7 matches=5 rejects=2",
@@ -109,6 +127,18 @@ func TestDecodePathTextOmitsEmptyBlockTypeCounts(t *testing.T) {
 	}
 }
 
+func TestDecodePathTextOmitsEmptyDataProbeCountMaps(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		DataBlockProbeTypes:        map[string]int{"integer-full": 0},
+		DataBlockProbeValueReasons: map[string]int{"float-full-codec-7": -1},
+	})
+	for _, notWant := range []string{"data_probe_types", "data_probe_value_unknown_reasons"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("decode path text = %q, want no %s segment", text, notWant)
+		}
+	}
+}
+
 func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	report := Report{
 		Files: []FileReport{
@@ -144,6 +174,11 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 			SavedDecodeBlocks:     5,
 			LocationBlocksByType:  map[string]int{"chunk-meta": 6, "meta-index": 2},
 			DecodeBlocksByType:    map[string]int{"chunk-meta": 3},
+			DataBlockProbeBlocks:  6,
+			DataBlockProbeTypes:   map[string]int{"float-full": 2, "integer-full": 4},
+			DataBlockProbeValueReasons: map[string]int{
+				"float-full-codec-7": 2,
+			},
 			Recommendations: []string{
 				"final TSSP file-set output samples include locally deduplicated rows",
 			},
@@ -188,6 +223,9 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 		"blocks 8->3",
 		"location_block_types chunk-meta:6 meta-index:2",
 		"decode_block_types chunk-meta:3",
+		"data_probe blocks=6 bytes=0 failures=0 crc_mismatches=0 value_blocks=0 value_unknowns=0 nulls=0 record_samples=0",
+		"data_probe_types float-full:2 integer-full:4",
+		"data_probe_value_unknown_reasons float-full-codec-7:2",
 	} {
 		if !strings.Contains(decodeText, want) {
 			t.Fatalf("aggregate decode path = %q, want %q", decodeText, want)
