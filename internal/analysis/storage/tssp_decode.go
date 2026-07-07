@@ -134,6 +134,9 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeFilterMatches = dataProbe.FilterMatches
 		summary.DataBlockProbeFilterRejects = dataProbe.FilterRejects
 		summary.DataBlockProbeFilterEvals = dataProbe.FilterEvaluations
+		summary.DataBlockProbeRequiredEvals = dataProbe.FilterRequiredEvals
+		summary.DataBlockProbeAnyEvals = dataProbe.FilterAnyEvals
+		summary.DataBlockProbeNoneEvals = dataProbe.FilterNoneEvals
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
@@ -391,6 +394,9 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeFilterMatches += src.DataBlockProbeFilterMatches
 	dst.DataBlockProbeFilterRejects += src.DataBlockProbeFilterRejects
 	dst.DataBlockProbeFilterEvals += src.DataBlockProbeFilterEvals
+	dst.DataBlockProbeRequiredEvals += src.DataBlockProbeRequiredEvals
+	dst.DataBlockProbeAnyEvals += src.DataBlockProbeAnyEvals
+	dst.DataBlockProbeNoneEvals += src.DataBlockProbeNoneEvals
 	addTSSPDecodePathCounts(dst.DataBlockProbeFilterOps, src.DataBlockProbeFilterOps)
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
@@ -786,8 +792,11 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if summary.DataBlockProbeFilterEvals > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"executed %d TSSP decoded-row field predicate evaluation(s)",
+			"executed %d TSSP decoded-row field predicate evaluation(s): required=%d any=%d none=%d",
 			summary.DataBlockProbeFilterEvals,
+			summary.DataBlockProbeRequiredEvals,
+			summary.DataBlockProbeAnyEvals,
+			summary.DataBlockProbeNoneEvals,
 		))
 	}
 	if summary.SkippedByKeyBlocks > 0 {
