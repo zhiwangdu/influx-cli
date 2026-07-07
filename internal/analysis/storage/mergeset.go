@@ -247,7 +247,7 @@ func analyzeMergesetPart(path string, info os.FileInfo, options Options) (FileRe
 		addMergesetMetaindexSummary(&report, metaindex, componentSizes[mergesetIndexFile], metadata.BlocksCount)
 		indexSummary, indexNotices := readMergesetIndexBlocks(path, metaindex.Rows, componentSizes)
 		report.Notices = append(report.Notices, indexNotices...)
-		addMergesetIndexSummary(&report, indexSummary, componentSizes, metaindex, metadata.ItemsCount, options)
+		addMergesetIndexSummary(&report, indexSummary, componentSizes, metaindex, metadata.ItemsCount, firstItem, lastItem, options)
 		payloadSummary, payloadNotices := readMergesetItemPayloads(path, indexSummary.Headers, componentSizes, options, firstItem, lastItem)
 		report.Notices = append(report.Notices, payloadNotices...)
 		addMergesetItemPayloadSummary(&report, payloadSummary, firstItem, lastItem, metadata.ItemsCount, options)
@@ -696,7 +696,7 @@ func parseMergesetBytes(data []byte, field string) ([]byte, []byte, error) {
 	return value, data[valueLenInt:], nil
 }
 
-func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, componentSizes map[string]int64, metaindex mergesetMetaindexSummary, metadataItemsCount uint64, options Options) {
+func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, componentSizes map[string]int64, metaindex mergesetMetaindexSummary, metadataItemsCount uint64, metadataFirstItem, metadataLastItem []byte, options Options) {
 	report.Extra["index_block_count"] = fmt.Sprint(summary.IndexBlocks)
 	report.Extra["index_blocks_decoded"] = fmt.Sprint(summary.DecodedBlocks)
 	report.Extra["index_block_headers"] = fmt.Sprint(len(summary.Headers))
@@ -712,6 +712,9 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	var plainBlocks int
 	var zstdBlocks int
 	var invalidCommonPrefix int
+	var headersBeforeMetadataRange int
+	var headersAfterMetadataRange int
+	metadataRangeValid := bytes.Compare(metadataFirstItem, metadataLastItem) <= 0
 	itemsSize := uint64(0)
 	if componentSizes[mergesetItemsFile] > 0 {
 		itemsSize = uint64(componentSizes[mergesetItemsFile])
@@ -740,6 +743,14 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 			Start: header.LensBlockOffset,
 			Size:  uint64(header.LensBlockSize),
 		})
+		if metadataRangeValid {
+			if bytes.Compare(header.FirstItem, metadataFirstItem) < 0 {
+				headersBeforeMetadataRange++
+			}
+			if bytes.Compare(header.FirstItem, metadataLastItem) > 0 {
+				headersAfterMetadataRange++
+			}
+		}
 		if !bytes.HasPrefix(header.FirstItem, header.CommonPrefix) {
 			invalidCommonPrefix++
 		}
@@ -754,6 +765,8 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	report.Extra["plain_block_headers"] = fmt.Sprint(plainBlocks)
 	report.Extra["zstd_block_headers"] = fmt.Sprint(zstdBlocks)
 	report.Extra["invalid_common_prefix_headers"] = fmt.Sprint(invalidCommonPrefix)
+	report.Extra["index_block_headers_before_metadata_range"] = fmt.Sprint(headersBeforeMetadataRange)
+	report.Extra["index_block_headers_after_metadata_range"] = fmt.Sprint(headersAfterMetadataRange)
 	report.Extra["items_range_out_of_bounds"] = fmt.Sprint(itemsRangeSummary.OutOfBounds)
 	report.Extra["items_range_order_violations"] = fmt.Sprint(itemsRangeSummary.OrderViolations)
 	report.Extra["items_range_overlaps"] = fmt.Sprint(itemsRangeSummary.Overlaps)
@@ -769,6 +782,14 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	}
 	if itemCount != metadataItemsCount {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset index item count total=%d differs from metadata items_count=%d", itemCount, metadataItemsCount))
+	}
+	if headersBeforeMetadataRange > 0 {
+		report.BlocksByType["mergeset-index-header-before-metadata-range"] = headersBeforeMetadataRange
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset index has %d block header(s) before metadata first_item=%s", headersBeforeMetadataRange, hex.EncodeToString(metadataFirstItem)))
+	}
+	if headersAfterMetadataRange > 0 {
+		report.BlocksByType["mergeset-index-header-after-metadata-range"] = headersAfterMetadataRange
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset index has %d block header(s) after metadata last_item=%s", headersAfterMetadataRange, hex.EncodeToString(metadataLastItem)))
 	}
 	addMergesetComponentRangeSummary(report, "items", "items.bin", itemsRangeSummary)
 	addMergesetComponentRangeSummary(report, "lens", "lens.bin", lensRangeSummary)

@@ -2244,7 +2244,7 @@ func TestAnalyzeMergesetItemPayloadMetadataRangeNotice(t *testing.T) {
 		ItemsCount:  4,
 		BlocksCount: 2,
 		FirstItem:   "6162",
-		LastItem:    "6163",
+		LastItem:    "6162",
 	}
 	data, err := json.Marshal(metadata)
 	if err != nil {
@@ -2270,8 +2270,20 @@ func TestAnalyzeMergesetItemPayloadMetadataRangeNotice(t *testing.T) {
 	if got, want := file.Extra["item_payload_items_before_metadata_range"], "1"; got != want {
 		t.Fatalf("payload items before metadata range = %q, want %q", got, want)
 	}
-	if got, want := file.Extra["item_payload_items_after_metadata_range"], "1"; got != want {
+	if got, want := file.Extra["item_payload_items_after_metadata_range"], "2"; got != want {
 		t.Fatalf("payload items after metadata range = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["index_block_headers_before_metadata_range"], "1"; got != want {
+		t.Fatalf("index block headers before metadata range = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["index_block_headers_after_metadata_range"], "1"; got != want {
+		t.Fatalf("index block headers after metadata range = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-index-header-before-metadata-range"], 1; got != want {
+		t.Fatalf("index before metadata range block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-index-header-after-metadata-range"], 1; got != want {
+		t.Fatalf("index after metadata range block type count = %d, want %d", got, want)
 	}
 	if got, want := file.BlocksByType["mergeset-item-payload-before-metadata-range"], 1; got != want {
 		t.Fatalf("payload before metadata range block type count = %d, want %d", got, want)
@@ -2286,7 +2298,15 @@ func TestAnalyzeMergesetItemPayloadMetadataRangeNotice(t *testing.T) {
 	if !containsString(report.Notices, beforeNotice) {
 		t.Fatalf("report notices = %v, want %q", report.Notices, beforeNotice)
 	}
-	afterNotice := "mergeset decoded item payload has 1 block(s) and 1 item(s) after metadata last_item=6163"
+	headerBeforeNotice := "mergeset index has 1 block header(s) before metadata first_item=6162"
+	if !containsString(file.Notices, headerBeforeNotice) {
+		t.Fatalf("notices = %v, want %q", file.Notices, headerBeforeNotice)
+	}
+	headerAfterNotice := "mergeset index has 1 block header(s) after metadata last_item=6162"
+	if !containsString(file.Notices, headerAfterNotice) {
+		t.Fatalf("notices = %v, want %q", file.Notices, headerAfterNotice)
+	}
+	afterNotice := "mergeset decoded item payload has 1 block(s) and 2 item(s) after metadata last_item=6162"
 	if !containsString(file.Notices, afterNotice) {
 		t.Fatalf("notices = %v, want %q", file.Notices, afterNotice)
 	}
