@@ -108,6 +108,20 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got := file.Extra["lens_block_bytes"]; got == "" || got == "0" {
 		t.Fatalf("lens block bytes extra = %q, want non-zero", got)
 	}
+	for _, extra := range []string{
+		"items_range_order_violations",
+		"items_range_overlaps",
+		"items_range_gaps",
+		"items_range_gap_bytes",
+		"lens_range_order_violations",
+		"lens_range_overlaps",
+		"lens_range_gaps",
+		"lens_range_gap_bytes",
+	} {
+		if got, want := file.Extra[extra], "0"; got != want {
+			t.Fatalf("%s extra = %q, want %q", extra, got, want)
+		}
+	}
 	if got, want := file.Extra["plain_block_headers"], "2"; got != want {
 		t.Fatalf("plain block headers extra = %q, want %q", got, want)
 	}
@@ -1394,7 +1408,7 @@ func TestAnalyzeMergesetMetaindexIndexRangeOverlapAndGapNotice(t *testing.T) {
 	}
 }
 
-func TestAnalyzeMergesetMetaindexIndexRangeAllOutOfBoundsGapNotice(t *testing.T) {
+func TestAnalyzeMergesetMetaindexIndexRangeAllOutOfBoundsNotice(t *testing.T) {
 	partPath := filepath.Join(t.TempDir(), "2_1_badrange")
 	metadata := mergesetPartMetadata{
 		ItemsCount:  2,
@@ -1428,20 +1442,20 @@ func TestAnalyzeMergesetMetaindexIndexRangeAllOutOfBoundsGapNotice(t *testing.T)
 		t.Fatal(err)
 	}
 	file := report.Files[0]
-	if got, want := file.Extra["metaindex_index_range_gaps"], "1"; got != want {
+	if got, want := file.Extra["metaindex_index_range_gaps"], "0"; got != want {
 		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
 	}
-	if got, want := file.Extra["metaindex_index_gap_bytes"], fmt.Sprint(len(indexData)); got != want {
+	if got, want := file.Extra["metaindex_index_gap_bytes"], "0"; got != want {
 		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
 	}
-	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 1; got != want {
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 0; got != want {
 		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
 	}
 	if !containsString(file.Notices, "metaindex has 1 row(s) outside index.bin bounds") {
 		t.Fatalf("notices = %v, want out-of-bounds notice", file.Notices)
 	}
-	if !containsString(file.Notices, "metaindex leaves") {
-		t.Fatalf("notices = %v, want index range gap notice", file.Notices)
+	if containsString(file.Notices, "metaindex leaves") {
+		t.Fatalf("notices = %v, want no all-out-of-bounds gap notice", file.Notices)
 	}
 }
 
@@ -1815,6 +1829,250 @@ func TestAnalyzeMergesetMetaindexIndexRangeOrderViolationNotice(t *testing.T) {
 	}
 	if !containsString(file.Notices, "index.bin offset is before a previous valid row") {
 		t.Fatalf("notices = %v, want index range order violation notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetItemsRangeOrderViolationAndOverlap(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_baditemsrange")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(itemsData) < 3 {
+		t.Fatalf("items data size = %d, want at least 3", len(itemsData))
+	}
+	headers[0].ItemsBlockOffset = 1
+	headers[0].ItemsBlockSize = uint32(len(itemsData) - 1)
+	headers[1].ItemsBlockOffset = 0
+	headers[1].ItemsBlockSize = 2
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: uint32(len(headers)),
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexData)),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["items_range_order_violations"], "1"; got != want {
+		t.Fatalf("items range order violations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["items_range_overlaps"], "1"; got != want {
+		t.Fatalf("items range overlaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["items_range_gaps"], "0"; got != want {
+		t.Fatalf("items range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-items-range-order-violation"], 1; got != want {
+		t.Fatalf("items range order violation block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-items-range-overlap"], 1; got != want {
+		t.Fatalf("items range overlap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "items block header(s) whose items.bin offset is before a previous valid header") {
+		t.Fatalf("notices = %v, want items range order notice", file.Notices)
+	}
+	if !containsString(file.Notices, "overlapping items.bin block header range") {
+		t.Fatalf("notices = %v, want items range overlap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetItemsRangeGapAndOutOfBounds(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_baditemsgap")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(itemsData) < 2 {
+		t.Fatalf("items data size = %d, want at least 2", len(itemsData))
+	}
+	headers[0].ItemsBlockOffset = 1
+	headers[0].ItemsBlockSize = uint32(len(itemsData) - 1)
+	headers[1].ItemsBlockOffset = uint64(len(itemsData) + 1)
+	headers[1].ItemsBlockSize = 1
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: uint32(len(headers)),
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexData)),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["items_range_gaps"], "1"; got != want {
+		t.Fatalf("items range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["items_range_gap_bytes"], "1"; got != want {
+		t.Fatalf("items range gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-items-range-gap"], 1; got != want {
+		t.Fatalf("items range gap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "items block header(s) outside items.bin bounds") {
+		t.Fatalf("notices = %v, want items out-of-bounds notice", file.Notices)
+	}
+	if !containsString(file.Notices, "leaves 1 items.bin byte") {
+		t.Fatalf("notices = %v, want items range gap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetLensRangeGapAndOutOfBounds(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_badlensrange")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lensData) < 2 {
+		t.Fatalf("lens data size = %d, want at least 2", len(lensData))
+	}
+	headers[0].LensBlockOffset = 1
+	headers[0].LensBlockSize = uint32(len(lensData) - 1)
+	headers[1].LensBlockOffset = uint64(len(lensData) + 1)
+	headers[1].LensBlockSize = 1
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: uint32(len(headers)),
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexData)),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["lens_range_gaps"], "1"; got != want {
+		t.Fatalf("lens range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["lens_range_gap_bytes"], "1"; got != want {
+		t.Fatalf("lens range gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-lens-range-gap"], 1; got != want {
+		t.Fatalf("lens range gap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "lens block header(s) outside lens.bin bounds") {
+		t.Fatalf("notices = %v, want lens out-of-bounds notice", file.Notices)
+	}
+	if !containsString(file.Notices, "leaves 1 lens.bin byte") {
+		t.Fatalf("notices = %v, want lens range gap notice", file.Notices)
+	}
+}
+
+func TestAnalyzeMergesetLensRangeOrderViolationAndOverlap(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_badlensorder")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lensData) < 3 {
+		t.Fatalf("lens data size = %d, want at least 3", len(lensData))
+	}
+	headers[0].LensBlockOffset = 1
+	headers[0].LensBlockSize = uint32(len(lensData) - 1)
+	headers[1].LensBlockOffset = 0
+	headers[1].LensBlockSize = 2
+	indexData, err := encodeTestMergesetIndexBlock(headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         append([]byte(nil), headers[0].FirstItem...),
+		BlockHeadersCount: uint32(len(headers)),
+		IndexBlockOffset:  0,
+		IndexBlockSize:    uint32(len(indexData)),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["lens_range_order_violations"], "1"; got != want {
+		t.Fatalf("lens range order violations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["lens_range_overlaps"], "1"; got != want {
+		t.Fatalf("lens range overlaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["lens_range_gaps"], "0"; got != want {
+		t.Fatalf("lens range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-lens-range-order-violation"], 1; got != want {
+		t.Fatalf("lens range order violation block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-lens-range-overlap"], 1; got != want {
+		t.Fatalf("lens range overlap block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "lens block header(s) whose lens.bin offset is before a previous valid header") {
+		t.Fatalf("notices = %v, want lens range order notice", file.Notices)
+	}
+	if !containsString(file.Notices, "overlapping lens.bin block header range") {
+		t.Fatalf("notices = %v, want lens range overlap notice", file.Notices)
 	}
 }
 
