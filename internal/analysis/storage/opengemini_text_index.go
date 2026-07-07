@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -86,6 +87,7 @@ type opengeminiTextIndexAnalysis struct {
 	InvalidOffsetBlocks   int
 	InvalidSizeBlocks     int
 	SegmentRangeOverflows int
+	PartBoundaryMismatch  int
 	BlocksByType          map[string]int
 	Notices               []string
 }
@@ -126,6 +128,7 @@ func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, options Options) 
 		"post_payload_size_bytes":  fmt.Sprint(analysis.PostPayloadSizeBytes),
 		"payload_size_bytes":       fmt.Sprint(analysis.PayloadSizeBytes),
 		"valid_payload_size_bytes": fmt.Sprint(analysis.ValidPayloadSizeBytes),
+		"part_boundary_mismatches": fmt.Sprint(analysis.PartBoundaryMismatch),
 		"local_only":               "true",
 	}
 
@@ -284,6 +287,7 @@ func parseOpenGeminiTextIndex(paths opengeminiTextIndexPaths) (opengeminiTextInd
 			analysis.InvalidSizeBlocks++
 		}
 	}
+	analysis.PartBoundaryMismatch = countOpenGeminiTextPartBoundaryMismatches(parts, blocks)
 	if !analysis.DataFilePresent {
 		analysis.Notices = append(analysis.Notices, "openGemini text index sibling .pos file is missing; data ranges were not bounds-checked")
 	}
@@ -298,6 +302,10 @@ func parseOpenGeminiTextIndex(paths opengeminiTextIndexPaths) (opengeminiTextInd
 	if analysis.InvalidSizeBlocks > 0 {
 		analysis.BlocksByType["text-index-invalid-size"] = analysis.InvalidSizeBlocks
 		analysis.Notices = append(analysis.Notices, fmt.Sprintf("openGemini text index has %d block header(s) with unpacked key/post sizes smaller than item bytes", analysis.InvalidSizeBlocks))
+	}
+	if analysis.PartBoundaryMismatch > 0 {
+		analysis.BlocksByType["text-index-part-boundary-mismatch"] = analysis.PartBoundaryMismatch
+		analysis.Notices = append(analysis.Notices, fmt.Sprintf("openGemini text index has %d part header boundary value(s) that differ from decoded block headers", analysis.PartBoundaryMismatch))
 	}
 	return analysis, nil
 }
@@ -459,6 +467,37 @@ func validateOpenGeminiTextBlockData(header *opengeminiTextIndexBlockHeader, dat
 	if !openGeminiTextRangeInFile(header.KeysOffset, header.KeysPackSize, dataSize) || !openGeminiTextRangeInFile(header.PostOffset, header.PostPackSize, dataSize) {
 		header.DataOutOfBounds = true
 	}
+}
+
+func countOpenGeminiTextPartBoundaryMismatches(parts []opengeminiTextIndexPartHeader, blocks []opengeminiTextIndexBlockHeader) int {
+	if len(parts) == 0 || len(blocks) == 0 {
+		return 0
+	}
+	blocksByPart := make(map[int][]opengeminiTextIndexBlockHeader)
+	for _, block := range blocks {
+		blocksByPart[block.PartIndex] = append(blocksByPart[block.PartIndex], block)
+	}
+	var mismatches int
+	for _, part := range parts {
+		partBlocks := blocksByPart[part.Index]
+		if part.HeaderOutOfBounds || part.BlockHeaderCount == 0 || uint32(len(partBlocks)) != part.BlockHeaderCount {
+			continue
+		}
+		firstBlock := partBlocks[0]
+		lastBlock := partBlocks[len(partBlocks)-1]
+		if !bytes.Equal(part.FirstItem, openGeminiTextPartItemPrefix(firstBlock.FirstItem)) ||
+			!bytes.Equal(part.LastItem, openGeminiTextPartItemPrefix(lastBlock.LastItem)) {
+			mismatches++
+		}
+	}
+	return mismatches
+}
+
+func openGeminiTextPartItemPrefix(item []byte) []byte {
+	if len(item) > opengeminiTextIndexItemPrefix {
+		return item[:opengeminiTextIndexItemPrefix]
+	}
+	return item
 }
 
 func openGeminiTextIndexBlockSamples(analysis opengeminiTextIndexAnalysis, limit int) []BlockReport {

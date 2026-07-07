@@ -397,9 +397,73 @@ func TestAnalyzeOpenGeminiTextIndexDetectsOutOfBoundsRanges(t *testing.T) {
 	}
 }
 
-func TestAnalyzeOpenGeminiTextIndexDirectoryExpansionUsesPartHeaderOnly(t *testing.T) {
+func TestAnalyzeOpenGeminiTextIndexPartBoundaryMismatch(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "00000001-0001-00000009.tssp.content")
+	writeTestOpenGeminiTextIndex(t, base, []testOpenGeminiTextBlockHeader{
+		{
+			First:      "aa",
+			Last:       "az",
+			ItemsCount: 1,
+			KeysOffset: 0,
+			KeysUnpack: 4,
+			KeysPack:   2,
+			KeysSize:   2,
+			PostOffset: 2,
+			PostUnpack: 4,
+			PostPack:   2,
+			PostSize:   2,
+		},
+		{
+			First:      "ba",
+			Last:       "bz",
+			ItemsCount: 1,
+			KeysOffset: 4,
+			KeysUnpack: 4,
+			KeysPack:   2,
+			KeysSize:   2,
+			PostOffset: 6,
+			PostUnpack: 4,
+			PostPack:   2,
+			PostSize:   2,
+		},
+	}, 8)
+	headInfo, err := os.Stat(base + opengeminiTextIndexHeadSuffix)
+	if err != nil {
+		t.Fatalf("Stat(.bh) error = %v", err)
+	}
+	part := encodeTestOpenGeminiTextPartHeader(t, "aa", "by", 2, 0, uint32(headInfo.Size()))
+	if err := os.WriteFile(base+opengeminiTextIndexPartSuffix, part, 0o644); err != nil {
+		t.Fatalf("WriteFile(.ph) error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{base + opengeminiTextIndexPartSuffix}, Options{
+		Format: FormatOpenGeminiText,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["part_boundary_mismatches"], "1"; got != want {
+		t.Fatalf("part boundary mismatches = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["text-index-part-boundary-mismatch"], 1; got != want {
+		t.Fatalf("part boundary mismatch block type count = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["decoded_block_headers"], "2"; got != want {
+		t.Fatalf("decoded block headers = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["valid_payload_size_bytes"], "8"; got != want {
+		t.Fatalf("valid payload bytes = %q, want %q", got, want)
+	}
+	if !containsOpenGeminiTextNotice(file.Notices, "part header boundary value") {
+		t.Fatalf("notices %v do not contain part boundary mismatch notice", file.Notices)
+	}
+}
+
+func TestAnalyzeOpenGeminiTextIndexDirectoryExpansionUsesPartHeaderOnly(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "00000001-0001-00000010.tssp.content")
 	writeTestOpenGeminiTextIndex(t, base, []testOpenGeminiTextBlockHeader{{
 		First:      "aa",
 		Last:       "az",
