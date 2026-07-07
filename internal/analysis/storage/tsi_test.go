@@ -136,6 +136,13 @@ func TestTSIRoaringCardinalityRunContainer(t *testing.T) {
 	if got, want := cardinality, uint64(5); got != want {
 		t.Fatalf("cardinality = %d, want %d", got, want)
 	}
+	ids, err := tsiRoaringSeriesIDs(data.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ids, []uint64{10, 11, 12, 13, 14}; !equalUint64s(got, want) {
+		t.Fatalf("series ids = %v, want %v", got, want)
+	}
 }
 
 func TestTSIRoaringCardinalityNoRunMultipleContainers(t *testing.T) {
@@ -147,6 +154,48 @@ func TestTSIRoaringCardinalityNoRunMultipleContainers(t *testing.T) {
 	}
 	if got, want := cardinality, uint64(3); got != want {
 		t.Fatalf("cardinality = %d, want %d", got, want)
+	}
+	ids, err := tsiRoaringSeriesIDs(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ids, []uint64{1, 1<<16 + 2, 2<<16 + 3}; !equalUint64s(got, want) {
+		t.Fatalf("series ids = %v, want %v", got, want)
+	}
+}
+
+func TestTSIRoaringSeriesIDsBitmapContainer(t *testing.T) {
+	var data bytes.Buffer
+	writeTSILittleUint32(&data, tsiRoaringSerialCookieNoRunContainer)
+	writeTSILittleUint32(&data, 1)
+	writeTSILittleUint16(&data, 0)
+	writeTSILittleUint16(&data, 4096)
+	writeTSILittleUint32(&data, 16)
+	bitmap := make([]byte, tsiRoaringBitmapContainerBytes)
+	for i := 0; i <= tsiRoaringArrayContainerMaxSize; i++ {
+		bitmap[i/8] |= 1 << uint(i%8)
+	}
+	data.Write(bitmap)
+
+	cardinality, err := tsiRoaringCardinality(data.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cardinality, uint64(4097); got != want {
+		t.Fatalf("cardinality = %d, want %d", got, want)
+	}
+	ids, err := tsiRoaringSeriesIDs(data.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(ids), 4097; got != want {
+		t.Fatalf("series id count = %d, want %d", got, want)
+	}
+	if got, want := ids[0], uint64(0); got != want {
+		t.Fatalf("first series id = %d, want %d", got, want)
+	}
+	if got, want := ids[len(ids)-1], uint64(4096); got != want {
+		t.Fatalf("last series id = %d, want %d", got, want)
 	}
 }
 
@@ -191,7 +240,7 @@ func TestAnalyzeTSIQueryFilters(t *testing.T) {
 	if got, want := query.CandidateMeasurements, 2; got != want {
 		t.Fatalf("candidate measurements = %d, want %d", got, want)
 	}
-	if got, want := query.SeriesRefs, int64(3); got != want {
+	if got, want := query.SeriesRefs, int64(2); got != want {
 		t.Fatalf("query series refs = %d, want %d", got, want)
 	}
 	if got, want := len(query.MeasurementSamples), 2; got != want {
@@ -205,6 +254,91 @@ func TestAnalyzeTSIQueryFilters(t *testing.T) {
 	}
 	if got, want := query.MeasurementSamples[0].Tags[0].Values[0].Value, "a"; got != want {
 		t.Fatalf("first query tag value = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSIQueryFiltersIntersectTagSeriesIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSIWithIntersectingTags(path); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:            FormatTSI,
+		QueryMeasurements: []string{"cpu"},
+		QueryTags: []TagFilter{
+			{Key: "host", Value: "a"},
+			{Key: "region", Value: "us"},
+			{Key: "zone", Value: "west"},
+		},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected query summary")
+	}
+	if got, want := query.MatchedTags, []TagFilter{
+		{Key: "host", Value: "a"},
+		{Key: "region", Value: "us"},
+		{Key: "zone", Value: "west"},
+	}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if len(query.MissingTags) != 0 {
+		t.Fatalf("missing tags = %+v, want none", query.MissingTags)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(1); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].SeriesCount, uint64(1); got != want {
+		t.Fatalf("query sample series count = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeTSIQueryFiltersRequireSameSeriesIntersection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSIWithIntersectingTags(path); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:            FormatTSI,
+		QueryMeasurements: []string{"cpu"},
+		QueryTags: []TagFilter{
+			{Key: "host", Value: "a"},
+			{Key: "region", Value: "eu"},
+		},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected query summary")
+	}
+	if got, want := query.MatchedTags, []TagFilter{
+		{Key: "host", Value: "a"},
+		{Key: "region", Value: "eu"},
+	}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(0); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if len(query.MeasurementSamples) != 0 {
+		t.Fatalf("query measurement samples = %+v, want none", query.MeasurementSamples)
 	}
 }
 
@@ -253,8 +387,8 @@ func writeTestTSIWithSeriesIDSets(path string, seriesIDSet, tombstoneSeriesIDSet
 	cpuTags := writeTestTSITagBlock([]testTSITagKey{{
 		name: "host",
 		values: []testTSITagValue{
-			{name: "a", seriesCount: 1},
-			{name: "b", seriesCount: 1, deleted: true},
+			{name: "a", seriesIDs: []uint64{1}},
+			{name: "b", seriesIDs: []uint64{2}, deleted: true},
 		},
 	}})
 	cpuTagOffset := int64(buf.Len())
@@ -263,7 +397,7 @@ func writeTestTSIWithSeriesIDSets(path string, seriesIDSet, tombstoneSeriesIDSet
 	memTags := writeTestTSITagBlock([]testTSITagKey{{
 		name: "host",
 		values: []testTSITagValue{
-			{name: "a", seriesCount: 1},
+			{name: "a", seriesIDs: []uint64{3}},
 		},
 	}})
 	memTagOffset := int64(buf.Len())
@@ -294,6 +428,72 @@ func writeTestTSIWithSeriesIDSets(path string, seriesIDSet, tombstoneSeriesIDSet
 		TombstoneSeriesIDSet: tsiRange{
 			Offset: tombstoneSeriesIDSetOffset,
 			Size:   int64(len(tombstoneSeriesIDSet)),
+		},
+		SeriesSketch: tsiRange{
+			Offset: int64(buf.Len()),
+			Size:   0,
+		},
+		TombstoneSeriesSketch: tsiRange{
+			Offset: int64(buf.Len()),
+			Size:   0,
+		},
+	})
+
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSIWithIntersectingTags(path string) error {
+	var buf bytes.Buffer
+	buf.WriteString(tsiMagic)
+
+	cpuTags := writeTestTSITagBlock([]testTSITagKey{
+		{
+			name: "host",
+			values: []testTSITagValue{
+				{name: "a", seriesIDs: []uint64{1, 2}},
+			},
+		},
+		{
+			name: "region",
+			values: []testTSITagValue{
+				{name: "eu", seriesIDs: []uint64{3}},
+				{name: "us", seriesIDs: []uint64{2}},
+			},
+		},
+		{
+			name: "zone",
+			values: []testTSITagValue{
+				{name: "west", seriesIDs: []uint64{2, 3}, legacySeriesIDs: true},
+			},
+		},
+	})
+	cpuTagOffset := int64(buf.Len())
+	buf.Write(cpuTags)
+
+	measurementBlock := writeTestTSIMeasurementBlock([]testTSIMeasurement{
+		{name: "cpu", tagOffset: cpuTagOffset, tagSize: int64(len(cpuTags)), seriesCount: 3},
+	})
+	measurementBlockOffset := int64(buf.Len())
+	buf.Write(measurementBlock)
+
+	seriesIDSet := writeTestTSIRoaringSeriesIDSet(1, 2, 3)
+	seriesIDSetOffset := int64(buf.Len())
+	buf.Write(seriesIDSet)
+	tombstoneSeriesIDSetOffset := int64(buf.Len())
+
+	writeTestTSIIndexTrailer(&buf, tsiIndexTrailer{
+		Version: tsiIndexFileVersion,
+		MeasurementBlock: tsiRange{
+			Offset: measurementBlockOffset,
+			Size:   int64(len(measurementBlock)),
+		},
+		SeriesIDSet: tsiRange{
+			Offset: seriesIDSetOffset,
+			Size:   int64(len(seriesIDSet)),
+		},
+		TombstoneSeriesIDSet: tsiRange{
+			Offset: tombstoneSeriesIDSetOffset,
+			Size:   0,
 		},
 		SeriesSketch: tsiRange{
 			Offset: int64(buf.Len()),
@@ -375,9 +575,11 @@ type testTSITagKey struct {
 }
 
 type testTSITagValue struct {
-	name        string
-	seriesCount uint64
-	deleted     bool
+	name            string
+	seriesCount     uint64
+	seriesIDs       []uint64
+	legacySeriesIDs bool
+	deleted         bool
 }
 
 func writeTestTSIMeasurementBlock(measurements []testTSIMeasurement) []byte {
@@ -473,11 +675,50 @@ func writeTestTSITagValueElem(buf *bytes.Buffer, value testTSITagValue) {
 	if value.deleted {
 		flag |= tsiTagValueTombstoneFlag
 	}
+	var seriesData []byte
+	if len(value.seriesIDs) > 0 {
+		if value.legacySeriesIDs {
+			seriesData = writeTestTSIDeltaSeriesIDs(value.seriesIDs...)
+		} else {
+			flag |= tsiTagValueSeriesIDSetFlag
+			seriesData = writeTestTSIRoaringSeriesIDSet(value.seriesIDs...)
+		}
+		if value.seriesCount == 0 {
+			value.seriesCount = uint64(len(uniqueSortedUint64s(value.seriesIDs)))
+		}
+	}
 	buf.WriteByte(flag)
 	buf.Write(binary.AppendUvarint(nil, uint64(len(value.name))))
 	buf.WriteString(value.name)
 	buf.Write(binary.AppendUvarint(nil, value.seriesCount))
-	buf.Write(binary.AppendUvarint(nil, 0))
+	buf.Write(binary.AppendUvarint(nil, uint64(len(seriesData))))
+	buf.Write(seriesData)
+}
+
+func writeTestTSIDeltaSeriesIDs(ids ...uint64) []byte {
+	ids = uniqueSortedUint64s(ids)
+	var buf bytes.Buffer
+	var prev uint64
+	for _, id := range ids {
+		buf.Write(binary.AppendUvarint(nil, id-prev))
+		prev = id
+	}
+	return buf.Bytes()
+}
+
+func uniqueSortedUint64s(values []uint64) []uint64 {
+	values = append([]uint64(nil), values...)
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	out := values[:0]
+	var prev uint64
+	for i, value := range values {
+		if i > 0 && value == prev {
+			continue
+		}
+		out = append(out, value)
+		prev = value
+	}
+	return out
 }
 
 func writeTestTSIIndexTrailer(buf *bytes.Buffer, trailer tsiIndexTrailer) {

@@ -141,6 +141,104 @@ func TestAnalyzeTSILogQueryFilters(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSILogQueryFiltersRequireSameSeriesIntersection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsl")
+	var buf bytes.Buffer
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 1, Name: "cpu", Key: "host", Value: "a"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 1, Name: "cpu", Key: "region", Value: "us"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 2, Name: "cpu", Key: "host", Value: "a"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 2, Name: "cpu", Key: "region", Value: "eu"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 3, Name: "cpu", Key: "host", Value: "b"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 3, Name: "cpu", Key: "region", Value: "ap"})
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSILog,
+		QueryTags:        []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "us"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected query summary")
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(1); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].SeriesCount, uint64(1); got != want {
+		t.Fatalf("query sample series count = %d, want %d", got, want)
+	}
+
+	report, err = Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSILog,
+		QueryTags:        []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "ap"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query = report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected query summary")
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "ap"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(0); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if len(query.MeasurementSamples) != 0 {
+		t.Fatalf("query measurement samples = %+v, want none", query.MeasurementSamples)
+	}
+}
+
+func TestAnalyzeTSILogSeriesTombstoneRemovesAllTagRefs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsl")
+	var buf bytes.Buffer
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 1, Name: "cpu", Key: "host", Value: "a"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 1, Name: "cpu", Key: "region", Value: "us"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{Flag: tsiLogEntrySeriesTombstoneFlag, SeriesID: 1})
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSILog,
+		QueryTags:        []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "us"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.SeriesID.Count, int64(0); got != want {
+		t.Fatalf("live series count = %d, want %d", got, want)
+	}
+	query := file.Index.Query
+	if query == nil {
+		t.Fatal("expected query summary")
+	}
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(0); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+}
+
 func TestAnalyzeTSILogTrailingCorruptEntryNotice(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "L0-00000001.tsl")
 	var buf bytes.Buffer

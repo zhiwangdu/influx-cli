@@ -83,6 +83,7 @@ type tsiTagBlockInspection struct {
 	Summary        tsiTagBlockSummary
 	Tags           []IndexQueryTagReport
 	MatchedFilters map[string]TagFilter
+	MatchingSeries map[uint64]struct{}
 }
 
 type tsiTagKeyElem struct {
@@ -98,6 +99,7 @@ type tsiTagValueElem struct {
 	Value            string
 	SeriesCount      uint64
 	SeriesDataSize   uint64
+	SeriesData       []byte
 	SeriesIDSet      bool
 	EncodedByteCount int
 }
@@ -344,14 +346,22 @@ func (b *tsiIndexQueryBuilder) observeMeasurement(elem tsiMeasurementElem, tags 
 		return
 	}
 
+	seriesCount := elem.SeriesCount
+	if len(b.summary.QueryTags) > 0 {
+		seriesCount = uint64(len(tags.MatchingSeries))
+		if seriesCount == 0 {
+			return
+		}
+	}
+
 	b.summary.CandidateMeasurements++
-	b.summary.SeriesRefs += int64(elem.SeriesCount)
+	b.summary.SeriesRefs += int64(seriesCount)
 	b.summary.TagKeyCount += tags.Summary.TagKeyCount
 	b.summary.TagValueCount += tags.Summary.TagValueCount
 	if len(b.summary.MeasurementSamples) < options.KeySampleLimit {
 		b.summary.MeasurementSamples = append(b.summary.MeasurementSamples, IndexQueryMeasurementReport{
 			Name:        elem.Name,
-			SeriesCount: elem.SeriesCount,
+			SeriesCount: seriesCount,
 			Tags:        tags.Tags,
 		})
 	}
@@ -523,6 +533,15 @@ func inspectTSITagBlock(fileData []byte, rng tsiRange, filters []TagFilter, incl
 					inspection.MatchedFilters = map[string]TagFilter{}
 				}
 				inspection.MatchedFilters[id] = filter
+				seriesIDs, err := tsiTagValueSeriesIDSet(value)
+				if err != nil {
+					return inspection, fmt.Errorf("tag %q=%q series id set: %w", key.Key, value.Value, err)
+				}
+				if inspection.MatchingSeries == nil {
+					inspection.MatchingSeries = seriesIDs
+				} else {
+					inspection.MatchingSeries = intersectTSISeriesIDSets(inspection.MatchingSeries, seriesIDs)
+				}
 			}
 			if !includeDetails || sampleLimit <= 0 {
 				continue
@@ -651,7 +670,7 @@ func parseTSITagValueElem(data []byte) (tsiTagValueElem, error) {
 	if seriesDataSize > uint64(len(data)) {
 		return elem, fmt.Errorf("short TSI tag value series data")
 	}
-	data = data[int(seriesDataSize):]
+	elem.SeriesData, data = data[:int(seriesDataSize)], data[int(seriesDataSize):]
 	elem.EncodedByteCount = start - len(data)
 	return elem, nil
 }
@@ -679,11 +698,21 @@ func tsiSeriesIDSetCardinality(fileData []byte, rng tsiRange, name string) (uint
 }
 
 func tsiRoaringCardinality(data []byte) (uint64, error) {
+	cardinality, _, err := tsiRoaringInspect(data, false)
+	return cardinality, err
+}
+
+func tsiRoaringSeriesIDs(data []byte) ([]uint64, error) {
+	_, ids, err := tsiRoaringInspect(data, true)
+	return ids, err
+}
+
+func tsiRoaringInspect(data []byte, emitIDs bool) (uint64, []uint64, error) {
 	if len(data) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	if len(data) < 8 {
-		return 0, fmt.Errorf("short roaring bitmap: %d bytes", len(data))
+		return 0, nil, fmt.Errorf("short roaring bitmap: %d bytes", len(data))
 	}
 
 	pos := 4
@@ -697,7 +726,7 @@ func tsiRoaringCardinality(data []byte) (uint64, error) {
 		size = uint32(uint16(cookie>>16) + 1)
 		runBitmapSize := (int(size) + 7) / 8
 		if runBitmapSize > len(data)-pos {
-			return 0, fmt.Errorf("roaring run-container bitmap overruns buffer")
+			return 0, nil, fmt.Errorf("roaring run-container bitmap overruns buffer")
 		}
 		runBitmap = data[pos : pos+runBitmapSize]
 		pos += runBitmapSize
@@ -705,19 +734,21 @@ func tsiRoaringCardinality(data []byte) (uint64, error) {
 		size = binary.LittleEndian.Uint32(data[pos:])
 		pos += 4
 	default:
-		return 0, fmt.Errorf("invalid roaring cookie %d", cookie)
+		return 0, nil, fmt.Errorf("invalid roaring cookie %d", cookie)
 	}
 	if size > 1<<16 {
-		return 0, fmt.Errorf("roaring bitmap has impossible container count %d", size)
+		return 0, nil, fmt.Errorf("roaring bitmap has impossible container count %d", size)
 	}
 
 	headerSize := int(size) * 4
 	if headerSize > len(data)-pos {
-		return 0, fmt.Errorf("roaring container header overruns buffer")
+		return 0, nil, fmt.Errorf("roaring container header overruns buffer")
 	}
+	keys := make([]uint16, int(size))
 	cards := make([]int, int(size))
 	var cardinality uint64
 	for i := 0; i < int(size); i++ {
+		keys[i] = binary.LittleEndian.Uint16(data[pos+i*4:])
 		card := int(binary.LittleEndian.Uint16(data[pos+i*4+2:])) + 1
 		cards[i] = card
 		cardinality += uint64(card)
@@ -727,21 +758,35 @@ func tsiRoaringCardinality(data []byte) (uint64, error) {
 	if !haveRunContainers || size >= tsiRoaringNoOffsetThreshold {
 		offsetSize := int(size) * 4
 		if offsetSize > len(data)-pos {
-			return 0, fmt.Errorf("roaring container offsets overrun buffer")
+			return 0, nil, fmt.Errorf("roaring container offsets overrun buffer")
 		}
 		pos += offsetSize
 	}
 
+	ids := []uint64(nil)
+	if emitIDs {
+		ids = make([]uint64, 0, cardinality)
+	}
 	for i, card := range cards {
+		containerBase := uint64(keys[i]) << 16
 		if haveRunContainers && runBitmap[i/8]&(1<<uint(i%8)) != 0 {
 			if len(data)-pos < 2 {
-				return 0, fmt.Errorf("short roaring run container")
+				return 0, nil, fmt.Errorf("short roaring run container")
 			}
 			runCount := int(binary.LittleEndian.Uint16(data[pos:]))
 			pos += 2
 			runBytes := runCount * 4
 			if runBytes > len(data)-pos {
-				return 0, fmt.Errorf("roaring run container overruns buffer")
+				return 0, nil, fmt.Errorf("roaring run container overruns buffer")
+			}
+			if emitIDs {
+				for run := 0; run < runCount; run++ {
+					start := binary.LittleEndian.Uint16(data[pos+run*4:])
+					length := binary.LittleEndian.Uint16(data[pos+run*4+2:])
+					for offset := uint32(0); offset <= uint32(length); offset++ {
+						ids = append(ids, containerBase+uint64(start)+uint64(offset))
+					}
+				}
 			}
 			pos += runBytes
 			continue
@@ -751,12 +796,81 @@ func tsiRoaringCardinality(data []byte) (uint64, error) {
 			containerBytes = tsiRoaringBitmapContainerBytes
 		}
 		if containerBytes > len(data)-pos {
-			return 0, fmt.Errorf("roaring container data overruns buffer")
+			return 0, nil, fmt.Errorf("roaring container data overruns buffer")
+		}
+		if emitIDs {
+			if card > tsiRoaringArrayContainerMaxSize {
+				for word := 0; word < containerBytes; word++ {
+					bits := data[pos+word]
+					for bit := 0; bit < 8; bit++ {
+						if bits&(1<<uint(bit)) != 0 {
+							ids = append(ids, containerBase+uint64(word*8+bit))
+						}
+					}
+				}
+			} else {
+				for j := 0; j < card; j++ {
+					ids = append(ids, containerBase+uint64(binary.LittleEndian.Uint16(data[pos+j*2:])))
+				}
+			}
 		}
 		pos += containerBytes
 	}
 
-	return cardinality, nil
+	return cardinality, ids, nil
+}
+
+func tsiTagValueSeriesIDSet(value tsiTagValueElem) (map[uint64]struct{}, error) {
+	var ids []uint64
+	var err error
+	if value.SeriesIDSet {
+		ids, err = tsiRoaringSeriesIDs(value.SeriesData)
+	} else {
+		ids, err = tsiDeltaSeriesIDs(value.SeriesData)
+	}
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set, nil
+}
+
+func tsiDeltaSeriesIDs(data []byte) ([]uint64, error) {
+	ids := []uint64{}
+	var prev uint64
+	for len(data) > 0 {
+		delta, n, err := readTSIUvarint(data)
+		if err != nil {
+			return nil, err
+		}
+		if delta > ^uint64(0)-prev {
+			return nil, fmt.Errorf("series id delta overflows uint64")
+		}
+		seriesID := prev + delta
+		ids = append(ids, seriesID)
+		prev = seriesID
+		data = data[n:]
+	}
+	return ids, nil
+}
+
+func intersectTSISeriesIDSets(a, b map[uint64]struct{}) map[uint64]struct{} {
+	if len(a) == 0 || len(b) == 0 {
+		return map[uint64]struct{}{}
+	}
+	if len(b) < len(a) {
+		a, b = b, a
+	}
+	out := make(map[uint64]struct{}, len(a))
+	for id := range a {
+		if _, ok := b[id]; ok {
+			out[id] = struct{}{}
+		}
+	}
+	return out
 }
 
 func readTSIUvarint(data []byte) (uint64, int, error) {

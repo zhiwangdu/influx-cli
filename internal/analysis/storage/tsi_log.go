@@ -31,7 +31,7 @@ type tsiLogEntry struct {
 type tsiLogState struct {
 	LiveSeries      map[uint64]struct{}
 	TombstoneSeries map[uint64]struct{}
-	SeriesRefs      map[uint64]tsiLogSeriesRef
+	SeriesRefs      map[uint64][]tsiLogSeriesRef
 	Measurements    map[string]*tsiLogMeasurement
 }
 
@@ -210,7 +210,7 @@ func newTSILogState() *tsiLogState {
 	return &tsiLogState{
 		LiveSeries:      map[uint64]struct{}{},
 		TombstoneSeries: map[uint64]struct{}{},
-		SeriesRefs:      map[uint64]tsiLogSeriesRef{},
+		SeriesRefs:      map[uint64][]tsiLogSeriesRef{},
 		Measurements:    map[string]*tsiLogMeasurement{},
 	}
 }
@@ -240,10 +240,12 @@ func (s *tsiLogState) applySeriesEntry(entry tsiLogEntry) {
 	if entry.Flag == tsiLogEntrySeriesTombstoneFlag {
 		delete(s.LiveSeries, entry.SeriesID)
 		s.TombstoneSeries[entry.SeriesID] = struct{}{}
-		if ref, ok := s.SeriesRefs[entry.SeriesID]; ok {
-			s.removeSeriesFromIndex(entry.SeriesID, ref)
-			delete(s.SeriesRefs, entry.SeriesID)
+		if refs, ok := s.SeriesRefs[entry.SeriesID]; ok {
+			for _, ref := range refs {
+				s.removeSeriesFromIndex(entry.SeriesID, ref)
+			}
 		}
+		delete(s.SeriesRefs, entry.SeriesID)
 		return
 	}
 
@@ -257,7 +259,9 @@ func (s *tsiLogState) applySeriesEntry(entry tsiLogEntry) {
 		Key:         entry.Key,
 		Value:       entry.Value,
 	}
-	s.SeriesRefs[entry.SeriesID] = ref
+	if !tsiLogSeriesRefsContain(s.SeriesRefs[entry.SeriesID], ref) {
+		s.SeriesRefs[entry.SeriesID] = append(s.SeriesRefs[entry.SeriesID], ref)
+	}
 	measurement := s.measurement(entry.Name)
 	measurement.Deleted = false
 	measurement.SeriesIDs[entry.SeriesID] = struct{}{}
@@ -267,6 +271,15 @@ func (s *tsiLogState) applySeriesEntry(entry tsiLogEntry) {
 	key := measurement.tagKey(entry.Key)
 	value := key.tagValue(entry.Value)
 	value.SeriesIDs[entry.SeriesID] = struct{}{}
+}
+
+func tsiLogSeriesRefsContain(refs []tsiLogSeriesRef, ref tsiLogSeriesRef) bool {
+	for _, existing := range refs {
+		if existing == ref {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *tsiLogState) removeSeriesFromIndex(seriesID uint64, ref tsiLogSeriesRef) {
@@ -384,15 +397,22 @@ func (s *tsiLogState) QuerySummary(options Options) *IndexQuerySummary {
 			}
 			matchedMeasurements[name] = struct{}{}
 		}
-		tagReports, measurementMatchedTags, allTagsMatched := measurement.QueryTags(options.QueryTags, options.BlockSampleLimit)
+		tagReports, measurementMatchedTags, matchingSeriesIDs, allTagsMatched := measurement.QueryTags(options.QueryTags, options.BlockSampleLimit)
 		for id, filter := range measurementMatchedTags {
 			matchedTags[id] = filter
 		}
 		if measurement.Deleted || !allTagsMatched {
 			continue
 		}
+		seriesCount := len(measurement.SeriesIDs)
+		if len(options.QueryTags) > 0 {
+			seriesCount = len(matchingSeriesIDs)
+			if seriesCount == 0 {
+				continue
+			}
+		}
 		query.CandidateMeasurements++
-		query.SeriesRefs += int64(len(measurement.SeriesIDs))
+		query.SeriesRefs += int64(seriesCount)
 		query.TagKeyCount += len(measurement.TagKeys)
 		for _, key := range measurement.TagKeys {
 			query.TagValueCount += len(key.TagValues)
@@ -400,7 +420,7 @@ func (s *tsiLogState) QuerySummary(options Options) *IndexQuerySummary {
 		if len(query.MeasurementSamples) < options.KeySampleLimit {
 			query.MeasurementSamples = append(query.MeasurementSamples, IndexQueryMeasurementReport{
 				Name:        name,
-				SeriesCount: uint64(len(measurement.SeriesIDs)),
+				SeriesCount: uint64(seriesCount),
 				Tags:        tagReports,
 			})
 		}
@@ -423,11 +443,12 @@ func (s *tsiLogState) QuerySummary(options Options) *IndexQuerySummary {
 	return query
 }
 
-func (m *tsiLogMeasurement) QueryTags(filters []TagFilter, sampleLimit int) ([]IndexQueryTagReport, map[string]TagFilter, bool) {
+func (m *tsiLogMeasurement) QueryTags(filters []TagFilter, sampleLimit int) ([]IndexQueryTagReport, map[string]TagFilter, map[uint64]struct{}, bool) {
 	if len(filters) == 0 {
-		return nil, nil, true
+		return nil, nil, nil, true
 	}
 	matched := map[string]TagFilter{}
+	var matchingSeriesIDs map[uint64]struct{}
 	reports := []IndexQueryTagReport{}
 	for _, filter := range filters {
 		tagKey := m.TagKeys[filter.Key]
@@ -439,6 +460,11 @@ func (m *tsiLogMeasurement) QueryTags(filters []TagFilter, sampleLimit int) ([]I
 			continue
 		}
 		matched[tagFilterID(filter.Key, filter.Value)] = filter
+		if matchingSeriesIDs == nil {
+			matchingSeriesIDs = cloneTSILogSeriesIDSet(tagValue.SeriesIDs)
+		} else {
+			matchingSeriesIDs = intersectTSISeriesIDSets(matchingSeriesIDs, tagValue.SeriesIDs)
+		}
 		if sampleLimit <= 0 || len(reports) >= sampleLimit {
 			continue
 		}
@@ -450,7 +476,15 @@ func (m *tsiLogMeasurement) QueryTags(filters []TagFilter, sampleLimit int) ([]I
 			}},
 		})
 	}
-	return reports, matched, len(matched) == len(filters)
+	return reports, matched, matchingSeriesIDs, len(matched) == len(filters)
+}
+
+func cloneTSILogSeriesIDSet(src map[uint64]struct{}) map[uint64]struct{} {
+	dst := make(map[uint64]struct{}, len(src))
+	for id := range src {
+		dst[id] = struct{}{}
+	}
+	return dst
 }
 
 func (m *tsiLogMeasurement) TagCounts() (tagKeyCount, deletedTagKeyCount, tagValueCount, deletedTagValueCount int) {
