@@ -2898,6 +2898,9 @@ func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_read_errors"], "0"; got != want {
 		t.Fatalf("data block probe read errors = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_failure_reasons"], "segment_overlap_data_crc_unavailable:1"; got != want {
+		t.Fatalf("data block probe failure reasons = %q, want %q", got, want)
+	}
 	if !containsString(report.Notices, "detached data block probe found 1 invalid block") {
 		t.Fatalf("notices = %v, want data block probe notice", report.Notices)
 	}
@@ -2928,6 +2931,9 @@ func TestAnalyzeTSSPDetachedMetaIndexDataCRCMismatch(t *testing.T) {
 	}
 	if got, want := decode.DataBlockProbeReadErrors, 0; got != want {
 		t.Fatalf("data block probe read errors = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFailureReasons["segment_overlap_data_crc_unavailable"], 1; got != want {
+		t.Fatalf("data block probe crc failure reason = %d, want %d", got, want)
 	}
 	if got, want := decode.Samples[0].Reason, "segment_overlap_data_crc_unavailable"; got != want {
 		t.Fatalf("sample reason = %q, want %q", got, want)
@@ -2987,6 +2993,9 @@ func TestAnalyzeTSSPDetachedMetaIndexShortDataBlockBreakdown(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_read_errors"], "0"; got != want {
 		t.Fatalf("data block probe read errors = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_failure_reasons"], "segment_overlap_data_header_unavailable:1"; got != want {
+		t.Fatalf("data block probe failure reasons = %q, want %q", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("decode path is nil")
@@ -3008,6 +3017,9 @@ func TestAnalyzeTSSPDetachedMetaIndexShortDataBlockBreakdown(t *testing.T) {
 	}
 	if got, want := decode.DataBlockProbeReadErrors, 0; got != want {
 		t.Fatalf("data block probe read errors = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFailureReasons["segment_overlap_data_header_unavailable"], 1; got != want {
+		t.Fatalf("data block probe header failure reason = %d, want %d", got, want)
 	}
 	if got, want := decode.Samples[0].Reason, "segment_overlap_data_header_unavailable"; got != want {
 		t.Fatalf("sample reason = %q, want %q", got, want)

@@ -18,6 +18,7 @@ type tsspAttachedDataProbe struct {
 	ShortBlocks            int
 	UnknownBlockTypes      int
 	ReadErrors             int
+	FailureReasons         map[string]int
 	RowCountBlocks         int
 	RowCountUnknowns       int
 	RowCountMismatches     int
@@ -75,6 +76,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 
 	probe := &tsspAttachedDataProbe{
 		Checked:             true,
+		FailureReasons:      map[string]int{},
 		ValueUnknownReasons: map[string]int{},
 		FilterOperators:     map[string]int{},
 		BlockTypes:          map[string]int{},
@@ -115,6 +117,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 				probe.BytesRead += int64(location.Size)
 				if !tsspRangeInDataArea(location.Offset, int64(location.Size), trailer.DataOffset, trailer.DataSize) {
 					probe.ReadErrors++
+					probe.FailureReasons["segment_overlap_data_range_unavailable"]++
 					chunkAvailable = false
 					segmentAvailable = false
 					chunkFailureReason = "segment_overlap_data_range_unavailable"
@@ -123,6 +126,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 				block := make([]byte, int(location.Size))
 				if _, err := f.ReadAt(block, location.Offset); err != nil {
 					probe.ReadErrors++
+					probe.FailureReasons["segment_overlap_data_read_unavailable"]++
 					chunkAvailable = false
 					segmentAvailable = false
 					chunkFailureReason = "segment_overlap_data_read_unavailable"
@@ -138,6 +142,9 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 						probe.ShortBlocks++
 					default:
 						probe.UnknownBlockTypes++
+					}
+					if reason != "" {
+						probe.FailureReasons[reason]++
 					}
 					continue
 				}

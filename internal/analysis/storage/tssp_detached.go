@@ -139,6 +139,9 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["data_block_probe_short_blocks"] = fmt.Sprint(dataProbe.ShortBlocks)
 			report.Extra["data_block_probe_unknown_block_types"] = fmt.Sprint(dataProbe.UnknownBlockTypes)
 			report.Extra["data_block_probe_read_errors"] = fmt.Sprint(dataProbe.ReadErrors)
+			if len(dataProbe.FailureReasons) > 0 {
+				report.Extra["data_block_probe_failure_reasons"] = tsspDetachedDataProbeTypeSummary(dataProbe.FailureReasons)
+			}
 			report.Extra["data_block_probe_row_count_blocks"] = fmt.Sprint(dataProbe.RowCountBlocks)
 			report.Extra["data_block_probe_row_count_unknowns"] = fmt.Sprint(dataProbe.RowCountUnknowns)
 			report.Extra["data_block_probe_row_count_mismatches"] = fmt.Sprint(dataProbe.RowCountMismatches)
@@ -391,6 +394,7 @@ type tsspDetachedDataProbe struct {
 	ShortBlocks            int
 	UnknownBlockTypes      int
 	ReadErrors             int
+	FailureReasons         map[string]int
 	RowCountBlocks         int
 	RowCountUnknowns       int
 	RowCountMismatches     int
@@ -524,6 +528,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 
 	probe := &tsspDetachedDataProbe{
 		Checked:             true,
+		FailureReasons:      map[string]int{},
 		ValueUnknownReasons: map[string]int{},
 		FilterOperators:     map[string]int{},
 		BlockTypes:          map[string]int{},
@@ -569,6 +574,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				probe.BytesRead += int64(location.Size)
 				if !tsspRangeInFile(location.Offset, int64(location.Size), validation.FileSize) {
 					probe.ReadErrors++
+					probe.FailureReasons["segment_overlap_data_range_unavailable"]++
 					chunkAvailable = false
 					segmentAvailable = false
 					chunkFailureReason = "segment_overlap_data_range_unavailable"
@@ -577,6 +583,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				block := make([]byte, int(location.Size))
 				if _, err := f.ReadAt(block, location.Offset); err != nil {
 					probe.ReadErrors++
+					probe.FailureReasons["segment_overlap_data_read_unavailable"]++
 					chunkAvailable = false
 					segmentAvailable = false
 					chunkFailureReason = "segment_overlap_data_read_unavailable"
@@ -594,6 +601,9 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 						probe.ShortBlocks++
 					default:
 						probe.UnknownBlockTypes++
+					}
+					if reason != "" {
+						probe.FailureReasons[reason]++
 					}
 					continue
 				}
@@ -2190,14 +2200,15 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                       tsspCursorMode("tssp-detached-location-cursor", options),
-		QueryRange:                 options.QueryRange,
-		CursorSeekTime:             tsspCursorSeekTime(options),
-		LocationBlocksByType:       map[string]int{},
-		DecodeBlocksByType:         map[string]int{},
-		DataBlockProbeTypes:        map[string]int{},
-		DataBlockProbeValueReasons: map[string]int{},
-		DataBlockProbeFilterOps:    map[string]int{},
+		Mode:                         tsspCursorMode("tssp-detached-location-cursor", options),
+		QueryRange:                   options.QueryRange,
+		CursorSeekTime:               tsspCursorSeekTime(options),
+		LocationBlocksByType:         map[string]int{},
+		DecodeBlocksByType:           map[string]int{},
+		DataBlockProbeFailureReasons: map[string]int{},
+		DataBlockProbeTypes:          map[string]int{},
+		DataBlockProbeValueReasons:   map[string]int{},
+		DataBlockProbeFilterOps:      map[string]int{},
 	}
 	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	populateTSSPFieldFilterMatches(summary, chunks, options.QueryFields)
@@ -2308,6 +2319,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeShortBlocks = dataProbe.ShortBlocks
 		summary.DataBlockProbeUnknownTypes = dataProbe.UnknownBlockTypes
 		summary.DataBlockProbeReadErrors = dataProbe.ReadErrors
+		addTSSPDecodePathCounts(summary.DataBlockProbeFailureReasons, dataProbe.FailureReasons)
 		summary.DataBlockProbeRowCountBlocks = dataProbe.RowCountBlocks
 		summary.DataBlockProbeRowUnknowns = dataProbe.RowCountUnknowns
 		summary.DataBlockProbeRowMismatches = dataProbe.RowCountMismatches

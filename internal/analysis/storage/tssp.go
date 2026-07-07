@@ -216,6 +216,9 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			report.Extra["data_block_probe_short_blocks"] = fmt.Sprint(dataProbe.ShortBlocks)
 			report.Extra["data_block_probe_unknown_block_types"] = fmt.Sprint(dataProbe.UnknownBlockTypes)
 			report.Extra["data_block_probe_read_errors"] = fmt.Sprint(dataProbe.ReadErrors)
+			if len(dataProbe.FailureReasons) > 0 {
+				report.Extra["data_block_probe_failure_reasons"] = tsspDetachedDataProbeTypeSummary(dataProbe.FailureReasons)
+			}
 			report.Extra["data_block_probe_row_count_blocks"] = fmt.Sprint(dataProbe.RowCountBlocks)
 			report.Extra["data_block_probe_row_count_unknowns"] = fmt.Sprint(dataProbe.RowCountUnknowns)
 			report.Extra["data_block_probe_row_count_mismatches"] = fmt.Sprint(dataProbe.RowCountMismatches)
