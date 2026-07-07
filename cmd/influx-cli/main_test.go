@@ -159,6 +159,7 @@ func TestParseStorageFieldFiltersUsesLeftmostSymbolOperator(t *testing.T) {
 		`message!~[^!=]`,
 		`message!~=foo`,
 		`message=count>=5`,
+		`status==true`,
 		`temperature>=>`,
 	})
 	if err != nil {
@@ -173,6 +174,7 @@ func TestParseStorageFieldFiltersUsesLeftmostSymbolOperator(t *testing.T) {
 		{"message", "!~", "[^!=]"},
 		{"message", "!~", "=foo"},
 		{"message", "", "count>=5"},
+		{"status", "", "true"},
 		{"temperature", ">=", ">"},
 	}
 	if len(got) != len(want) {
@@ -182,6 +184,22 @@ func TestParseStorageFieldFiltersUsesLeftmostSymbolOperator(t *testing.T) {
 		if got[i].Key != want[i].key || got[i].Op != want[i].op || got[i].Value != want[i].value {
 			t.Fatalf("field filter %d = %+v, want key=%q op=%q value=%q", i, got[i], want[i].key, want[i].op, want[i].value)
 		}
+	}
+}
+
+func TestParseStorageFieldFiltersAllowsEmptyEqualityValues(t *testing.T) {
+	got, err := parseStorageFieldFilters([]string{"empty=", "also=="})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("field filters = %d, want 2", len(got))
+	}
+	if got[0].Key != "empty" || got[0].Op != "" || got[0].Value != "" {
+		t.Fatalf("first field filter = %+v, want empty equality", got[0])
+	}
+	if got[1].Key != "also" || got[1].Op != "" || got[1].Value != "" {
+		t.Fatalf("second field filter = %+v, want double-equals empty equality", got[1])
 	}
 }
 

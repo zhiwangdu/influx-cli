@@ -4046,6 +4046,27 @@ func TestAnalyzeQueryFieldsRejectInvalidOperator(t *testing.T) {
 	}
 }
 
+func TestAnalyzeQueryFieldsNormalizesDoubleEqualsOperator(t *testing.T) {
+	filters := normalizeFieldFilters([]FieldFilter{
+		{Key: " value ", Op: "==", Value: " 99 "},
+		{Key: "value", Op: "=", Value: "99"},
+		{Key: "missing", Op: "==", Value: "null"},
+	})
+	want := []FieldFilter{
+		{Key: "missing", Value: "null"},
+		{Key: "value", Value: "99"},
+	}
+	if !equalFieldFilters(filters, want) {
+		t.Fatalf("filters = %v, want %v", filters, want)
+	}
+	if err := validateFieldFilters(filters); err != nil {
+		t.Fatalf("validate field filters: %v", err)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "value", Op: "==", Value: "99"}), "="; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeQueryFieldsRejectInvalidRegex(t *testing.T) {
 	queryRange, err := NewTimeRange(1, 2)
 	if err != nil {
