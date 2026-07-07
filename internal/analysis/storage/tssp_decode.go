@@ -130,6 +130,9 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
 		summary.DataBlockProbeNullValues = dataProbe.NullValues
 		summary.DataBlockProbeRecordSamples = dataProbe.RecordSamples
+		summary.DataBlockProbeRangeRows = dataProbe.RangeRows
+		summary.DataBlockProbeRangeMatches = dataProbe.RangeMatches
+		summary.DataBlockProbeRangeRejects = dataProbe.RangeRejects
 		summary.DataBlockProbeFilterRows = dataProbe.FilterRows
 		summary.DataBlockProbeFilterMatches = dataProbe.FilterMatches
 		summary.DataBlockProbeFilterRejects = dataProbe.FilterRejects
@@ -402,6 +405,9 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeValueUnknowns += src.DataBlockProbeValueUnknowns
 	dst.DataBlockProbeNullValues += src.DataBlockProbeNullValues
 	dst.DataBlockProbeRecordSamples += src.DataBlockProbeRecordSamples
+	dst.DataBlockProbeRangeRows += src.DataBlockProbeRangeRows
+	dst.DataBlockProbeRangeMatches += src.DataBlockProbeRangeMatches
+	dst.DataBlockProbeRangeRejects += src.DataBlockProbeRangeRejects
 	dst.DataBlockProbeFilterRows += src.DataBlockProbeFilterRows
 	dst.DataBlockProbeFilterMatches += src.DataBlockProbeFilterMatches
 	dst.DataBlockProbeFilterRejects += src.DataBlockProbeFilterRejects
@@ -812,6 +818,13 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			"TSSP field filters matched %d of %d decoded record row(s)",
 			summary.DataBlockProbeFilterMatches,
 			summary.DataBlockProbeFilterRows,
+		))
+	}
+	if summary.DataBlockProbeRangeRows > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"TSSP query range matched %d of %d decoded row timestamp(s)",
+			summary.DataBlockProbeRangeMatches,
+			summary.DataBlockProbeRangeRows,
 		))
 	}
 	if summary.DataBlockProbeFilterEvals > 0 {

@@ -144,6 +144,9 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["data_block_probe_value_unknowns"] = fmt.Sprint(dataProbe.ValueUnknowns)
 			report.Extra["data_block_probe_null_values"] = fmt.Sprint(dataProbe.NullValues)
 			report.Extra["data_block_probe_record_samples"] = fmt.Sprint(dataProbe.RecordSamples)
+			report.Extra["data_block_probe_range_rows"] = fmt.Sprint(dataProbe.RangeRows)
+			report.Extra["data_block_probe_range_matches"] = fmt.Sprint(dataProbe.RangeMatches)
+			report.Extra["data_block_probe_range_rejects"] = fmt.Sprint(dataProbe.RangeRejects)
 			report.Extra["data_block_probe_filter_rows"] = fmt.Sprint(dataProbe.FilterRows)
 			report.Extra["data_block_probe_filter_matches"] = fmt.Sprint(dataProbe.FilterMatches)
 			report.Extra["data_block_probe_filter_rejects"] = fmt.Sprint(dataProbe.FilterRejects)
@@ -394,6 +397,9 @@ type tsspDetachedDataProbe struct {
 	ValueUnknownReasons map[string]int
 	NullValues          int
 	RecordSamples       int
+	RangeRows           int
+	RangeMatches        int
+	RangeRejects        int
 	FilterRows          int
 	FilterMatches       int
 	FilterRejects       int
@@ -633,6 +639,9 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
 					continue
 				}
+				probe.RangeRows += filterStats.RangeRows
+				probe.RangeMatches += filterStats.RangeMatches
+				probe.RangeRejects += filterStats.RangeRejects
 				if len(options.QueryFields) > 0 || len(options.QueryAnyFields) > 0 || len(options.QueryNoneFields) > 0 {
 					probe.FilterRows += filterRows
 					probe.FilterMatches += matchedRows
@@ -2289,6 +2298,9 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
 		summary.DataBlockProbeNullValues = dataProbe.NullValues
 		summary.DataBlockProbeRecordSamples = dataProbe.RecordSamples
+		summary.DataBlockProbeRangeRows = dataProbe.RangeRows
+		summary.DataBlockProbeRangeMatches = dataProbe.RangeMatches
+		summary.DataBlockProbeRangeRejects = dataProbe.RangeRejects
 		summary.DataBlockProbeFilterRows = dataProbe.FilterRows
 		summary.DataBlockProbeFilterMatches = dataProbe.FilterMatches
 		summary.DataBlockProbeFilterRejects = dataProbe.FilterRejects
@@ -2650,6 +2662,13 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			"detached TSSP field filters matched %d of %d decoded record row(s)",
 			summary.DataBlockProbeFilterMatches,
 			summary.DataBlockProbeFilterRows,
+		))
+	}
+	if summary.DataBlockProbeRangeRows > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"detached TSSP query range matched %d of %d decoded row timestamp(s)",
+			summary.DataBlockProbeRangeMatches,
+			summary.DataBlockProbeRangeRows,
 		))
 	}
 	if summary.DataBlockProbeFilterEvals > 0 {

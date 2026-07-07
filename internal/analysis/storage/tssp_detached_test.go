@@ -1118,6 +1118,15 @@ func TestAnalyzeTSSPDetachedDataProbeFiltersDecodedRowsByQueryRange(t *testing.T
 	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
 		t.Fatalf("data block probe output points = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_range_rows"], "3"; got != want {
+		t.Fatalf("data block probe range rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_range_matches"], "1"; got != want {
+		t.Fatalf("data block probe range matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_range_rejects"], "2"; got != want {
+		t.Fatalf("data block probe range rejects = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_filter_rows"], "1"; got != want {
 		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
 	}
@@ -1136,6 +1145,15 @@ func TestAnalyzeTSSPDetachedDataProbeFiltersDecodedRowsByQueryRange(t *testing.T
 	}
 	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
 		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRangeRows, 3; got != want {
+		t.Fatalf("data block probe range rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRangeMatches, 1; got != want {
+		t.Fatalf("data block probe range matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRangeRejects, 2; got != want {
+		t.Fatalf("data block probe range rejects = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeFilterRows, 1; got != want {
 		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
@@ -1161,6 +1179,9 @@ func TestAnalyzeTSSPDetachedDataProbeFiltersDecodedRowsByQueryRange(t *testing.T
 	}
 	if got := decode.CursorOutputSamples[0]; got != want {
 		t.Fatalf("cursor output sample = %+v, want %+v", got, want)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP query range matched 1 of 3 decoded row timestamp") {
+		t.Fatalf("recommendations = %v, want detached query range row-count recommendation", decode.Recommendations)
 	}
 }
 

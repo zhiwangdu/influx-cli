@@ -426,6 +426,15 @@ func TestAnalyzeTSSPDataProbeFiltersDecodedRowsByQueryRange(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
 		t.Fatalf("data block probe output points = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_range_rows"], "3"; got != want {
+		t.Fatalf("data block probe range rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_range_matches"], "1"; got != want {
+		t.Fatalf("data block probe range matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_range_rejects"], "2"; got != want {
+		t.Fatalf("data block probe range rejects = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_filter_rows"], "0"; got != want {
 		t.Fatalf("data block probe filter rows = %q, want %q without field predicates", got, want)
 	}
@@ -439,6 +448,15 @@ func TestAnalyzeTSSPDataProbeFiltersDecodedRowsByQueryRange(t *testing.T) {
 	if got, want := decode.Samples[0].ValueOutputPoints, 1; got != want {
 		t.Fatalf("decode sample value output points = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeRangeRows, 3; got != want {
+		t.Fatalf("data block probe range rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRangeMatches, 1; got != want {
+		t.Fatalf("data block probe range matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRangeRejects, 2; got != want {
+		t.Fatalf("data block probe range rejects = %d, want %d", got, want)
+	}
 	if got, want := len(decode.CursorOutputSamples), 1; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
 	}
@@ -451,6 +469,9 @@ func TestAnalyzeTSSPDataProbeFiltersDecodedRowsByQueryRange(t *testing.T) {
 	}
 	if got := decode.CursorOutputSamples[0]; got != want {
 		t.Fatalf("cursor output sample = %+v, want %+v", got, want)
+	}
+	if !containsString(decode.Recommendations, "TSSP query range matched 1 of 3 decoded row timestamp") {
+		t.Fatalf("recommendations = %v, want query range row-count recommendation", decode.Recommendations)
 	}
 }
 

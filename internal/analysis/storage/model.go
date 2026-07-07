@@ -362,6 +362,9 @@ type DecodePathSummary struct {
 	DataBlockProbeValueUnknowns  int                       `json:"data_block_probe_value_unknowns,omitempty"`
 	DataBlockProbeNullValues     int                       `json:"data_block_probe_null_values,omitempty"`
 	DataBlockProbeRecordSamples  int                       `json:"data_block_probe_record_samples,omitempty"`
+	DataBlockProbeRangeRows      int                       `json:"data_block_probe_range_rows,omitempty"`
+	DataBlockProbeRangeMatches   int                       `json:"data_block_probe_range_matches,omitempty"`
+	DataBlockProbeRangeRejects   int                       `json:"data_block_probe_range_rejects,omitempty"`
 	DataBlockProbeFilterRows     int                       `json:"data_block_probe_filter_rows,omitempty"`
 	DataBlockProbeFilterMatches  int                       `json:"data_block_probe_filter_matches,omitempty"`
 	DataBlockProbeFilterRejects  int                       `json:"data_block_probe_filter_rejects,omitempty"`
@@ -643,6 +646,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.DataBlockProbeFilterRows > 0 || summary.DataBlockProbeFilterMatches > 0 || summary.DataBlockProbeFilterRejects > 0 {
 		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d evals=%d eval_matches=%d eval_misses=%d required=%d required_matches=%d required_misses=%d any=%d any_matches=%d any_misses=%d none=%d none_matches=%d none_misses=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects, summary.DataBlockProbeFilterEvals, summary.DataBlockProbeFilterEvalHits, summary.DataBlockProbeFilterEvalMiss, summary.DataBlockProbeRequiredEvals, summary.DataBlockProbeRequiredHits, summary.DataBlockProbeRequiredMiss, summary.DataBlockProbeAnyEvals, summary.DataBlockProbeAnyHits, summary.DataBlockProbeAnyMiss, summary.DataBlockProbeNoneEvals, summary.DataBlockProbeNoneHits, summary.DataBlockProbeNoneMiss))
+	}
+	if summary.DataBlockProbeRangeRows > 0 {
+		parts = append(parts, fmt.Sprintf("row_range rows=%d matches=%d rejects=%d", summary.DataBlockProbeRangeRows, summary.DataBlockProbeRangeMatches, summary.DataBlockProbeRangeRejects))
 	}
 	if summary.DataBlockProbeFilterSkips > 0 {
 		parts = append(parts, fmt.Sprintf("field_filter_short_circuit skips=%d required=%d any=%d none=%d", summary.DataBlockProbeFilterSkips, summary.DataBlockProbeRequiredSkips, summary.DataBlockProbeAnySkips, summary.DataBlockProbeNoneSkips))

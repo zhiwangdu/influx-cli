@@ -27,6 +27,9 @@ type tsspAttachedDataProbe struct {
 	ValueUnknownReasons map[string]int
 	NullValues          int
 	RecordSamples       int
+	RangeRows           int
+	RangeMatches        int
+	RangeRejects        int
 	FilterRows          int
 	FilterMatches       int
 	FilterRejects       int
@@ -183,6 +186,9 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
 					continue
 				}
+				probe.RangeRows += filterStats.RangeRows
+				probe.RangeMatches += filterStats.RangeMatches
+				probe.RangeRejects += filterStats.RangeRejects
 				if len(options.QueryFields) > 0 || len(options.QueryAnyFields) > 0 || len(options.QueryNoneFields) > 0 {
 					probe.FilterRows += filterRows
 					probe.FilterMatches += matchedRows
@@ -302,6 +308,9 @@ func sortedTSSPDataBlockColumns(blocks map[string]tsspDetachedDataBlockInfo) []s
 }
 
 type tsspDataBlockFilterStats struct {
+	RangeRows           int
+	RangeMatches        int
+	RangeRejects        int
 	Evaluations         int
 	RequiredEvaluations int
 	AnyEvaluations      int
@@ -378,7 +387,12 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 	if rows <= 0 {
 		return nil, 0, 0, stats, true
 	}
-	rangeRows, rangeMatched := tsspDataBlockQueryRangeRows(blocks, timeRange, queryRange, rows)
+	rangeRows, rangeMatched, rangeKnown := tsspDataBlockQueryRangeRows(blocks, timeRange, queryRange, rows)
+	if rangeKnown {
+		stats.RangeRows = rows
+		stats.RangeMatches = rangeMatched
+		stats.RangeRejects = rows - rangeMatched
+	}
 	if len(filters) == 0 && len(anyFilters) == 0 && len(noneFilters) == 0 {
 		return rangeRows, rangeMatched, rangeMatched, stats, true
 	}
@@ -458,13 +472,13 @@ func addTSSPFilterOperatorCounts(dst, src map[string]int) {
 	}
 }
 
-func tsspDataBlockQueryRangeRows(blocks map[string]tsspDetachedDataBlockInfo, timeRange tsspTimeRange, queryRange TimeRange, rows int) ([]bool, int) {
+func tsspDataBlockQueryRangeRows(blocks map[string]tsspDetachedDataBlockInfo, timeRange tsspTimeRange, queryRange TimeRange, rows int) ([]bool, int, bool) {
 	if !queryRange.Set {
-		return nil, rows
+		return nil, rows, false
 	}
 	timestamps, ok := tsspDataBlockSampleTimes(timeRange, blocks, rows)
 	if !ok {
-		return nil, rows
+		return nil, rows, false
 	}
 	matchingRows := make([]bool, rows)
 	matched := 0
@@ -476,9 +490,9 @@ func tsspDataBlockQueryRangeRows(blocks map[string]tsspDetachedDataBlockInfo, ti
 		matched++
 	}
 	if matched == rows {
-		return nil, rows
+		return nil, rows, true
 	}
-	return matchingRows, matched
+	return matchingRows, matched, true
 }
 
 type tsspDataBlockFieldFilterBlock struct {
