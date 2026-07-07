@@ -86,6 +86,8 @@ type opengeminiTextIndexAnalysis struct {
 	DataOutOfBounds       int
 	InvalidOffsetBlocks   int
 	InvalidSizeBlocks     int
+	InvalidPartRanges     int
+	UnsortedPartRanges    int
 	InvalidRangeBlocks    int
 	UnsortedRangeBlocks   int
 	SegmentRangeOverflows int
@@ -130,6 +132,8 @@ func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, options Options) 
 		"post_payload_size_bytes":  fmt.Sprint(analysis.PostPayloadSizeBytes),
 		"payload_size_bytes":       fmt.Sprint(analysis.PayloadSizeBytes),
 		"valid_payload_size_bytes": fmt.Sprint(analysis.ValidPayloadSizeBytes),
+		"invalid_part_ranges":      fmt.Sprint(analysis.InvalidPartRanges),
+		"unsorted_part_ranges":     fmt.Sprint(analysis.UnsortedPartRanges),
 		"invalid_block_ranges":     fmt.Sprint(analysis.InvalidRangeBlocks),
 		"unsorted_block_ranges":    fmt.Sprint(analysis.UnsortedRangeBlocks),
 		"part_boundary_mismatches": fmt.Sprint(analysis.PartBoundaryMismatch),
@@ -246,9 +250,18 @@ func parseOpenGeminiTextIndex(paths opengeminiTextIndexPaths) (opengeminiTextInd
 			analysis.SegmentRangeOverflows++
 		}
 	}
+	analysis.InvalidPartRanges, analysis.UnsortedPartRanges = countOpenGeminiTextPartRangeIssues(parts)
 	if analysis.HeaderOutOfBounds > 0 {
 		analysis.BlocksByType["text-index-header-out-of-bounds"] = analysis.HeaderOutOfBounds
 		analysis.Notices = append(analysis.Notices, fmt.Sprintf("openGemini text index has %d part header range(s) outside the .bh file", analysis.HeaderOutOfBounds))
+	}
+	if analysis.InvalidPartRanges > 0 {
+		analysis.BlocksByType["text-index-invalid-part-range"] = analysis.InvalidPartRanges
+		analysis.Notices = append(analysis.Notices, fmt.Sprintf("openGemini text index has %d part header(s) with first_item greater than last_item", analysis.InvalidPartRanges))
+	}
+	if analysis.UnsortedPartRanges > 0 {
+		analysis.BlocksByType["text-index-unsorted-part-range"] = analysis.UnsortedPartRanges
+		analysis.Notices = append(analysis.Notices, fmt.Sprintf("openGemini text index has %d adjacent part header range(s) that are not sorted", analysis.UnsortedPartRanges))
 	}
 	if analysis.SegmentRangeOverflows > 0 {
 		analysis.BlocksByType["text-index-segment-range-overflow"] = analysis.SegmentRangeOverflows
@@ -480,6 +493,21 @@ func validateOpenGeminiTextBlockData(header *opengeminiTextIndexBlockHeader, dat
 	if !openGeminiTextRangeInFile(header.KeysOffset, header.KeysPackSize, dataSize) || !openGeminiTextRangeInFile(header.PostOffset, header.PostPackSize, dataSize) {
 		header.DataOutOfBounds = true
 	}
+}
+
+func countOpenGeminiTextPartRangeIssues(parts []opengeminiTextIndexPartHeader) (invalid, unsorted int) {
+	if len(parts) == 0 {
+		return 0, 0
+	}
+	for i, part := range parts {
+		if bytes.Compare(part.FirstItem, part.LastItem) > 0 {
+			invalid++
+		}
+		if i > 0 && bytes.Compare(parts[i-1].LastItem, part.FirstItem) > 0 {
+			unsorted++
+		}
+	}
+	return invalid, unsorted
 }
 
 func countOpenGeminiTextBlockRangeIssues(blocks []opengeminiTextIndexBlockHeader) (invalid, unsorted int) {
