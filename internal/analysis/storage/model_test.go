@@ -16,6 +16,18 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				BaselineDecodeBlocks:        3,
 				OptimizedDecodeBlocks:       1,
 				SavedDecodeBlocks:           2,
+				QueryKeys:                   []string{"cpu,host=a value", "cpu,host=b value"},
+				MatchedKeys:                 []string{"cpu,host=a value"},
+				MissingKeys:                 []string{"cpu,host=b value"},
+				QuerySeriesIDs:              []uint64{7, 9},
+				MatchedSeriesIDs:            []uint64{7},
+				MissingSeriesIDs:            []uint64{9},
+				QueryMetaIndexIDs:           []uint64{11, 12},
+				MatchedMetaIndexIDs:         []uint64{11},
+				MissingMetaIndexIDs:         []uint64{12},
+				QueryColumns:                []string{"missing", "value"},
+				MatchedColumns:              []string{"value"},
+				MissingColumns:              []string{"missing"},
 				LocationBlocksByType:        map[string]int{"chunk-meta": 2, "meta-index": 1},
 				DecodeBlocksByType:          map[string]int{"chunk-meta": 1},
 				BaselineDecodeBytes:         288,
@@ -93,6 +105,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 	for _, want := range []string{
 		"tssp-location-cursor-ascending",
 		"blocks 3->1",
+		"keys=2/1/1 series_ids=2/1/1 meta_index_ids=2/1/1 columns=2/1/1",
 		"location_block_types chunk-meta:2 meta-index:1",
 		"decode_block_types chunk-meta:1",
 		"saved_bytes 192",
@@ -117,6 +130,15 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 	advice := row[tableColumnIndex(t, result.Table.Columns, "advice")].(string)
 	if !strings.Contains(advice, "read 1 overlapping TSSP segment") {
 		t.Fatalf("advice = %q, want TSSP segment recommendation", advice)
+	}
+}
+
+func TestDecodePathTextOmitsEmptyQueryTargetSummary(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{})
+	for _, notWant := range []string{"keys=", "series_ids=", "meta_index_ids=", "columns="} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("decode path text = %q, want no %s segment", text, notWant)
+		}
 	}
 }
 

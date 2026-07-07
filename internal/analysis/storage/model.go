@@ -798,6 +798,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary.BaselineDecodeBlocks > 0 || summary.OptimizedDecodeBlocks > 0 || summary.SavedDecodeBlocks > 0 {
 		parts = append(parts, fmt.Sprintf("blocks %d->%d", summary.BaselineDecodeBlocks, summary.OptimizedDecodeBlocks))
 	}
+	if targets := queryTargetSummaryText(summary); targets != "" {
+		parts = append(parts, targets)
+	}
 	if locationBlockTypes := countMapText(summary.LocationBlocksByType); locationBlockTypes != "" {
 		parts = append(parts, "location_block_types "+locationBlockTypes)
 	}
@@ -862,6 +865,33 @@ func decodePathText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func queryTargetSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	if text := queryMatchCountText("keys", len(summary.QueryKeys), len(summary.MatchedKeys), len(summary.MissingKeys)); text != "" {
+		parts = append(parts, text)
+	}
+	if text := queryMatchCountText("series_ids", len(summary.QuerySeriesIDs), len(summary.MatchedSeriesIDs), len(summary.MissingSeriesIDs)); text != "" {
+		parts = append(parts, text)
+	}
+	if text := queryMatchCountText("meta_index_ids", len(summary.QueryMetaIndexIDs), len(summary.MatchedMetaIndexIDs), len(summary.MissingMetaIndexIDs)); text != "" {
+		parts = append(parts, text)
+	}
+	if text := queryMatchCountText("columns", len(summary.QueryColumns), len(summary.MatchedColumns), len(summary.MissingColumns)); text != "" {
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, " ")
+}
+
+func queryMatchCountText(name string, query, matched, missing int) string {
+	if query == 0 && matched == 0 && missing == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s=%d/%d/%d", name, query, matched, missing)
 }
 
 func fieldFilterSummaryText(summary *DecodePathSummary) string {
