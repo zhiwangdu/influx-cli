@@ -186,6 +186,7 @@ influx-cli query "SELECT * FROM cpu LIMIT 10"
 influx-cli query --format table "SHOW MEASUREMENTS"
 influx-cli query --format sparkline "SELECT mean(value) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)"
 influx-cli watch "SELECT mean(value) FROM cpu WHERE time > now() - 10m GROUP BY time(10s)"
+influx-cli
 influx-cli repl
 ```
 
@@ -318,7 +319,7 @@ Ctrl+Enter run | Ctrl+R history | Tab complete | 1 table | 2 spark | 3 chart | q
 | 模式 | 目标 | 入口 |
 | --- | --- | --- |
 | query mode | 单次查询和脚本输出 | `influx-cli query` |
-| repl mode | 连续查询和上下文切换 | `influx-cli repl` |
+| repl mode | 连续查询和上下文切换 | `influx-cli` 或 `influx-cli repl` |
 | explorer mode | 类 k9s 的资源浏览 | `:dbs`、`:rps`、`:schema`、`:measurements`、`:msts` |
 | chart mode | 自动或手动可视化结果 | `1/2/3` |
 | watch mode | 实时刷新趋势 | `influx-cli watch` 或 `W` |

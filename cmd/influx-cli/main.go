@@ -61,8 +61,12 @@ func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "influx-cli",
 		Short:         "TSDB-native terminal query console for InfluxDB-compatible endpoints",
+		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRepl(cmd, flags)
+		},
 	}
 
 	root.PersistentFlags().StringVar(&flags.configPath, "config", "", "config file path")
@@ -137,23 +141,27 @@ func newReplCommand(flags *globalFlags) *cobra.Command {
 		Use:   "repl",
 		Short: "Start an interactive query REPL",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			effective, err := resolveEffective(cmd, flags)
-			if err != nil {
-				return err
-			}
-			executor, err := newExecutor(effective)
-			if err != nil {
-				return err
-			}
-
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
-			defer stop()
-			return repl.Run(ctx, executor, os.Stdin, cmd.OutOrStdout(), repl.Options{
-				Render:  renderOptions(effective, flags),
-				History: history.NewStore("", history.Options{}),
-			})
+			return runRepl(cmd, flags)
 		},
 	}
+}
+
+func runRepl(cmd *cobra.Command, flags *globalFlags) error {
+	effective, err := resolveEffective(cmd, flags)
+	if err != nil {
+		return err
+	}
+	executor, err := newExecutor(effective)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+	defer stop()
+	return repl.Run(ctx, executor, cmd.InOrStdin(), cmd.OutOrStdout(), repl.Options{
+		Render:  renderOptions(effective, flags),
+		History: history.NewStore("", history.Options{}),
+	})
 }
 
 func newTUICommand(flags *globalFlags) *cobra.Command {

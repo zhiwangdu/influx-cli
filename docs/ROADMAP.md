@@ -57,6 +57,7 @@ Phase 0 仍应通过本地 InfluxDB/openGemini 兼容端点做人工验收。
 ```bash
 influx-cli query "SHOW DATABASES"
 influx-cli query --db metrics "SELECT mean(value) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)"
+influx-cli
 influx-cli repl
 ```
 
