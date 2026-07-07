@@ -93,6 +93,111 @@ func TestDecodePathTextOmitsEmptyFilterOperatorCounts(t *testing.T) {
 	}
 }
 
+func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
+	report := Report{
+		Files: []FileReport{
+			{
+				Path:               "00000001-0001-00000000.tssp",
+				Format:             FormatTSSP,
+				SizeBytes:          100,
+				KeyCount:           2,
+				BlockCount:         3,
+				QueryOverlapBlocks: 1,
+			},
+			{
+				Path:               "00000002-0001-00000000.tssp",
+				Format:             FormatTSSP,
+				SizeBytes:          200,
+				KeyCount:           4,
+				BlockCount:         5,
+				QueryOverlapBlocks: 2,
+			},
+		},
+		Summary: Summary{
+			TotalSizeBytes:     300,
+			KeyCount:           6,
+			BlockCount:         8,
+			QueryOverlapBlocks: 3,
+			TombstoneFiles:     1,
+		},
+		DecodePath: &DecodePathSummary{
+			Mode:                  "tssp-file-set-location-cursor-ascending",
+			BaselineDecodeBlocks:  8,
+			OptimizedDecodeBlocks: 3,
+			SavedDecodeBlocks:     5,
+			Recommendations: []string{
+				"final TSSP file-set output samples include locally deduplicated rows",
+			},
+		},
+	}
+
+	result := report.Result()
+	if got, want := len(result.Table.Rows), 3; got != want {
+		t.Fatalf("table rows = %d, want %d", got, want)
+	}
+	if got, want := result.Metadata.RowCount, 3; got != want {
+		t.Fatalf("metadata row count = %d, want %d", got, want)
+	}
+	row := result.Table.Rows[2]
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "file")], "<file-set>"; got != want {
+		t.Fatalf("aggregate file = %v, want %v", got, want)
+	}
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "format")], "file-set"; got != want {
+		t.Fatalf("aggregate format = %v, want %v", got, want)
+	}
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "size")], int64(300); got != want {
+		t.Fatalf("aggregate size = %v, want %v", got, want)
+	}
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "keys/series")], 6; got != want {
+		t.Fatalf("aggregate keys/series = %v, want %v", got, want)
+	}
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "blocks")], 8; got != want {
+		t.Fatalf("aggregate blocks = %v, want %v", got, want)
+	}
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "query_blocks")], 3; got != want {
+		t.Fatalf("aggregate query blocks = %v, want %v", got, want)
+	}
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "tombstone")], "1 files"; got != want {
+		t.Fatalf("aggregate tombstone = %v, want %v", got, want)
+	}
+	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)
+	for _, want := range []string{
+		"tssp-file-set-location-cursor-ascending",
+		"blocks 8->3",
+	} {
+		if !strings.Contains(decodeText, want) {
+			t.Fatalf("aggregate decode path = %q, want %q", decodeText, want)
+		}
+	}
+	advice := row[tableColumnIndex(t, result.Table.Columns, "advice")].(string)
+	if !strings.Contains(advice, "final TSSP file-set output samples") {
+		t.Fatalf("aggregate advice = %q, want file-set recommendation", advice)
+	}
+}
+
+func TestReportResultOmitsReportLevelDecodePathRowWhenUnavailable(t *testing.T) {
+	report := Report{
+		Files: []FileReport{
+			{Path: "00000001-0001-00000000.tssp", Format: FormatTSSP},
+			{Path: "00000002-0001-00000000.tssp", Format: FormatTSSP},
+		},
+	}
+
+	result := report.Result()
+	if got, want := len(result.Table.Rows), len(report.Files); got != want {
+		t.Fatalf("table rows = %d, want %d", got, want)
+	}
+	if got, want := result.Metadata.RowCount, len(report.Files); got != want {
+		t.Fatalf("metadata row count = %d, want %d", got, want)
+	}
+	fileColumn := tableColumnIndex(t, result.Table.Columns, "file")
+	for i, row := range result.Table.Rows {
+		if got := row[fileColumn]; got == "<file-set>" {
+			t.Fatalf("row %d file = %v, want no aggregate row", i, got)
+		}
+	}
+}
+
 func TestReportResultIncludesTSMCursorDecodePathSummary(t *testing.T) {
 	report := Report{
 		Files: []FileReport{{

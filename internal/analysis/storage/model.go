@@ -597,11 +597,31 @@ func (r Report) Result() result.Result {
 			joinSamples(decodePathRecommendations(file.DecodePath)),
 		)
 	}
+	if r.DecodePath != nil {
+		tombstone := ""
+		if r.Summary.TombstoneFiles > 0 {
+			tombstone = fmt.Sprintf("%d files", r.Summary.TombstoneFiles)
+		}
+		table.AddRow(
+			"<file-set>",
+			"file-set",
+			r.Summary.TotalSizeBytes,
+			"",
+			"",
+			r.Summary.KeyCount,
+			r.Summary.BlockCount,
+			r.Summary.QueryOverlapBlocks,
+			tombstone,
+			"",
+			decodePathText(r.DecodePath),
+			joinSamples(decodePathRecommendations(r.DecodePath)),
+		)
+	}
 	return result.Result{
 		Kind:  result.KindTable,
 		Table: table,
 		Metadata: result.Metadata{
-			RowCount: len(r.Files),
+			RowCount: table.RowCount(),
 			Notices:  append([]string(nil), r.Notices...),
 			Source:   "storage-analyzer",
 		},
