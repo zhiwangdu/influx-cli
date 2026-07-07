@@ -1237,6 +1237,49 @@ func TestAnalyzeMergesetZSTDItemPayloadBadCompressedBlockNotice(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetItemPayloadCrossBlockOrderNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_crossblock")
+	if err := writeTestMergesetPartWithPossiblyUnsortedItemBlocks(partPath, [][][]byte{
+		{
+			[]byte("aa"),
+			[]byte("zz"),
+		},
+		{
+			[]byte("ab"),
+			[]byte("ac"),
+		},
+	}); err != nil {
+		t.Fatalf("writeTestMergesetPartWithPossiblyUnsortedItemBlocks() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	wantNotice := "mergeset decoded item payload is not sorted across blocks at block=2 previous_last_item=7a7a current_first_item=6162"
+	if !containsString(file.Notices, wantNotice) {
+		t.Fatalf("notices = %v, want %q", file.Notices, wantNotice)
+	}
+	if !containsString(report.Notices, wantNotice) {
+		t.Fatalf("report notices = %v, want %q", report.Notices, wantNotice)
+	}
+	if got, want := file.Extra["item_payload_blocks_decoded"], "2"; got != want {
+		t.Fatalf("payload blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_items_decoded"], "4"; got != want {
+		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_first_item_hex"], "6161"; got != want {
+		t.Fatalf("payload first item extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_last_item_hex"], "6163"; got != want {
+		t.Fatalf("payload last item extra = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	partPath := filepath.Join(t.TempDir(), "41_2_1847A3A45055EEF0")
 	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
@@ -3943,6 +3986,14 @@ func writeTestMergesetPartWithItems(path string, items [][]byte) error {
 }
 
 func writeTestMergesetPartWithItemBlocks(path string, blocks [][][]byte) error {
+	return writeTestMergesetPartWithItemBlocksOrder(path, blocks, true)
+}
+
+func writeTestMergesetPartWithPossiblyUnsortedItemBlocks(path string, blocks [][][]byte) error {
+	return writeTestMergesetPartWithItemBlocksOrder(path, blocks, false)
+}
+
+func writeTestMergesetPartWithItemBlocksOrder(path string, blocks [][][]byte, requireGlobalOrder bool) error {
 	if len(blocks) == 0 {
 		return fmt.Errorf("test mergeset item blocks cannot be empty")
 	}
@@ -3953,9 +4004,11 @@ func writeTestMergesetPartWithItemBlocks(path string, blocks [][][]byte) error {
 		}
 		items = append(items, block...)
 	}
-	for i := 1; i < len(items); i++ {
-		if bytes.Compare(items[i-1], items[i]) > 0 {
-			return fmt.Errorf("test mergeset item %d is not sorted: %x >= %x", i, items[i-1], items[i])
+	if requireGlobalOrder {
+		for i := 1; i < len(items); i++ {
+			if bytes.Compare(items[i-1], items[i]) > 0 {
+				return fmt.Errorf("test mergeset item %d is not sorted: %x >= %x", i, items[i-1], items[i])
+			}
 		}
 	}
 	if err := os.MkdirAll(path, 0o700); err != nil {

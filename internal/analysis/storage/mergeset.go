@@ -728,6 +728,9 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 		}
 		search.ObserveDecodedBlock(i, decoded)
 		scan.ObserveDecodedBlock(i, header, decoded)
+		if summary.DecodedBlocks > 0 && bytes.Compare(summary.LastItem, decoded.FirstItem) > 0 {
+			notices = append(notices, fmt.Sprintf("mergeset decoded item payload is not sorted across blocks at block=%d previous_last_item=%s current_first_item=%s", i+1, hex.EncodeToString(summary.LastItem), hex.EncodeToString(decoded.FirstItem)))
+		}
 		summary.DecodedBlocks++
 		summary.ItemsDecoded += decoded.Count
 		if len(summary.FirstItem) == 0 {
