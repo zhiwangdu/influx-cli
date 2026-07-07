@@ -1907,6 +1907,9 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if !containsString(decode.Recommendations, "executed 2 detached TSSP decoded-row field predicate evaluation") {
 		t.Fatalf("recommendations = %v, want detached predicate evaluation recommendation", decode.Recommendations)
 	}
+	if !containsString(decode.Recommendations, "detached TSSP decoded-row field predicate operators: =:2") {
+		t.Fatalf("recommendations = %v, want detached predicate operator recommendation", decode.Recommendations)
+	}
 	if !containsString(decode.Recommendations, "required=0 required_matches=0 required_misses=0 any=2 any_matches=1 any_misses=1 none=0 none_matches=0 none_misses=0") {
 		t.Fatalf("recommendations = %v, want detached predicate clause/result breakdown", decode.Recommendations)
 	}

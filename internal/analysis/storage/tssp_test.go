@@ -1306,6 +1306,9 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	if !containsString(decode.Recommendations, "executed 3 TSSP decoded-row field predicate evaluation") {
 		t.Fatalf("recommendations = %v, want predicate evaluation recommendation", decode.Recommendations)
 	}
+	if !containsString(decode.Recommendations, "TSSP decoded-row field predicate operators: =:1 >:2") {
+		t.Fatalf("recommendations = %v, want predicate operator recommendation", decode.Recommendations)
+	}
 	if !containsString(decode.Recommendations, "required=2 required_matches=1 required_misses=1 any=1 any_matches=0 any_misses=1 none=0 none_matches=0 none_misses=0") {
 		t.Fatalf("recommendations = %v, want predicate clause/result breakdown", decode.Recommendations)
 	}

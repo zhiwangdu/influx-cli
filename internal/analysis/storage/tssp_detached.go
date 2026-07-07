@@ -2769,6 +2769,9 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			summary.DataBlockProbeNoneMiss,
 		))
 	}
+	if ops := countMapText(summary.DataBlockProbeFilterOps); ops != "" {
+		recommendations = append(recommendations, "detached TSSP decoded-row field predicate operators: "+ops)
+	}
 	if summary.DataBlockProbeFilterSkips > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
 			"short-circuited %d detached TSSP decoded-row field predicate evaluation(s): required_skips=%d any_skips=%d none_skips=%d",
