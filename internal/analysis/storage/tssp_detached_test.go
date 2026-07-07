@@ -1006,6 +1006,89 @@ func TestAnalyzeTSSPDetachedMetaIndexSamplesOneRowValueBlocks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedSamplesMLFFloatFullBlocks(t *testing.T) {
+	dir := t.TempDir()
+	values := []float64{1.11, 0, -2.22, 3.33, 4.44, 5.55, 6.66, 7.77, 8.88, 9.99, 10.01}
+	wantValues := []string{"1.11", "0", "-2.22", "3.33", "4.44", "5.55", "6.66", "7.77", "8.88", "9.99", "10.01"}
+	timestamps := []int64{100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200}
+	valueSize, err := testTSSPDetachedFloatFullBlockSize(values, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := []testTSSPChunkSpec{{
+		sid:      43,
+		minTime:  timestamps[0],
+		maxTime:  timestamps[len(timestamps)-1],
+		offset:   1200,
+		size:     valueSize,
+		timeSize: testTSSPDetachedIntegerFullBlockSize(timestamps),
+	}}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedFloatFullData(filepath.Join(dir, tsspDetachedDataFileName), 1600, chunks[0], values, 6, timestamps); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(timestamps[0], timestamps[len(timestamps)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: len(values) + 2,
+		QueryRange:       queryRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_blocks"], "2"; got != want {
+		t.Fatalf("data block probe value blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_value_unknowns"], "0"; got != want {
+		t.Fatalf("data block probe value unknowns = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_types"], "float-full:1,integer-full:1"; got != want {
+		t.Fatalf("data block probe types = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_output_points"], "11"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 0; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, len(values); got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), len(values); got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, value := range wantValues {
+		want := DecodePathCursorOutput{
+			Key:            "meta-index-id:43/value",
+			Time:           timestamps[i],
+			Type:           "float-full",
+			OptimizedValue: value,
+			Matches:        true,
+		}
+		if got := decode.CursorOutputSamples[i]; got != want {
+			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
 func TestAnalyzeTSSPDetachedColumnProjectionLimitsDataReadAt(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
@@ -2245,6 +2328,7 @@ func TestInspectTSSPDataBlockPayloadFloatFull(t *testing.T) {
 		{name: "gorilla", codec: 3, values: []float64{1.25, 2.5, 3.75}, want: []string{"1.25", "2.5", "3.75"}},
 		{name: "same", codec: 4, values: []float64{7.5, 7.5, 7.5}, want: []string{"7.5", "7.5", "7.5"}},
 		{name: "rle", codec: 5, values: []float64{1.5, 1.5, 0, 0, 2.5}, want: []string{"1.5", "1.5", "0", "0", "2.5"}},
+		{name: "mlf", codec: 6, values: []float64{1.11, 0, -2.22, 3.33, 4.44, 5.55, 6.66, 7.77, 8.88, 9.99, 10.01}, want: []string{"1.11", "0", "-2.22", "3.33", "4.44", "5.55", "6.66", "7.77", "8.88", "9.99", "10.01"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			payload, err := testTSSPFloatFullPayload(tc.values, tc.codec)
@@ -2884,6 +2968,27 @@ func writeTestTSSPDetachedStringFullData(path string, size int, chunk testTSSPCh
 	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+func writeTestTSSPDetachedFloatFullData(path string, size int, chunk testTSSPChunkSpec, values []float64, codec byte, timestamps []int64) error {
+	valuePayload, err := testTSSPFloatFullPayload(values, codec)
+	if err != nil {
+		return err
+	}
+	timePayload := testTSSPIntegerFullPayload(timestamps)
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+	for buf.Len() < size {
+		buf.WriteByte(0)
+	}
+	if err := writeTestTSSPDetachedPayloadBlock(buf.Bytes(), chunk.offset, chunk.size, valuePayload); err != nil {
+		return err
+	}
+	if err := writeTestTSSPDetachedPayloadBlock(buf.Bytes(), chunk.offset+int64(chunk.size), chunk.testTimeSize(), timePayload); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
 func writeTestTSSPDetachedNullableRegularFloatData(path string, size int, chunk testTSSPChunkSpec, values []float64, present []bool, timestamps []int64) error {
 	var valuePayload bytes.Buffer
 	if _, err := writeTestTSSPAttachedNullableRegularFloatBlock(&valuePayload, values, present, 0); err != nil {
@@ -2907,6 +3012,14 @@ func writeTestTSSPDetachedNullableRegularFloatData(path string, size int, chunk 
 
 func testTSSPDetachedStringFullBlockSize(values []string) (uint32, error) {
 	payload, err := testTSSPStringFullPayload(values, 0)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(crc32.Size + len(payload)), nil
+}
+
+func testTSSPDetachedFloatFullBlockSize(values []float64, codec byte) (uint32, error) {
+	payload, err := testTSSPFloatFullPayload(values, codec)
 	if err != nil {
 		return 0, err
 	}
