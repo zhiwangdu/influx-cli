@@ -1128,6 +1128,65 @@ func TestAnalyzeMergesetZSTDItemPayload(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetZSTDItemPayloadBadCompressedBlockNotice(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		fileName   string
+		wantNotice string
+	}{
+		{
+			name:       "bad-lens",
+			fileName:   mergesetLensFile,
+			wantNotice: "cannot decompress lensData",
+		},
+		{
+			name:       "bad-items",
+			fileName:   mergesetItemsFile,
+			wantNotice: "cannot decompress itemsData",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			partPath := filepath.Join(t.TempDir(), "4_1_0000000000000001")
+			if err := writeTestMergesetPartWithMarshalTypes(partPath, mergesetPartMetadata{
+				ItemsCount:  4,
+				BlocksCount: 1,
+				FirstItem:   "6161",
+				LastItem:    "617a",
+			}, []byte{mergesetMarshalTypeZSTD}); err != nil {
+				t.Fatal(err)
+			}
+			componentPath := filepath.Join(partPath, tc.fileName)
+			info, err := os.Stat(componentPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(componentPath, bytesOf(0xff, int(info.Size())), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := Analyze(context.Background(), []string{partPath}, Options{
+				Format: FormatMergeset,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := report.Files[0]
+			if !containsString(file.Notices, tc.wantNotice) {
+				t.Fatalf("notices = %v, want %q", file.Notices, tc.wantNotice)
+			}
+			if got, want := file.Extra["zstd_block_headers"], "1"; got != want {
+				t.Fatalf("zstd block headers extra = %q, want %q", got, want)
+			}
+			if got, want := file.Extra["item_payload_blocks_decoded"], "0"; got != want {
+				t.Fatalf("payload blocks decoded extra = %q, want %q", got, want)
+			}
+			if got, want := file.Extra["item_payload_items_decoded"], "0"; got != want {
+				t.Fatalf("payload items decoded extra = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	partPath := filepath.Join(t.TempDir(), "41_2_1847A3A45055EEF0")
 	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
