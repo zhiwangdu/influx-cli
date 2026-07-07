@@ -798,6 +798,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary.BaselineDecodeBlocks > 0 || summary.OptimizedDecodeBlocks > 0 || summary.SavedDecodeBlocks > 0 {
 		parts = append(parts, fmt.Sprintf("blocks %d->%d", summary.BaselineDecodeBlocks, summary.OptimizedDecodeBlocks))
 	}
+	if filter := blockFilterSummaryText(summary); filter != "" {
+		parts = append(parts, filter)
+	}
 	if targets := queryTargetSummaryText(summary); targets != "" {
 		parts = append(parts, targets)
 	}
@@ -809,6 +812,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.SavedDecodeBytes > 0 {
 		parts = append(parts, fmt.Sprintf("saved_bytes %d", summary.SavedDecodeBytes))
+	}
+	if values := decodeValueSummaryText(summary); values != "" {
+		parts = append(parts, values)
 	}
 	if summary.BaselineReadSegments > 0 || summary.OptimizedReadSegments > 0 || summary.SavedReadSegments > 0 {
 		parts = append(parts, fmt.Sprintf("segments %d->%d", summary.BaselineReadSegments, summary.OptimizedReadSegments))
@@ -874,6 +880,61 @@ func decodePathText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func blockFilterSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := make([]string, 0, 7)
+	if summary.LocationBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("locations=%d", summary.LocationBlocks))
+	}
+	if summary.FilteredDecodeBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("decoded=%d", summary.FilteredDecodeBlocks))
+	}
+	if summary.SkippedByKeyBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("skipped_key=%d", summary.SkippedByKeyBlocks))
+	}
+	if summary.SkippedByProjectionBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("skipped_projection=%d", summary.SkippedByProjectionBlocks))
+	}
+	if summary.SkippedBeforeSeekBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("skipped_before=%d", summary.SkippedBeforeSeekBlocks))
+	}
+	if summary.SkippedAfterRangeBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("skipped_after=%d", summary.SkippedAfterRangeBlocks))
+	}
+	if summary.FullyTombstonedBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("tombstoned=%d", summary.FullyTombstonedBlocks))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "block_filter " + strings.Join(parts, " ")
+}
+
+func decodeValueSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	if summary.BaselineDecodeValues == 0 && summary.OptimizedDecodeValues == 0 &&
+		summary.SavedDecodeValues == 0 && summary.BaselineOutputValues == 0 &&
+		summary.OptimizedOutputValues == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if summary.BaselineDecodeValues > 0 || summary.OptimizedDecodeValues > 0 || summary.SavedDecodeValues > 0 {
+		decodeParts := []string{fmt.Sprintf("decode=%d->%d", summary.BaselineDecodeValues, summary.OptimizedDecodeValues)}
+		if summary.SavedDecodeValues > 0 {
+			decodeParts = append(decodeParts, fmt.Sprintf("saved=%d", summary.SavedDecodeValues))
+		}
+		parts = append(parts, strings.Join(decodeParts, " "))
+	}
+	if summary.BaselineOutputValues > 0 || summary.OptimizedOutputValues > 0 {
+		parts = append(parts, fmt.Sprintf("output=%d->%d", summary.BaselineOutputValues, summary.OptimizedOutputValues))
+	}
+	return "values " + strings.Join(parts, " ")
 }
 
 func valueOutputSummaryText(summary *DecodePathSummary) string {

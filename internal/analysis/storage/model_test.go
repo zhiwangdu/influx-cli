@@ -33,9 +33,14 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				BaselineDecodeBytes:          288,
 				OptimizedDecodeBytes:         96,
 				SavedDecodeBytes:             192,
+				BaselineDecodeValues:         9,
+				OptimizedDecodeValues:        3,
+				SavedDecodeValues:            6,
 				BaselineReadSegments:         3,
 				OptimizedReadSegments:        1,
 				SavedReadSegments:            2,
+				BaselineOutputValues:         6,
+				OptimizedOutputValues:        2,
 				BaselineCursorReadCalls:      3,
 				OptimizedCursorReadCalls:     1,
 				BaselineReadAtCalls:          6,
@@ -56,11 +61,18 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				CursorFinalOutputSamples: []DecodePathCursorOutput{
 					{Key: "sid:7/value", Time: 1, Type: "float", OptimizedValue: "1.25"},
 				},
-				CursorWindowCount: 2,
-				MergeWindowCount:  1,
-				MergeWindowBlocks: 2,
-				MergeWindowKeys:   1,
-				Amplification:     2.5,
+				CursorWindowCount:         2,
+				MergeWindowCount:          1,
+				MergeWindowBlocks:         2,
+				MergeWindowKeys:           1,
+				Amplification:             2.5,
+				LocationBlocks:            3,
+				FilteredDecodeBlocks:      1,
+				SkippedByKeyBlocks:        1,
+				SkippedByProjectionBlocks: 1,
+				SkippedBeforeSeekBlocks:   1,
+				SkippedAfterRangeBlocks:   1,
+				FullyTombstonedBlocks:     1,
 				Samples: []DecodePathBlockDecision{
 					{Key: "secret-series-key", Type: "float", Reason: "range-match"},
 				},
@@ -135,10 +147,12 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 	for _, want := range []string{
 		"tssp-location-cursor-ascending",
 		"blocks 3->1",
+		"block_filter locations=3 decoded=1 skipped_key=1 skipped_projection=1 skipped_before=1 skipped_after=1 tombstoned=1",
 		"keys=2/1/1 series_ids=2/1/1 meta_index_ids=2/1/1 columns=2/1/1",
 		"location_block_types chunk-meta:2 meta-index:1",
 		"decode_block_types chunk-meta:1",
 		"saved_bytes 192",
+		"values decode=9->3 saved=6 output=6->2",
 		"segments 3->1",
 		"cursor_reads 3->1",
 		"read_at calls 6->2",
@@ -171,10 +185,96 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 
 func TestDecodePathTextOmitsEmptyOutputSummaries(t *testing.T) {
 	text := decodePathText(&DecodePathSummary{})
-	for _, notWant := range []string{"value_output", "cursor_output"} {
+	for _, notWant := range []string{"value_output", "cursor_output", "block_filter", "values"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("decode path text = %q, want no %s segment", text, notWant)
 		}
+	}
+}
+
+func TestDecodePathTextIncludesBlockFilterCounts(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		LocationBlocks:            4,
+		FilteredDecodeBlocks:      2,
+		SkippedByKeyBlocks:        1,
+		SkippedByProjectionBlocks: 1,
+		SkippedBeforeSeekBlocks:   1,
+		SkippedAfterRangeBlocks:   3,
+		FullyTombstonedBlocks:     1,
+		BaselineDecodeBlocks:      4,
+		OptimizedDecodeBlocks:     2,
+	})
+	want := "block_filter locations=4 decoded=2 skipped_key=1 skipped_projection=1 skipped_before=1 skipped_after=3 tombstoned=1"
+	if !strings.Contains(text, want) {
+		t.Fatalf("decode path text = %q, want %q", text, want)
+	}
+}
+
+func TestDecodePathTextIncludesSparseBlockFilterCounts(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		SkippedByProjectionBlocks: 2,
+		FullyTombstonedBlocks:     1,
+	})
+	want := "block_filter skipped_projection=2 tombstoned=1"
+	if !strings.Contains(text, want) {
+		t.Fatalf("decode path text = %q, want %q", text, want)
+	}
+	for _, notWant := range []string{"locations=", "decoded=", "skipped_key=", "skipped_before=", "skipped_after="} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("decode path text = %q, want no %q", text, notWant)
+		}
+	}
+}
+
+func TestDecodePathTextIncludesDecodeValueCounts(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		BaselineDecodeValues:  9,
+		OptimizedDecodeValues: 4,
+		SavedDecodeValues:     5,
+		BaselineOutputValues:  7,
+		OptimizedOutputValues: 3,
+	})
+	want := "values decode=9->4 saved=5 output=7->3"
+	if !strings.Contains(text, want) {
+		t.Fatalf("decode path text = %q, want %q", text, want)
+	}
+}
+
+func TestDecodePathTextIncludesSparseDecodeValueCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		summary  DecodePathSummary
+		want     string
+		notWants []string
+	}{
+		{
+			name: "saved-only",
+			summary: DecodePathSummary{
+				SavedDecodeValues: 3,
+			},
+			want:     "values decode=0->0 saved=3",
+			notWants: []string{"output="},
+		},
+		{
+			name: "output-only",
+			summary: DecodePathSummary{
+				OptimizedOutputValues: 2,
+			},
+			want:     "values output=0->2",
+			notWants: []string{"decode="},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := decodePathText(&tc.summary)
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("decode path text = %q, want %q", text, tc.want)
+			}
+			for _, notWant := range tc.notWants {
+				if strings.Contains(text, notWant) {
+					t.Fatalf("decode path text = %q, want no %q", text, notWant)
+				}
+			}
+		})
 	}
 }
 
