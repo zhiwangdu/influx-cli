@@ -371,12 +371,16 @@ type DecodePathSummary struct {
 	DataBlockProbeNoneEvals      int                       `json:"data_block_probe_none_filter_evaluations,omitempty"`
 	DataBlockProbeFilterEvalHits int                       `json:"data_block_probe_filter_evaluation_matches,omitempty"`
 	DataBlockProbeFilterEvalMiss int                       `json:"data_block_probe_filter_evaluation_misses,omitempty"`
+	DataBlockProbeFilterSkips    int                       `json:"data_block_probe_filter_short_circuit_skips,omitempty"`
 	DataBlockProbeRequiredHits   int                       `json:"data_block_probe_required_filter_evaluation_matches,omitempty"`
 	DataBlockProbeRequiredMiss   int                       `json:"data_block_probe_required_filter_evaluation_misses,omitempty"`
+	DataBlockProbeRequiredSkips  int                       `json:"data_block_probe_required_filter_short_circuit_skips,omitempty"`
 	DataBlockProbeAnyHits        int                       `json:"data_block_probe_any_filter_evaluation_matches,omitempty"`
 	DataBlockProbeAnyMiss        int                       `json:"data_block_probe_any_filter_evaluation_misses,omitempty"`
+	DataBlockProbeAnySkips       int                       `json:"data_block_probe_any_filter_short_circuit_skips,omitempty"`
 	DataBlockProbeNoneHits       int                       `json:"data_block_probe_none_filter_evaluation_matches,omitempty"`
 	DataBlockProbeNoneMiss       int                       `json:"data_block_probe_none_filter_evaluation_misses,omitempty"`
+	DataBlockProbeNoneSkips      int                       `json:"data_block_probe_none_filter_short_circuit_skips,omitempty"`
 	DataBlockProbeFilterOps      map[string]int            `json:"data_block_probe_filter_operator_evaluations,omitempty"`
 	BaselineCursorOutputPoints   int                       `json:"baseline_cursor_output_points,omitempty"`
 	OptimizedCursorOutputPoints  int                       `json:"optimized_cursor_output_points,omitempty"`
@@ -639,6 +643,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	}
 	if summary.DataBlockProbeFilterRows > 0 || summary.DataBlockProbeFilterMatches > 0 || summary.DataBlockProbeFilterRejects > 0 {
 		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d evals=%d eval_matches=%d eval_misses=%d required=%d required_matches=%d required_misses=%d any=%d any_matches=%d any_misses=%d none=%d none_matches=%d none_misses=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects, summary.DataBlockProbeFilterEvals, summary.DataBlockProbeFilterEvalHits, summary.DataBlockProbeFilterEvalMiss, summary.DataBlockProbeRequiredEvals, summary.DataBlockProbeRequiredHits, summary.DataBlockProbeRequiredMiss, summary.DataBlockProbeAnyEvals, summary.DataBlockProbeAnyHits, summary.DataBlockProbeAnyMiss, summary.DataBlockProbeNoneEvals, summary.DataBlockProbeNoneHits, summary.DataBlockProbeNoneMiss))
+	}
+	if summary.DataBlockProbeFilterSkips > 0 {
+		parts = append(parts, fmt.Sprintf("field_filter_short_circuit skips=%d required=%d any=%d none=%d", summary.DataBlockProbeFilterSkips, summary.DataBlockProbeRequiredSkips, summary.DataBlockProbeAnySkips, summary.DataBlockProbeNoneSkips))
 	}
 	if summary.ValueOutputMismatches > 0 {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))

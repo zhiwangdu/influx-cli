@@ -139,12 +139,16 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeNoneEvals = dataProbe.FilterNoneEvals
 		summary.DataBlockProbeFilterEvalHits = dataProbe.FilterEvalMatches
 		summary.DataBlockProbeFilterEvalMiss = dataProbe.FilterEvalMisses
+		summary.DataBlockProbeFilterSkips = dataProbe.FilterSkippedEvals
 		summary.DataBlockProbeRequiredHits = dataProbe.FilterRequiredHits
 		summary.DataBlockProbeRequiredMiss = dataProbe.FilterRequiredMiss
+		summary.DataBlockProbeRequiredSkips = dataProbe.FilterRequiredSkips
 		summary.DataBlockProbeAnyHits = dataProbe.FilterAnyHits
 		summary.DataBlockProbeAnyMiss = dataProbe.FilterAnyMiss
+		summary.DataBlockProbeAnySkips = dataProbe.FilterAnySkips
 		summary.DataBlockProbeNoneHits = dataProbe.FilterNoneHits
 		summary.DataBlockProbeNoneMiss = dataProbe.FilterNoneMiss
+		summary.DataBlockProbeNoneSkips = dataProbe.FilterNoneSkips
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
@@ -407,12 +411,16 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeNoneEvals += src.DataBlockProbeNoneEvals
 	dst.DataBlockProbeFilterEvalHits += src.DataBlockProbeFilterEvalHits
 	dst.DataBlockProbeFilterEvalMiss += src.DataBlockProbeFilterEvalMiss
+	dst.DataBlockProbeFilterSkips += src.DataBlockProbeFilterSkips
 	dst.DataBlockProbeRequiredHits += src.DataBlockProbeRequiredHits
 	dst.DataBlockProbeRequiredMiss += src.DataBlockProbeRequiredMiss
+	dst.DataBlockProbeRequiredSkips += src.DataBlockProbeRequiredSkips
 	dst.DataBlockProbeAnyHits += src.DataBlockProbeAnyHits
 	dst.DataBlockProbeAnyMiss += src.DataBlockProbeAnyMiss
+	dst.DataBlockProbeAnySkips += src.DataBlockProbeAnySkips
 	dst.DataBlockProbeNoneHits += src.DataBlockProbeNoneHits
 	dst.DataBlockProbeNoneMiss += src.DataBlockProbeNoneMiss
+	dst.DataBlockProbeNoneSkips += src.DataBlockProbeNoneSkips
 	addTSSPDecodePathCounts(dst.DataBlockProbeFilterOps, src.DataBlockProbeFilterOps)
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
@@ -821,6 +829,15 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			summary.DataBlockProbeNoneEvals,
 			summary.DataBlockProbeNoneHits,
 			summary.DataBlockProbeNoneMiss,
+		))
+	}
+	if summary.DataBlockProbeFilterSkips > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"short-circuited %d TSSP decoded-row field predicate evaluation(s): required_skips=%d any_skips=%d none_skips=%d",
+			summary.DataBlockProbeFilterSkips,
+			summary.DataBlockProbeRequiredSkips,
+			summary.DataBlockProbeAnySkips,
+			summary.DataBlockProbeNoneSkips,
 		))
 	}
 	if summary.SkippedByKeyBlocks > 0 {

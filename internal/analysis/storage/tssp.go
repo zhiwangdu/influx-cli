@@ -230,12 +230,16 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			report.Extra["data_block_probe_none_filter_evaluations"] = fmt.Sprint(dataProbe.FilterNoneEvals)
 			report.Extra["data_block_probe_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterEvalMatches)
 			report.Extra["data_block_probe_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterEvalMisses)
+			report.Extra["data_block_probe_filter_short_circuit_skips"] = fmt.Sprint(dataProbe.FilterSkippedEvals)
 			report.Extra["data_block_probe_required_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterRequiredHits)
 			report.Extra["data_block_probe_required_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterRequiredMiss)
+			report.Extra["data_block_probe_required_filter_short_circuit_skips"] = fmt.Sprint(dataProbe.FilterRequiredSkips)
 			report.Extra["data_block_probe_any_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterAnyHits)
 			report.Extra["data_block_probe_any_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterAnyMiss)
+			report.Extra["data_block_probe_any_filter_short_circuit_skips"] = fmt.Sprint(dataProbe.FilterAnySkips)
 			report.Extra["data_block_probe_none_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterNoneHits)
 			report.Extra["data_block_probe_none_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterNoneMiss)
+			report.Extra["data_block_probe_none_filter_short_circuit_skips"] = fmt.Sprint(dataProbe.FilterNoneSkips)
 			if len(dataProbe.FilterOperators) > 0 {
 				report.Extra["data_block_probe_filter_operator_evaluations"] = tsspDetachedDataProbeTypeSummary(dataProbe.FilterOperators)
 			}

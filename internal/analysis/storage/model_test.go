@@ -32,6 +32,8 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				DataBlockProbeFilterRows:    5,
 				DataBlockProbeFilterMatches: 3,
 				DataBlockProbeFilterRejects: 2,
+				DataBlockProbeFilterSkips:   4,
+				DataBlockProbeAnySkips:      4,
 				Recommendations: []string{
 					"read 1 overlapping TSSP segment(s) instead of 3 meta-index candidate segment(s)",
 				},
@@ -51,6 +53,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"read_at calls 6->2",
 		"iterator_cost files=1 blocks=3 bytes=273",
 		"field_filter rows=5 matches=3 rejects=2",
+		"field_filter_short_circuit skips=4 required=0 any=4 none=0",
 	} {
 		if !strings.Contains(decodeText, want) {
 			t.Fatalf("decode path summary %q does not contain %q", decodeText, want)

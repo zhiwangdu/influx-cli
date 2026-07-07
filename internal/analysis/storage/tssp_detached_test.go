@@ -1188,7 +1188,7 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 		Format:           FormatTSSPDetachedIndex,
 		BlockSampleLimit: 4,
 		QueryRange:       queryRange,
-		QueryAnyFields:   []FieldFilter{{Key: "value", Value: "100"}, {Key: "value", Value: "99"}},
+		QueryAnyFields:   []FieldFilter{{Key: "value", Value: "0"}, {Key: "value", Value: "99"}, {Key: "value", Value: "x"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1218,11 +1218,17 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_filter_evaluation_misses"], "1"; got != want {
 		t.Fatalf("data block probe filter evaluation misses = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_filter_short_circuit_skips"], "1"; got != want {
+		t.Fatalf("data block probe filter short-circuit skips = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_required_filter_evaluation_matches"], "0"; got != want {
 		t.Fatalf("data block probe required filter evaluation matches = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_required_filter_evaluation_misses"], "0"; got != want {
 		t.Fatalf("data block probe required filter evaluation misses = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_required_filter_short_circuit_skips"], "0"; got != want {
+		t.Fatalf("data block probe required filter short-circuit skips = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_any_filter_evaluation_matches"], "1"; got != want {
 		t.Fatalf("data block probe any filter evaluation matches = %q, want %q", got, want)
@@ -1230,11 +1236,17 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_any_filter_evaluation_misses"], "1"; got != want {
 		t.Fatalf("data block probe any filter evaluation misses = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_any_filter_short_circuit_skips"], "1"; got != want {
+		t.Fatalf("data block probe any filter short-circuit skips = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_none_filter_evaluation_matches"], "0"; got != want {
 		t.Fatalf("data block probe none filter evaluation matches = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_none_filter_evaluation_misses"], "0"; got != want {
 		t.Fatalf("data block probe none filter evaluation misses = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_none_filter_short_circuit_skips"], "0"; got != want {
+		t.Fatalf("data block probe none filter short-circuit skips = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "=:2"; got != want {
 		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
@@ -1261,16 +1273,22 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if got, want := decode.DataBlockProbeFilterEvalMiss, 1; got != want {
 		t.Fatalf("decode filter evaluation misses = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeFilterSkips, 1; got != want {
+		t.Fatalf("decode filter short-circuit skips = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeAnyHits, 1; got != want {
 		t.Fatalf("decode any filter evaluation matches = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeAnyMiss, 1; got != want {
 		t.Fatalf("decode any filter evaluation misses = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeAnySkips, 1; got != want {
+		t.Fatalf("decode any filter short-circuit skips = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeFilterOps["="], 2; got != want {
 		t.Fatalf("decode equality filter evaluations = %d, want %d", got, want)
 	}
-	wantAny := []FieldFilter{{Key: "value", Value: "100"}, {Key: "value", Value: "99"}}
+	wantAny := []FieldFilter{{Key: "value", Value: "0"}, {Key: "value", Value: "99"}, {Key: "value", Value: "x"}}
 	if got := decode.QueryAnyFields; !equalFieldFilters(got, wantAny) {
 		t.Fatalf("query any fields = %v, want %v", got, wantAny)
 	}
@@ -1283,7 +1301,7 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
 		t.Fatalf("optimized value output points = %d, want %d", got, want)
 	}
-	if !containsString(decode.Recommendations, "applied 2 detached TSSP OR field filter") {
+	if !containsString(decode.Recommendations, "applied 3 detached TSSP OR field filter") {
 		t.Fatalf("recommendations = %v, want detached OR field filter recommendation", decode.Recommendations)
 	}
 	if !containsString(decode.Recommendations, "executed 2 detached TSSP decoded-row field predicate evaluation") {
@@ -1294,6 +1312,12 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "matches=1 misses=1") {
 		t.Fatalf("recommendations = %v, want detached predicate match/miss breakdown", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "short-circuited 1 detached TSSP decoded-row field predicate evaluation") {
+		t.Fatalf("recommendations = %v, want detached predicate short-circuit recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "required_skips=0 any_skips=1 none_skips=0") {
+		t.Fatalf("recommendations = %v, want detached predicate short-circuit breakdown", decode.Recommendations)
 	}
 }
 

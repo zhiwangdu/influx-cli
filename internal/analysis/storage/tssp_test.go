@@ -999,11 +999,17 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_filter_evaluation_misses"], "2"; got != want {
 		t.Fatalf("data block probe filter evaluation misses = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_filter_short_circuit_skips"], "1"; got != want {
+		t.Fatalf("data block probe filter short-circuit skips = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_required_filter_evaluation_matches"], "1"; got != want {
 		t.Fatalf("data block probe required filter evaluation matches = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_required_filter_evaluation_misses"], "1"; got != want {
 		t.Fatalf("data block probe required filter evaluation misses = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_required_filter_short_circuit_skips"], "0"; got != want {
+		t.Fatalf("data block probe required filter short-circuit skips = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_any_filter_evaluation_matches"], "0"; got != want {
 		t.Fatalf("data block probe any filter evaluation matches = %q, want %q", got, want)
@@ -1011,11 +1017,17 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_any_filter_evaluation_misses"], "1"; got != want {
 		t.Fatalf("data block probe any filter evaluation misses = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_any_filter_short_circuit_skips"], "1"; got != want {
+		t.Fatalf("data block probe any filter short-circuit skips = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_none_filter_evaluation_matches"], "0"; got != want {
 		t.Fatalf("data block probe none filter evaluation matches = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_none_filter_evaluation_misses"], "0"; got != want {
 		t.Fatalf("data block probe none filter evaluation misses = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_none_filter_short_circuit_skips"], "0"; got != want {
+		t.Fatalf("data block probe none filter short-circuit skips = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "=:1,>:2"; got != want {
 		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
@@ -1042,11 +1054,17 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	if got, want := decode.DataBlockProbeFilterEvalMiss, 2; got != want {
 		t.Fatalf("decode filter evaluation misses = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeFilterSkips, 1; got != want {
+		t.Fatalf("decode filter short-circuit skips = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeRequiredHits, 1; got != want {
 		t.Fatalf("decode required filter evaluation matches = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeRequiredMiss, 1; got != want {
 		t.Fatalf("decode required filter evaluation misses = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRequiredSkips, 0; got != want {
+		t.Fatalf("decode required filter short-circuit skips = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeAnyHits, 0; got != want {
 		t.Fatalf("decode any filter evaluation matches = %d, want %d", got, want)
@@ -1054,11 +1072,17 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	if got, want := decode.DataBlockProbeAnyMiss, 1; got != want {
 		t.Fatalf("decode any filter evaluation misses = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeAnySkips, 1; got != want {
+		t.Fatalf("decode any filter short-circuit skips = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeNoneHits, 0; got != want {
 		t.Fatalf("decode none filter evaluation matches = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeNoneMiss, 0; got != want {
 		t.Fatalf("decode none filter evaluation misses = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeNoneSkips, 0; got != want {
+		t.Fatalf("decode none filter short-circuit skips = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeFilterOps["="], 1; got != want {
 		t.Fatalf("decode equality filter evaluations = %d, want %d", got, want)
@@ -1083,6 +1107,12 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "matches=1 misses=2") {
 		t.Fatalf("recommendations = %v, want predicate match/miss breakdown", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "short-circuited 1 TSSP decoded-row field predicate evaluation") {
+		t.Fatalf("recommendations = %v, want predicate short-circuit recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "required_skips=0 any_skips=1 none_skips=0") {
+		t.Fatalf("recommendations = %v, want predicate short-circuit breakdown", decode.Recommendations)
 	}
 }
 

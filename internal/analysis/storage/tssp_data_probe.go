@@ -36,12 +36,16 @@ type tsspAttachedDataProbe struct {
 	FilterNoneEvals     int
 	FilterEvalMatches   int
 	FilterEvalMisses    int
+	FilterSkippedEvals  int
 	FilterRequiredHits  int
 	FilterRequiredMiss  int
+	FilterRequiredSkips int
 	FilterAnyHits       int
 	FilterAnyMiss       int
+	FilterAnySkips      int
 	FilterNoneHits      int
 	FilterNoneMiss      int
+	FilterNoneSkips     int
 	FilterOperators     map[string]int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
@@ -189,12 +193,16 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 					probe.FilterNoneEvals += filterStats.NoneEvaluations
 					probe.FilterEvalMatches += filterStats.MatchEvaluations
 					probe.FilterEvalMisses += filterStats.MissEvaluations
+					probe.FilterSkippedEvals += filterStats.SkippedEvaluations
 					probe.FilterRequiredHits += filterStats.RequiredMatches
 					probe.FilterRequiredMiss += filterStats.RequiredMisses
+					probe.FilterRequiredSkips += filterStats.RequiredSkips
 					probe.FilterAnyHits += filterStats.AnyMatches
 					probe.FilterAnyMiss += filterStats.AnyMisses
+					probe.FilterAnySkips += filterStats.AnySkips
 					probe.FilterNoneHits += filterStats.NoneMatches
 					probe.FilterNoneMiss += filterStats.NoneMisses
+					probe.FilterNoneSkips += filterStats.NoneSkips
 					addTSSPFilterOperatorCounts(probe.FilterOperators, filterStats.OperatorEvaluations)
 				}
 				chunkOutputPoints += matchedRows
@@ -300,12 +308,16 @@ type tsspDataBlockFilterStats struct {
 	NoneEvaluations     int
 	MatchEvaluations    int
 	MissEvaluations     int
+	SkippedEvaluations  int
 	RequiredMatches     int
 	RequiredMisses      int
+	RequiredSkips       int
 	AnyMatches          int
 	AnyMisses           int
+	AnySkips            int
 	NoneMatches         int
 	NoneMisses          int
+	NoneSkips           int
 	OperatorEvaluations map[string]int
 }
 
@@ -346,6 +358,21 @@ func (s *tsspDataBlockFilterStats) observe(filter FieldFilter, clause string, ma
 	}
 }
 
+func (s *tsspDataBlockFilterStats) skip(clause string, count int) {
+	if count <= 0 {
+		return
+	}
+	s.SkippedEvaluations += count
+	switch clause {
+	case "required":
+		s.RequiredSkips += count
+	case "any":
+		s.AnySkips += count
+	case "none":
+		s.NoneSkips += count
+	}
+}
+
 func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, anyFilters []FieldFilter, noneFilters []FieldFilter, rows int, timeRange tsspTimeRange, queryRange TimeRange) ([]bool, int, int, tsspDataBlockFilterStats, bool) {
 	var stats tsspDataBlockFilterStats
 	if rows <= 0 {
@@ -380,30 +407,38 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 			continue
 		}
 		match := true
-		for _, filterBlock := range filterBlocks {
+		for i, filterBlock := range filterBlocks {
 			predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
 			stats.observe(filterBlock.filter, "required", predicateMatch)
 			if !predicateMatch {
+				stats.skip("required", len(filterBlocks)-i-1)
+				stats.skip("any", len(anyFilterBlocks))
+				stats.skip("none", len(noneFilterBlocks))
 				match = false
 				break
 			}
 		}
 		if match && len(anyFilterBlocks) > 0 {
 			match = false
-			for _, filterBlock := range anyFilterBlocks {
+			for i, filterBlock := range anyFilterBlocks {
 				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
 				stats.observe(filterBlock.filter, "any", predicateMatch)
 				if predicateMatch {
+					stats.skip("any", len(anyFilterBlocks)-i-1)
 					match = true
 					break
 				}
 			}
+			if !match {
+				stats.skip("none", len(noneFilterBlocks))
+			}
 		}
 		if match && len(noneFilterBlocks) > 0 {
-			for _, filterBlock := range noneFilterBlocks {
+			for i, filterBlock := range noneFilterBlocks {
 				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
 				stats.observe(filterBlock.filter, "none", predicateMatch)
 				if predicateMatch {
+					stats.skip("none", len(noneFilterBlocks)-i-1)
 					match = false
 					break
 				}
