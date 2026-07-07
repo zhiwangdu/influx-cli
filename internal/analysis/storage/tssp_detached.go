@@ -2834,6 +2834,13 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			valueSamples,
 		))
 	}
+	if summary.DataBlockProbeValueUnknowns > 0 {
+		recommendation := fmt.Sprintf("detached TSSP data block probe found %d block(s) with unavailable value samples", summary.DataBlockProbeValueUnknowns)
+		if reasons := countMapText(summary.DataBlockProbeValueReasons); reasons != "" {
+			recommendation += ": " + reasons
+		}
+		recommendations = append(recommendations, recommendation)
+	}
 	if summary.DataBlockProbeFailures > 0 {
 		recommendation := fmt.Sprintf(
 			"detached TSSP data block probe found %d invalid block(s), including %d crc mismatch(es)",

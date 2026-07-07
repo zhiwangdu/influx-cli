@@ -3032,6 +3032,9 @@ func TestAnalyzeTSSPSamplesAttachedFloatFullUnsupportedCodecReason(t *testing.T)
 	if got, want := len(decode.CursorOutputSamples), 0; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
 	}
+	if !containsString(decode.Recommendations, "TSSP data block probe found 1 block(s) with unavailable value samples: float-full-codec-7:1") {
+		t.Fatalf("recommendations = %v, want unavailable value sample recommendation", decode.Recommendations)
+	}
 }
 
 func TestAnalyzeTSSPAttachedShortDataBlockBreakdown(t *testing.T) {
