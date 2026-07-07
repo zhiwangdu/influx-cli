@@ -90,6 +90,9 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 		if report.DecodePath == nil {
 			report.DecodePath = buildTSSPFileSetDecodePathSummary(report.Files, options)
 		}
+		if report.DecodePath == nil {
+			report.DecodePath = buildTSSPDetachedFileSetDecodePathSummary(report.Files, options)
+		}
 	}
 	if options.Format == FormatMergeset {
 		if decodePath := buildMergesetFileSetDecodePathSummary(report.Files, options); decodePath != nil {

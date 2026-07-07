@@ -219,6 +219,68 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	return summary
 }
 
+func buildTSSPDetachedFileSetDecodePathSummary(files []FileReport, options Options) *DecodePathSummary {
+	if !options.QueryRange.Set {
+		return nil
+	}
+
+	summary := &DecodePathSummary{
+		Mode:                 tsspCursorMode("tssp-detached-file-set-location-cursor", options),
+		QueryRange:           options.QueryRange,
+		CursorSeekTime:       tsspCursorSeekTime(options),
+		QueryMetaIndexIDs:    append([]uint64(nil), options.QueryMetaIndexIDs...),
+		KeyFilterApplied:     len(options.QueryMetaIndexIDs) > 0,
+		LocationBlocksByType: map[string]int{},
+		DecodeBlocksByType:   map[string]int{},
+	}
+	matchedMetaIndexIDs := map[uint64]struct{}{}
+	matchedColumns := map[string]struct{}{}
+	matchedFields := map[string]struct{}{}
+	matchedAnyFields := map[string]struct{}{}
+	matchedNoneFields := map[string]struct{}{}
+	outputGroups := newTSSPFileSetOutputSampleGroups()
+	included := false
+	for _, file := range tsspDetachedFilesForCursor(files, options.CursorDescending) {
+		included = true
+		addTSSPFileDecodePathSummary(summary, file.DecodePath, file.Path, options.BlockSampleLimit, outputGroups)
+		for _, id := range file.DecodePath.MatchedMetaIndexIDs {
+			matchedMetaIndexIDs[id] = struct{}{}
+		}
+		for _, column := range file.DecodePath.MatchedColumns {
+			matchedColumns[column] = struct{}{}
+		}
+		for _, field := range file.DecodePath.MatchedFields {
+			matchedFields[field.Key] = struct{}{}
+		}
+		for _, field := range file.DecodePath.MatchedAnyFields {
+			matchedAnyFields[field.Key] = struct{}{}
+		}
+		for _, field := range file.DecodePath.MatchedNoneFields {
+			matchedNoneFields[field.Key] = struct{}{}
+		}
+	}
+	if !included {
+		return nil
+	}
+	populateTSSPDetachedFileSetMetaIndexMatches(summary, matchedMetaIndexIDs)
+	populateTSSPFileSetColumnProjectionMatches(summary, options.QueryColumns, matchedColumns)
+	populateTSSPFileSetFieldFilterMatches(summary, options.QueryFields, matchedFields)
+	populateTSSPFileSetAnyFieldFilterMatches(summary, options.QueryAnyFields, matchedAnyFields)
+	populateTSSPFileSetNoneFieldFilterMatches(summary, options.QueryNoneFields, matchedNoneFields)
+	populateTSSPFileSetFinalOutputSamples(summary, outputGroups, options.BlockSampleLimit)
+
+	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
+	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
+	summary.SavedDecodeValues = summary.BaselineDecodeValues - summary.OptimizedDecodeValues
+	summary.SavedReadSegments = summary.BaselineReadSegments - summary.OptimizedReadSegments
+	summary.SavedReadAtCalls = summary.BaselineReadAtCalls - summary.OptimizedReadAtCalls
+	if summary.FilteredDecodeBlocks > 0 {
+		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
+	}
+	summary.Recommendations = tsspDetachedFileSetRecommendations(summary)
+	return summary
+}
+
 func tsspCursorMode(prefix string, options Options) string {
 	if options.CursorDescending {
 		return prefix + "-descending"
@@ -259,6 +321,27 @@ func tsspFilesForCursor(files []FileReport, descending bool) []FileReport {
 	ordered := make([]FileReport, 0, len(files))
 	for _, file := range files {
 		if file.Format != FormatTSSP || file.DecodePath == nil {
+			continue
+		}
+		ordered = append(ordered, file)
+	}
+	if !descending {
+		return ordered
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if a.MaxTime != b.MaxTime {
+			return a.MaxTime > b.MaxTime
+		}
+		return a.Path > b.Path
+	})
+	return ordered
+}
+
+func tsspDetachedFilesForCursor(files []FileReport, descending bool) []FileReport {
+	ordered := make([]FileReport, 0, len(files))
+	for _, file := range files {
+		if file.Format != FormatTSSPDetachedIndex || file.DecodePath == nil {
 			continue
 		}
 		ordered = append(ordered, file)
@@ -448,6 +531,29 @@ func populateTSSPDecodeSeriesMatches(summary *DecodePathSummary, metaIndexes []t
 			summary.MissingSeriesIDs = append(summary.MissingSeriesIDs, id)
 		}
 	}
+}
+
+func populateTSSPDetachedFileSetMetaIndexMatches(summary *DecodePathSummary, matchedSet map[uint64]struct{}) {
+	if summary == nil || len(summary.QueryMetaIndexIDs) == 0 {
+		return
+	}
+	for _, id := range summary.QueryMetaIndexIDs {
+		if _, ok := matchedSet[id]; ok {
+			summary.MatchedMetaIndexIDs = append(summary.MatchedMetaIndexIDs, id)
+		} else {
+			summary.MissingMetaIndexIDs = append(summary.MissingMetaIndexIDs, id)
+		}
+	}
+}
+
+func tsspDetachedFileSetRecommendations(summary *DecodePathSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	if summary.LocationBlocksByType["detached-chunk-meta"] == 0 && summary.DecodeBlocksByType["detached-chunk-meta"] == 0 {
+		return tsspDetachedMetaIndexRecommendations(summary)
+	}
+	return tsspDetachedChunkDecodeRecommendations(summary)
 }
 
 func appendTSSPMetaIndexDecodeSample(summary *DecodePathSummary, meta tsspMetaIndex, sampleLimit int) {

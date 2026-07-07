@@ -137,6 +137,327 @@ func TestAnalyzeTSSPDetachedMetaIndex(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedMetaIndexFileSetDecodePathAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "segment-a", tsspDetachedMetaIndexFileName)
+	path2 := filepath.Join(dir, "segment-b", tsspDetachedMetaIndexFileName)
+	if err := os.MkdirAll(filepath.Dir(path1), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path2), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(path1, []tsspMetaIndex{
+		{ID: 10, MinTime: 100, MaxTime: 150, Offset: 64, Size: 40},
+		{ID: 11, MinTime: 190, MaxTime: 210, Offset: 104, Size: 80},
+		{ID: 12, MinTime: 300, MaxTime: 350, Offset: 184, Size: 60},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(path2, []tsspMetaIndex{
+		{ID: 20, MinTime: 200, MaxTime: 260, Offset: 64, Size: 40},
+		{ID: 21, MinTime: 400, MaxTime: 450, Offset: 104, Size: 60},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(180, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:            FormatTSSPDetachedIndex,
+		Recursive:         true,
+		KeySampleLimit:    4,
+		BlockSampleLimit:  6,
+		QueryRange:        queryRange,
+		QueryMetaIndexIDs: []uint64{20, 99, 10, 11},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(report.Files), 2; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level detached TSSP decode path summary")
+	}
+	if got, want := decode.Mode, "tssp-detached-file-set-location-cursor-ascending"; got != want {
+		t.Fatalf("mode = %q, want %q", got, want)
+	}
+	if got, want := decode.QueryMetaIndexIDs, []uint64{10, 11, 20, 99}; !equalUint64s(got, want) {
+		t.Fatalf("query meta-index ids = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedMetaIndexIDs, []uint64{10, 11, 20}; !equalUint64s(got, want) {
+		t.Fatalf("matched meta-index ids = %v, want %v", got, want)
+	}
+	if got, want := decode.MissingMetaIndexIDs, []uint64{99}; !equalUint64s(got, want) {
+		t.Fatalf("missing meta-index ids = %v, want %v", got, want)
+	}
+	if got, want := decode.LocationBlocks, 3; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 3; got != want {
+		t.Fatalf("baseline blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 2; got != want {
+		t.Fatalf("optimized blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBlocks, 1; got != want {
+		t.Fatalf("saved blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedByKeyBlocks, 2; got != want {
+		t.Fatalf("skipped by id blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedBeforeSeekBlocks, 1; got != want {
+		t.Fatalf("skipped before seek blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineReadAtCalls, 3; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 2; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadAtCalls, 1; got != want {
+		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineCursorReadCalls, 2; got != want {
+		t.Fatalf("baseline cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedCursorReadCalls, 2; got != want {
+		t.Fatalf("optimized cursor read calls = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorWindowCount, 2; got != want {
+		t.Fatalf("cursor window count = %d, want %d", got, want)
+	}
+	if got, want := decode.LocationBlocksByType["detached-meta-index"], 3; got != want {
+		t.Fatalf("detached meta-index location count = %d, want %d", got, want)
+	}
+	if got, want := decode.DecodeBlocksByType["detached-meta-index"], 2; got != want {
+		t.Fatalf("detached meta-index decode count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.Samples), 3; got != want {
+		t.Fatalf("sample count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 2; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	for _, sample := range decode.Samples {
+		if sample.Path == "" {
+			t.Fatalf("decode sample missing path: %+v", sample)
+		}
+	}
+	for _, window := range decode.CursorWindows {
+		if len(window.Files) == 0 {
+			t.Fatalf("cursor window missing file: %+v", window)
+		}
+	}
+	if got, want := report.Summary.QueryOverlapBlocks, 2; got != want {
+		t.Fatalf("summary overlap blocks = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP meta-index record") {
+		t.Fatalf("recommendations = %v, want meta-index wording", decode.Recommendations)
+	}
+	if containsString(decode.Recommendations, "detached TSSP data ReadAt") {
+		t.Fatalf("recommendations = %v, want no data ReadAt wording for meta-index-only file set", decode.Recommendations)
+	}
+
+	descReport, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:            FormatTSSPDetachedIndex,
+		Recursive:         true,
+		KeySampleLimit:    4,
+		BlockSampleLimit:  6,
+		QueryRange:        queryRange,
+		QueryMetaIndexIDs: []uint64{20, 99, 10, 11},
+		CursorDescending:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := descReport.DecodePath
+	if desc == nil {
+		t.Fatal("expected descending report-level detached TSSP decode path summary")
+	}
+	if got, want := desc.Mode, "tssp-detached-file-set-location-cursor-descending"; got != want {
+		t.Fatalf("descending mode = %q, want %q", got, want)
+	}
+	if got, want := desc.Samples[0].MetaIndexID, uint64(20); got != want {
+		t.Fatalf("descending first sample meta-index id = %d, want %d", got, want)
+	}
+	if got, want := desc.Samples[1].MetaIndexID, uint64(11); got != want {
+		t.Fatalf("descending second sample meta-index id = %d, want %d", got, want)
+	}
+	if got, want := desc.Samples[2].MetaIndexID, uint64(10); got != want {
+		t.Fatalf("descending third sample meta-index id = %d, want %d", got, want)
+	}
+	if got, want := desc.CursorWindows[0].Files[0], path2; got != want {
+		t.Fatalf("descending first cursor window file = %q, want %q", got, want)
+	}
+	if got, want := desc.CursorWindows[1].Files[0], path1; got != want {
+		t.Fatalf("descending second cursor window file = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeTSSPDetachedFileSetDecodePathWithChunkMetaExpansion(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "segment-a", tsspDetachedMetaIndexFileName)
+	path2 := filepath.Join(dir, "segment-b", tsspDetachedMetaIndexFileName)
+	if err := os.MkdirAll(filepath.Dir(path1), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path2), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	chunk1 := testTSSPChunkSpec{sid: 7, minTime: 100, maxTime: 200, offset: 64, size: 16}
+	metaIndexes1, err := writeTestTSSPDetachedChunkMeta(filepath.Join(filepath.Dir(path1), tsspDetachedChunkMetaFileName), []testTSSPChunkSpec{chunk1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(path1, metaIndexes1); err != nil {
+		t.Fatal(err)
+	}
+	chunk2 := testTSSPChunkSpec{sid: 8, minTime: 300, maxTime: 400, offset: 64, size: 16}
+	metaIndexes2, err := writeTestTSSPDetachedChunkMeta(filepath.Join(filepath.Dir(path2), tsspDetachedChunkMetaFileName), []testTSSPChunkSpec{chunk2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(path2, metaIndexes2); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(150, 180)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		Recursive:        true,
+		KeySampleLimit:   4,
+		BlockSampleLimit: 6,
+		QueryRange:       queryRange,
+		QueryColumns:     []string{"missing", "value"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(report.Files), 2; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	for _, file := range report.Files {
+		if got, want := file.Extra["chunk_meta_expanded"], "true"; got != want {
+			t.Fatalf("file %s chunk_meta_expanded = %q, want %q", file.Path, got, want)
+		}
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level detached TSSP decode path summary")
+	}
+	if got, want := decode.Mode, "tssp-detached-file-set-location-cursor-ascending"; got != want {
+		t.Fatalf("mode = %q, want %q", got, want)
+	}
+	if got, want := decode.QueryColumns, []string{"missing", "value"}; !equalStrings(got, want) {
+		t.Fatalf("query columns = %v, want %v", got, want)
+	}
+	if got, want := decode.MatchedColumns, []string{"value"}; !equalStrings(got, want) {
+		t.Fatalf("matched columns = %v, want %v", got, want)
+	}
+	if got, want := decode.MissingColumns, []string{"missing"}; !equalStrings(got, want) {
+		t.Fatalf("missing columns = %v, want %v", got, want)
+	}
+	if got, want := decode.LocationBlocks, 2; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineDecodeBlocks, 2; got != want {
+		t.Fatalf("baseline blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedDecodeBlocks, 1; got != want {
+		t.Fatalf("optimized blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedDecodeBlocks, 1; got != want {
+		t.Fatalf("saved blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineReadSegments, 2; got != want {
+		t.Fatalf("baseline read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadSegments, 1; got != want {
+		t.Fatalf("optimized read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadSegments, 1; got != want {
+		t.Fatalf("saved read segments = %d, want %d", got, want)
+	}
+	if got, want := decode.BaselineReadAtCalls, 4; got != want {
+		t.Fatalf("baseline ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedReadAtCalls, 2; got != want {
+		t.Fatalf("optimized ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SavedReadAtCalls, 2; got != want {
+		t.Fatalf("saved ReadAt calls = %d, want %d", got, want)
+	}
+	if got, want := decode.SkippedAfterRangeBlocks, 1; got != want {
+		t.Fatalf("skipped after range blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.LocationBlocksByType["detached-chunk-meta"], 2; got != want {
+		t.Fatalf("detached chunk-meta location count = %d, want %d", got, want)
+	}
+	if got, want := decode.DecodeBlocksByType["detached-chunk-meta"], 1; got != want {
+		t.Fatalf("detached chunk-meta decode count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.Samples), 2; got != want {
+		t.Fatalf("sample count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorWindows), 2; got != want {
+		t.Fatalf("cursor windows = %d, want %d", got, want)
+	}
+	for _, sample := range decode.Samples {
+		if sample.Path == "" {
+			t.Fatalf("decode sample missing path: %+v", sample)
+		}
+	}
+	for _, window := range decode.CursorWindows {
+		if len(window.Files) == 0 {
+			t.Fatalf("cursor window missing file: %+v", window)
+		}
+	}
+	if got, want := report.Summary.QueryOverlapBlocks, 1; got != want {
+		t.Fatalf("summary overlap blocks = %d, want %d", got, want)
+	}
+
+	descReport, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		Recursive:        true,
+		KeySampleLimit:   4,
+		BlockSampleLimit: 6,
+		QueryRange:       queryRange,
+		QueryColumns:     []string{"missing", "value"},
+		CursorDescending: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := descReport.DecodePath
+	if desc == nil {
+		t.Fatal("expected descending report-level detached TSSP decode path summary")
+	}
+	if got, want := desc.Mode, "tssp-detached-file-set-location-cursor-descending"; got != want {
+		t.Fatalf("descending mode = %q, want %q", got, want)
+	}
+	if got, want := desc.Samples[0].MetaIndexID, uint64(8); got != want {
+		t.Fatalf("descending first sample meta-index id = %d, want %d", got, want)
+	}
+	if got, want := desc.Samples[1].MetaIndexID, uint64(7); got != want {
+		t.Fatalf("descending second sample meta-index id = %d, want %d", got, want)
+	}
+	if got, want := desc.CursorWindows[0].Files[0], path2; got != want {
+		t.Fatalf("descending first cursor window file = %q, want %q", got, want)
+	}
+	if got, want := desc.CursorWindows[1].Files[0], path1; got != want {
+		t.Fatalf("descending second cursor window file = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexDescendingAndIDFilter(t *testing.T) {
 	path := filepath.Join(t.TempDir(), tsspDetachedMetaIndexFileName)
 	if err := writeTestTSSPDetachedMetaIndex(path, []tsspMetaIndex{
