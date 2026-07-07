@@ -56,6 +56,23 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				CursorFinalOutputSamples: []DecodePathCursorOutput{
 					{Key: "sid:7/value", Time: 1, Type: "float", OptimizedValue: "1.25"},
 				},
+				CursorWindowCount: 2,
+				MergeWindowCount:  1,
+				MergeWindowBlocks: 2,
+				MergeWindowKeys:   1,
+				Amplification:     2.5,
+				Samples: []DecodePathBlockDecision{
+					{Key: "secret-series-key", Type: "float", Reason: "range-match"},
+				},
+				CursorWindows: []DecodePathCursorWindow{
+					{Key: "secret-window-key", MinTime: 1, MaxTime: 2, LocationBlocks: 2, DecodedBlocks: 1},
+				},
+				CursorExecutionSamples: []DecodePathCursorStep{
+					{Step: 1, Type: "cursor", Action: "push", Key: "secret-cursor-key", CandidateValue: "secret-candidate"},
+				},
+				FilterExecutionSamples: []DecodePathCursorStep{
+					{Step: 2, Type: "filter", Action: "match", Key: "secret-filter-key"},
+				},
 				DataBlockProbeBlocks:        4,
 				DataBlockProbeBytes:         256,
 				DataBlockProbeValidBlocks:   3,
@@ -128,6 +145,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"iterator_cost files=1 blocks=3 bytes=273",
 		"value_output points=6->2 compared=2 unavailable_blocks=1",
 		"cursor_output points=6->2 samples=2 final_samples=1",
+		"execution windows cursor=2 sampled=1 merge=1 merge_blocks=2 merge_keys=1 samples decisions=1 cursor_steps=1 filter_steps=1 amplification=2.50x",
 		"data_probe blocks=4 bytes=256 valid=3 failures=4 crc_mismatches=1 short=1 unknown_types=1 read_errors=1 row_blocks=3 row_unknowns=1 row_mismatches=1 output_points=2 value_blocks=2 value_unknowns=1 nulls=3 record_samples=1",
 		"data_probe_failure_reasons segment_overlap_data_crc_unavailable:1 segment_overlap_data_header_unavailable:1 segment_overlap_data_read_unavailable:1",
 		"data_probe_types float-full:2 integer-full:1",
@@ -141,6 +159,9 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		if !strings.Contains(decodeText, want) {
 			t.Fatalf("decode path summary %q does not contain %q", decodeText, want)
 		}
+	}
+	if strings.Contains(decodeText, "secret") {
+		t.Fatalf("decode path summary %q leaks sampled execution details", decodeText)
 	}
 	advice := row[tableColumnIndex(t, result.Table.Columns, "advice")].(string)
 	if !strings.Contains(advice, "read 1 overlapping TSSP segment") {
@@ -231,6 +252,65 @@ func TestDecodePathTextIncludesCursorOutputSamplesWithoutPointCounts(t *testing.
 	}
 	if strings.Contains(text, "points=") {
 		t.Fatalf("decode path text = %q, want no cursor output points segment", text)
+	}
+}
+
+func TestDecodePathTextIncludesExecutionDiagnosticsCountsOnly(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		CursorWindowCount: 3,
+		MergeWindowCount:  2,
+		MergeWindowBlocks: 5,
+		MergeWindowKeys:   4,
+		Amplification:     1.75,
+		Samples: []DecodePathBlockDecision{
+			{Key: "secret-decision-key", Type: "float", Reason: "range-match"},
+		},
+		CursorWindows: []DecodePathCursorWindow{
+			{Key: "secret-window-key", MinTime: 1, MaxTime: 2, LocationBlocks: 3, DecodedBlocks: 1},
+			{Key: "another-secret-window-key", MinTime: 3, MaxTime: 4, LocationBlocks: 2, DecodedBlocks: 1},
+		},
+		CursorExecutionSamples: []DecodePathCursorStep{
+			{Step: 1, Type: "cursor", Action: "push", Key: "secret-cursor-key", CandidateValue: "secret-candidate"},
+			{Step: 2, Type: "cursor", Action: "advance", Key: "another-secret-cursor-key"},
+		},
+		FilterExecutionSamples: []DecodePathCursorStep{
+			{Step: 3, Type: "filter", Action: "match", Key: "secret-filter-key"},
+		},
+	})
+	want := "execution windows cursor=3 sampled=2 merge=2 merge_blocks=5 merge_keys=4 samples decisions=1 cursor_steps=2 filter_steps=1 amplification=1.75x"
+	if !strings.Contains(text, want) {
+		t.Fatalf("decode path text = %q, want %q", text, want)
+	}
+	for _, notWant := range []string{"secret", "another-secret"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("decode path text = %q, want no sampled detail %q", text, notWant)
+		}
+	}
+}
+
+func TestDecodePathTextIncludesSparseExecutionDiagnostics(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		CursorWindows: []DecodePathCursorWindow{
+			{Key: "secret-window-key", MinTime: 1, MaxTime: 2, LocationBlocks: 3, DecodedBlocks: 1},
+		},
+		MergeWindowBlocks: 5,
+		Amplification:     0.004,
+	})
+	want := "execution windows sampled=1 merge_blocks=5"
+	if !strings.Contains(text, want) {
+		t.Fatalf("decode path text = %q, want %q", text, want)
+	}
+	for _, notWant := range []string{"cursor=", "merge=", "merge_keys=", "amplification=0.00x", "secret-window-key"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("decode path text = %q, want no %q", text, notWant)
+		}
+	}
+}
+
+func TestDecodePathTextOmitsEmptyExecutionDiagnostics(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{})
+	if strings.Contains(text, "execution") {
+		t.Fatalf("decode path text = %q, want no execution diagnostics segment", text)
 	}
 }
 

@@ -840,6 +840,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	if output := cursorOutputSummaryText(summary); output != "" {
 		parts = append(parts, output)
 	}
+	if execution := executionDiagnosticsSummaryText(summary); execution != "" {
+		parts = append(parts, execution)
+	}
 	if summary.DataBlockProbeBlocks > 0 || summary.DataBlockProbeBytes > 0 || summary.DataBlockProbeValidBlocks > 0 || summary.DataBlockProbeFailures > 0 || summary.DataBlockProbeCRCMismatches > 0 || summary.DataBlockProbeShortBlocks > 0 || summary.DataBlockProbeUnknownTypes > 0 || summary.DataBlockProbeReadErrors > 0 || summary.DataBlockProbeRowCountBlocks > 0 || summary.DataBlockProbeRowUnknowns > 0 || summary.DataBlockProbeRowMismatches > 0 || summary.DataBlockProbeOutputPoints > 0 || summary.DataBlockProbeValueBlocks > 0 || summary.DataBlockProbeValueUnknowns > 0 || summary.DataBlockProbeNullValues > 0 || summary.DataBlockProbeRecordSamples > 0 {
 		parts = append(parts, fmt.Sprintf("data_probe blocks=%d bytes=%d valid=%d failures=%d crc_mismatches=%d short=%d unknown_types=%d read_errors=%d row_blocks=%d row_unknowns=%d row_mismatches=%d output_points=%d value_blocks=%d value_unknowns=%d nulls=%d record_samples=%d", summary.DataBlockProbeBlocks, summary.DataBlockProbeBytes, summary.DataBlockProbeValidBlocks, summary.DataBlockProbeFailures, summary.DataBlockProbeCRCMismatches, summary.DataBlockProbeShortBlocks, summary.DataBlockProbeUnknownTypes, summary.DataBlockProbeReadErrors, summary.DataBlockProbeRowCountBlocks, summary.DataBlockProbeRowUnknowns, summary.DataBlockProbeRowMismatches, summary.DataBlockProbeOutputPoints, summary.DataBlockProbeValueBlocks, summary.DataBlockProbeValueUnknowns, summary.DataBlockProbeNullValues, summary.DataBlockProbeRecordSamples))
 	}
@@ -907,6 +910,44 @@ func cursorOutputSummaryText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("samples=%d final_samples=%d", len(summary.CursorOutputSamples), len(summary.CursorFinalOutputSamples)))
 	}
 	return "cursor_output " + strings.Join(parts, " ")
+}
+
+func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	windowParts := make([]string, 0, 5)
+	if summary.CursorWindowCount > 0 {
+		windowParts = append(windowParts, fmt.Sprintf("cursor=%d", summary.CursorWindowCount))
+	}
+	if len(summary.CursorWindows) > 0 {
+		windowParts = append(windowParts, fmt.Sprintf("sampled=%d", len(summary.CursorWindows)))
+	}
+	if summary.MergeWindowCount > 0 {
+		windowParts = append(windowParts, fmt.Sprintf("merge=%d", summary.MergeWindowCount))
+	}
+	if summary.MergeWindowBlocks > 0 {
+		windowParts = append(windowParts, fmt.Sprintf("merge_blocks=%d", summary.MergeWindowBlocks))
+	}
+	if summary.MergeWindowKeys > 0 {
+		windowParts = append(windowParts, fmt.Sprintf("merge_keys=%d", summary.MergeWindowKeys))
+	}
+	if len(windowParts) > 0 {
+		parts = append(parts, "windows "+strings.Join(windowParts, " "))
+	}
+	if len(summary.Samples) > 0 || len(summary.CursorExecutionSamples) > 0 || len(summary.FilterExecutionSamples) > 0 {
+		parts = append(parts, fmt.Sprintf("samples decisions=%d cursor_steps=%d filter_steps=%d", len(summary.Samples), len(summary.CursorExecutionSamples), len(summary.FilterExecutionSamples)))
+	}
+	if summary.Amplification > 0 {
+		if formatted := fmt.Sprintf("%.2f", summary.Amplification); formatted != "0.00" {
+			parts = append(parts, "amplification="+formatted+"x")
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "execution " + strings.Join(parts, " ")
 }
 
 func queryTargetSummaryText(summary *DecodePathSummary) string {
