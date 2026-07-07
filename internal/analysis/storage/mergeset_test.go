@@ -2226,6 +2226,72 @@ func TestAnalyzeMergesetItemPayloadCrossBlockOrderNotice(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetItemPayloadMetadataRangeNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "4_2_metarange")
+	if err := writeTestMergesetPartWithItemBlocks(partPath, [][][]byte{
+		{
+			[]byte("aa"),
+			[]byte("ab"),
+		},
+		{
+			[]byte("ac"),
+			[]byte("az"),
+		},
+	}); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItemBlocks() error = %v", err)
+	}
+	metadata := mergesetPartMetadata{
+		ItemsCount:  4,
+		BlocksCount: 2,
+		FirstItem:   "6162",
+		LastItem:    "6163",
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partPath, mergesetMetadataFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["item_payload_blocks_before_metadata_range"], "1"; got != want {
+		t.Fatalf("payload blocks before metadata range = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_blocks_after_metadata_range"], "1"; got != want {
+		t.Fatalf("payload blocks after metadata range = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_items_before_metadata_range"], "1"; got != want {
+		t.Fatalf("payload items before metadata range = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_items_after_metadata_range"], "1"; got != want {
+		t.Fatalf("payload items after metadata range = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-before-metadata-range"], 1; got != want {
+		t.Fatalf("payload before metadata range block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-after-metadata-range"], 1; got != want {
+		t.Fatalf("payload after metadata range block type count = %d, want %d", got, want)
+	}
+	beforeNotice := "mergeset decoded item payload has 1 block(s) and 1 item(s) before metadata first_item=6162"
+	if !containsString(file.Notices, beforeNotice) {
+		t.Fatalf("notices = %v, want %q", file.Notices, beforeNotice)
+	}
+	if !containsString(report.Notices, beforeNotice) {
+		t.Fatalf("report notices = %v, want %q", report.Notices, beforeNotice)
+	}
+	afterNotice := "mergeset decoded item payload has 1 block(s) and 1 item(s) after metadata last_item=6163"
+	if !containsString(file.Notices, afterNotice) {
+		t.Fatalf("notices = %v, want %q", file.Notices, afterNotice)
+	}
+}
+
 func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	partPath := filepath.Join(t.TempDir(), "41_2_1847A3A45055EEF0")
 	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{

@@ -89,6 +89,10 @@ type mergesetItemPayloadSummary struct {
 	ReadFailures       int
 	DecodeFailures     int
 	ItemsDecoded       uint64
+	RangeBeforeBlocks  int
+	RangeAfterBlocks   int
+	RangeBeforeItems   uint64
+	RangeAfterItems    uint64
 	FirstItem          []byte
 	LastItem           []byte
 	Samples            [][]byte
@@ -886,6 +890,15 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d first_item=%s: %v", i+1, hex.EncodeToString(header.FirstItem), err))
 			continue
 		}
+		beforeItems, afterItems := countMergesetItemsOutsideMetadataRange(decoded.Items, firstItem, lastItem)
+		if beforeItems > 0 {
+			summary.RangeBeforeBlocks++
+			summary.RangeBeforeItems += beforeItems
+		}
+		if afterItems > 0 {
+			summary.RangeAfterBlocks++
+			summary.RangeAfterItems += afterItems
+		}
 		search.ObserveDecodedBlock(i, decoded)
 		scan.ObserveDecodedBlock(i, header, decoded)
 		if summary.DecodedBlocks > 0 && bytes.Compare(summary.LastItem, decoded.FirstItem) > 0 {
@@ -911,6 +924,22 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 	scan.Finish(options)
 	finalizeMergesetItemNamespaceSummaries(&summary.CLVText, &summary.TSIIndex)
 	return summary, notices
+}
+
+func countMergesetItemsOutsideMetadataRange(items [][]byte, metadataFirstItem, metadataLastItem []byte) (uint64, uint64) {
+	if bytes.Compare(metadataFirstItem, metadataLastItem) > 0 {
+		return 0, 0
+	}
+	var before, after uint64
+	for _, item := range items {
+		if bytes.Compare(item, metadataFirstItem) < 0 {
+			before++
+		}
+		if bytes.Compare(item, metadataLastItem) > 0 {
+			after++
+		}
+	}
+	return before, after
 }
 
 type mergesetDecodedBlockItems struct {
@@ -1547,6 +1576,10 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 	report.Extra["item_payload_read_failures"] = fmt.Sprint(summary.ReadFailures)
 	report.Extra["item_payload_decode_failures"] = fmt.Sprint(summary.DecodeFailures)
 	report.Extra["item_payload_items_decoded"] = fmt.Sprint(summary.ItemsDecoded)
+	report.Extra["item_payload_blocks_before_metadata_range"] = fmt.Sprint(summary.RangeBeforeBlocks)
+	report.Extra["item_payload_blocks_after_metadata_range"] = fmt.Sprint(summary.RangeAfterBlocks)
+	report.Extra["item_payload_items_before_metadata_range"] = fmt.Sprint(summary.RangeBeforeItems)
+	report.Extra["item_payload_items_after_metadata_range"] = fmt.Sprint(summary.RangeAfterItems)
 	if summary.RangeSkippedBlocks > 0 {
 		report.BlocksByType["mergeset-item-payload-range-skip"] = summary.RangeSkippedBlocks
 	}
@@ -1555,6 +1588,14 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 	}
 	if summary.DecodeFailures > 0 {
 		report.BlocksByType["mergeset-item-payload-decode-failure"] = summary.DecodeFailures
+	}
+	if summary.RangeBeforeBlocks > 0 {
+		report.BlocksByType["mergeset-item-payload-before-metadata-range"] = summary.RangeBeforeBlocks
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded item payload has %d block(s) and %d item(s) before metadata first_item=%s", summary.RangeBeforeBlocks, summary.RangeBeforeItems, hex.EncodeToString(metadataFirstItem)))
+	}
+	if summary.RangeAfterBlocks > 0 {
+		report.BlocksByType["mergeset-item-payload-after-metadata-range"] = summary.RangeAfterBlocks
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded item payload has %d block(s) and %d item(s) after metadata last_item=%s", summary.RangeAfterBlocks, summary.RangeAfterItems, hex.EncodeToString(metadataLastItem)))
 	}
 	if summary.DecodePath != nil {
 		report.DecodePath = summary.DecodePath
