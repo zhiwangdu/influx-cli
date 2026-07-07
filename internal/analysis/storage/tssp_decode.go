@@ -14,11 +14,12 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                 tsspCursorMode("tssp-location-cursor", options),
-		QueryRange:           options.QueryRange,
-		CursorSeekTime:       tsspCursorSeekTime(options),
-		LocationBlocksByType: map[string]int{},
-		DecodeBlocksByType:   map[string]int{},
+		Mode:                    tsspCursorMode("tssp-location-cursor", options),
+		QueryRange:              options.QueryRange,
+		CursorSeekTime:          tsspCursorSeekTime(options),
+		LocationBlocksByType:    map[string]int{},
+		DecodeBlocksByType:      map[string]int{},
+		DataBlockProbeFilterOps: map[string]int{},
 	}
 	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	populateTSSPFieldFilterMatches(summary, chunks, options.QueryFields)
@@ -132,6 +133,8 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeFilterRows = dataProbe.FilterRows
 		summary.DataBlockProbeFilterMatches = dataProbe.FilterMatches
 		summary.DataBlockProbeFilterRejects = dataProbe.FilterRejects
+		summary.DataBlockProbeFilterEvals = dataProbe.FilterEvaluations
+		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -155,13 +158,14 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                 tsspCursorMode("tssp-file-set-location-cursor", options),
-		QueryRange:           options.QueryRange,
-		CursorSeekTime:       tsspCursorSeekTime(options),
-		QuerySeriesIDs:       append([]uint64(nil), options.QuerySeriesIDs...),
-		KeyFilterApplied:     len(options.QuerySeriesIDs) > 0,
-		LocationBlocksByType: map[string]int{},
-		DecodeBlocksByType:   map[string]int{},
+		Mode:                    tsspCursorMode("tssp-file-set-location-cursor", options),
+		QueryRange:              options.QueryRange,
+		CursorSeekTime:          tsspCursorSeekTime(options),
+		QuerySeriesIDs:          append([]uint64(nil), options.QuerySeriesIDs...),
+		KeyFilterApplied:        len(options.QuerySeriesIDs) > 0,
+		LocationBlocksByType:    map[string]int{},
+		DecodeBlocksByType:      map[string]int{},
+		DataBlockProbeFilterOps: map[string]int{},
 	}
 	matchedSeriesIDs := map[uint64]struct{}{}
 	matchedColumns := map[string]struct{}{}
@@ -225,13 +229,14 @@ func buildTSSPDetachedFileSetDecodePathSummary(files []FileReport, options Optio
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                 tsspCursorMode("tssp-detached-file-set-location-cursor", options),
-		QueryRange:           options.QueryRange,
-		CursorSeekTime:       tsspCursorSeekTime(options),
-		QueryMetaIndexIDs:    append([]uint64(nil), options.QueryMetaIndexIDs...),
-		KeyFilterApplied:     len(options.QueryMetaIndexIDs) > 0,
-		LocationBlocksByType: map[string]int{},
-		DecodeBlocksByType:   map[string]int{},
+		Mode:                    tsspCursorMode("tssp-detached-file-set-location-cursor", options),
+		QueryRange:              options.QueryRange,
+		CursorSeekTime:          tsspCursorSeekTime(options),
+		QueryMetaIndexIDs:       append([]uint64(nil), options.QueryMetaIndexIDs...),
+		KeyFilterApplied:        len(options.QueryMetaIndexIDs) > 0,
+		LocationBlocksByType:    map[string]int{},
+		DecodeBlocksByType:      map[string]int{},
+		DataBlockProbeFilterOps: map[string]int{},
 	}
 	matchedMetaIndexIDs := map[uint64]struct{}{}
 	matchedColumns := map[string]struct{}{}
@@ -385,6 +390,8 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeFilterRows += src.DataBlockProbeFilterRows
 	dst.DataBlockProbeFilterMatches += src.DataBlockProbeFilterMatches
 	dst.DataBlockProbeFilterRejects += src.DataBlockProbeFilterRejects
+	dst.DataBlockProbeFilterEvals += src.DataBlockProbeFilterEvals
+	addTSSPDecodePathCounts(dst.DataBlockProbeFilterOps, src.DataBlockProbeFilterOps)
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
 	dst.IteratorCostBytes += src.IteratorCostBytes
@@ -775,6 +782,12 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			"TSSP field filters matched %d of %d decoded record row(s)",
 			summary.DataBlockProbeFilterMatches,
 			summary.DataBlockProbeFilterRows,
+		))
+	}
+	if summary.DataBlockProbeFilterEvals > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"executed %d TSSP decoded-row field predicate evaluation(s)",
+			summary.DataBlockProbeFilterEvals,
 		))
 	}
 	if summary.SkippedByKeyBlocks > 0 {

@@ -147,6 +147,10 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["data_block_probe_filter_rows"] = fmt.Sprint(dataProbe.FilterRows)
 			report.Extra["data_block_probe_filter_matches"] = fmt.Sprint(dataProbe.FilterMatches)
 			report.Extra["data_block_probe_filter_rejects"] = fmt.Sprint(dataProbe.FilterRejects)
+			report.Extra["data_block_probe_filter_evaluations"] = fmt.Sprint(dataProbe.FilterEvaluations)
+			if len(dataProbe.FilterOperators) > 0 {
+				report.Extra["data_block_probe_filter_operator_evaluations"] = tsspDetachedDataProbeTypeSummary(dataProbe.FilterOperators)
+			}
 			if len(dataProbe.BlockTypes) > 0 {
 				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
 			}
@@ -378,6 +382,8 @@ type tsspDetachedDataProbe struct {
 	FilterRows          int
 	FilterMatches       int
 	FilterRejects       int
+	FilterEvaluations   int
+	FilterOperators     map[string]int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
 	chunkFailureReason  map[uint64]string
@@ -479,6 +485,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 	probe := &tsspDetachedDataProbe{
 		Checked:             true,
 		ValueUnknownReasons: map[string]int{},
+		FilterOperators:     map[string]int{},
 		BlockTypes:          map[string]int{},
 		chunkAvailable:      map[uint64]bool{},
 		chunkFailureReason:  map[uint64]string{},
@@ -590,7 +597,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				matchingRows, matchedRows, filterRows, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange)
+				matchingRows, matchedRows, filterRows, filterStats, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange)
 				if !ok {
 					chunkAvailable = false
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
@@ -600,6 +607,8 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 					probe.FilterRows += filterRows
 					probe.FilterMatches += matchedRows
 					probe.FilterRejects += filterRows - matchedRows
+					probe.FilterEvaluations += filterStats.Evaluations
+					addTSSPFilterOperatorCounts(probe.FilterOperators, filterStats.OperatorEvaluations)
 				}
 				chunkOutputPoints += matchedRows
 				appendTSSPDetachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, matchingRows, options.QueryRange, options.BlockSampleLimit)
@@ -2122,11 +2131,12 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                 tsspCursorMode("tssp-detached-location-cursor", options),
-		QueryRange:           options.QueryRange,
-		CursorSeekTime:       tsspCursorSeekTime(options),
-		LocationBlocksByType: map[string]int{},
-		DecodeBlocksByType:   map[string]int{},
+		Mode:                    tsspCursorMode("tssp-detached-location-cursor", options),
+		QueryRange:              options.QueryRange,
+		CursorSeekTime:          tsspCursorSeekTime(options),
+		LocationBlocksByType:    map[string]int{},
+		DecodeBlocksByType:      map[string]int{},
+		DataBlockProbeFilterOps: map[string]int{},
 	}
 	populateTSSPColumnProjectionMatches(summary, chunks, options.QueryColumns)
 	populateTSSPFieldFilterMatches(summary, chunks, options.QueryFields)
@@ -2237,6 +2247,8 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeFilterRows = dataProbe.FilterRows
 		summary.DataBlockProbeFilterMatches = dataProbe.FilterMatches
 		summary.DataBlockProbeFilterRejects = dataProbe.FilterRejects
+		summary.DataBlockProbeFilterEvals = dataProbe.FilterEvaluations
+		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -2298,11 +2310,12 @@ func buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes []tsspMetaIndex, op
 	}
 
 	summary := &DecodePathSummary{
-		Mode:                 tsspCursorMode("tssp-detached-meta-index", options),
-		QueryRange:           options.QueryRange,
-		CursorSeekTime:       tsspCursorSeekTime(options),
-		LocationBlocksByType: map[string]int{},
-		DecodeBlocksByType:   map[string]int{},
+		Mode:                    tsspCursorMode("tssp-detached-meta-index", options),
+		QueryRange:              options.QueryRange,
+		CursorSeekTime:          tsspCursorSeekTime(options),
+		LocationBlocksByType:    map[string]int{},
+		DecodeBlocksByType:      map[string]int{},
+		DataBlockProbeFilterOps: map[string]int{},
 	}
 	idSet := queryMetaIndexIDSet(options.QueryMetaIndexIDs)
 	if len(idSet) > 0 {
@@ -2577,6 +2590,12 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 			"detached TSSP field filters matched %d of %d decoded record row(s)",
 			summary.DataBlockProbeFilterMatches,
 			summary.DataBlockProbeFilterRows,
+		))
+	}
+	if summary.DataBlockProbeFilterEvals > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"executed %d detached TSSP decoded-row field predicate evaluation(s)",
+			summary.DataBlockProbeFilterEvals,
 		))
 	}
 	if summary.SkippedByKeyBlocks > 0 {

@@ -981,9 +981,24 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_filter_rejects"], "2"; got != want {
 		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_filter_evaluations"], "3"; got != want {
+		t.Fatalf("data block probe filter evaluations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "=:1,>:2"; got != want {
+		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.DataBlockProbeFilterEvals, 3; got != want {
+		t.Fatalf("decode filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["="], 1; got != want {
+		t.Fatalf("decode equality filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps[">"], 2; got != want {
+		t.Fatalf("decode greater-than filter evaluations = %d, want %d", got, want)
 	}
 	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
 		t.Fatalf("optimized value output points = %d, want %d", got, want)
@@ -993,6 +1008,9 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	}
 	if !containsStringWithPrefix(decode.Recommendations, "applied 1 TSSP OR field filter") {
 		t.Fatalf("recommendations = %v, want OR field filter recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "executed 3 TSSP decoded-row field predicate evaluation") {
+		t.Fatalf("recommendations = %v, want predicate evaluation recommendation", decode.Recommendations)
 	}
 }
 

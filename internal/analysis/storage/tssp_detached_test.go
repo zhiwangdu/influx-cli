@@ -1200,9 +1200,21 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
 		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_filter_evaluations"], "2"; got != want {
+		t.Fatalf("data block probe filter evaluations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "=:2"; got != want {
+		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.DataBlockProbeFilterEvals, 2; got != want {
+		t.Fatalf("decode filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["="], 2; got != want {
+		t.Fatalf("decode equality filter evaluations = %d, want %d", got, want)
 	}
 	wantAny := []FieldFilter{{Key: "value", Value: "100"}, {Key: "value", Value: "99"}}
 	if got := decode.QueryAnyFields; !equalFieldFilters(got, wantAny) {
@@ -1219,6 +1231,9 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "applied 2 detached TSSP OR field filter") {
 		t.Fatalf("recommendations = %v, want detached OR field filter recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "executed 2 detached TSSP decoded-row field predicate evaluation") {
+		t.Fatalf("recommendations = %v, want detached predicate evaluation recommendation", decode.Recommendations)
 	}
 }
 

@@ -224,6 +224,10 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			report.Extra["data_block_probe_filter_rows"] = fmt.Sprint(dataProbe.FilterRows)
 			report.Extra["data_block_probe_filter_matches"] = fmt.Sprint(dataProbe.FilterMatches)
 			report.Extra["data_block_probe_filter_rejects"] = fmt.Sprint(dataProbe.FilterRejects)
+			report.Extra["data_block_probe_filter_evaluations"] = fmt.Sprint(dataProbe.FilterEvaluations)
+			if len(dataProbe.FilterOperators) > 0 {
+				report.Extra["data_block_probe_filter_operator_evaluations"] = tsspDetachedDataProbeTypeSummary(dataProbe.FilterOperators)
+			}
 			if len(dataProbe.BlockTypes) > 0 {
 				report.Extra["data_block_probe_types"] = tsspDetachedDataProbeTypeSummary(dataProbe.BlockTypes)
 			}

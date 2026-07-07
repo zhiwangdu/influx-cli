@@ -365,6 +365,8 @@ type DecodePathSummary struct {
 	DataBlockProbeFilterRows     int                       `json:"data_block_probe_filter_rows,omitempty"`
 	DataBlockProbeFilterMatches  int                       `json:"data_block_probe_filter_matches,omitempty"`
 	DataBlockProbeFilterRejects  int                       `json:"data_block_probe_filter_rejects,omitempty"`
+	DataBlockProbeFilterEvals    int                       `json:"data_block_probe_filter_evaluations,omitempty"`
+	DataBlockProbeFilterOps      map[string]int            `json:"data_block_probe_filter_operator_evaluations,omitempty"`
 	BaselineCursorOutputPoints   int                       `json:"baseline_cursor_output_points,omitempty"`
 	OptimizedCursorOutputPoints  int                       `json:"optimized_cursor_output_points,omitempty"`
 	BaselineCursorReadCalls      int                       `json:"baseline_cursor_read_calls,omitempty"`
@@ -625,7 +627,7 @@ func decodePathText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("dedup outputs=%d duplicates=%d", summary.DeduplicatedOutputValues, summary.DuplicateOutputValues))
 	}
 	if summary.DataBlockProbeFilterRows > 0 || summary.DataBlockProbeFilterMatches > 0 || summary.DataBlockProbeFilterRejects > 0 {
-		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects))
+		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d evals=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects, summary.DataBlockProbeFilterEvals))
 	}
 	if summary.ValueOutputMismatches > 0 {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
