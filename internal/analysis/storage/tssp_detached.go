@@ -2299,6 +2299,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 	if dataProbe != nil {
 		summary.DataBlockProbeBlocks = dataProbe.BlocksChecked
 		summary.DataBlockProbeBytes = dataProbe.BytesRead
+		summary.DataBlockProbeValidBlocks = dataProbe.ValidBlocks
 		summary.DataBlockProbeFailures = dataProbe.Failures()
 		summary.DataBlockProbeCRCMismatches = dataProbe.CRCMismatches
 		summary.DataBlockProbeRowCountBlocks = dataProbe.RowCountBlocks

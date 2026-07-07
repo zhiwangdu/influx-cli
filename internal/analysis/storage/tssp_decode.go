@@ -134,6 +134,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	if dataProbe != nil {
 		summary.DataBlockProbeBlocks = dataProbe.BlocksChecked
 		summary.DataBlockProbeBytes = dataProbe.BytesRead
+		summary.DataBlockProbeValidBlocks = dataProbe.ValidBlocks
 		summary.DataBlockProbeFailures = dataProbe.Failures()
 		summary.DataBlockProbeRowCountBlocks = dataProbe.RowCountBlocks
 		summary.DataBlockProbeRowUnknowns = dataProbe.RowCountUnknowns
@@ -422,6 +423,7 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.ValueOutputUnavailableBlocks += src.ValueOutputUnavailableBlocks
 	dst.DataBlockProbeBlocks += src.DataBlockProbeBlocks
 	dst.DataBlockProbeBytes += src.DataBlockProbeBytes
+	dst.DataBlockProbeValidBlocks += src.DataBlockProbeValidBlocks
 	dst.DataBlockProbeFailures += src.DataBlockProbeFailures
 	dst.DataBlockProbeCRCMismatches += src.DataBlockProbeCRCMismatches
 	dst.DataBlockProbeRowCountBlocks += src.DataBlockProbeRowCountBlocks

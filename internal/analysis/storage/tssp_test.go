@@ -354,6 +354,9 @@ func TestAnalyzeTSSPSamplesAttachedOneRowValueBlocks(t *testing.T) {
 	if got, want := decode.DataBlockProbeBlocks, 2; got != want {
 		t.Fatalf("data block probe blocks = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeValidBlocks, 2; got != want {
+		t.Fatalf("data block probe valid blocks = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeRowCountBlocks, 2; got != want {
 		t.Fatalf("data block probe row count blocks = %d, want %d", got, want)
 	}
@@ -2983,6 +2986,9 @@ func TestAnalyzeTSSPSamplesAttachedFloatFullUnsupportedCodecReason(t *testing.T)
 	}
 	if got, want := decode.DataBlockProbeValueUnknowns, 1; got != want {
 		t.Fatalf("decode data block probe value unknowns = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeValidBlocks, 2; got != want {
+		t.Fatalf("decode data block probe valid blocks = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeRowCountBlocks, 2; got != want {
 		t.Fatalf("decode data block probe row count blocks = %d, want %d", got, want)
