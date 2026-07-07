@@ -12,37 +12,50 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 			Path:   "00000001-0001-00000000.tssp",
 			Format: FormatTSSP,
 			DecodePath: &DecodePathSummary{
-				Mode:                        "tssp-location-cursor-ascending",
-				BaselineDecodeBlocks:        3,
-				OptimizedDecodeBlocks:       1,
-				SavedDecodeBlocks:           2,
-				QueryKeys:                   []string{"cpu,host=a value", "cpu,host=b value"},
-				MatchedKeys:                 []string{"cpu,host=a value"},
-				MissingKeys:                 []string{"cpu,host=b value"},
-				QuerySeriesIDs:              []uint64{7, 9},
-				MatchedSeriesIDs:            []uint64{7},
-				MissingSeriesIDs:            []uint64{9},
-				QueryMetaIndexIDs:           []uint64{11, 12},
-				MatchedMetaIndexIDs:         []uint64{11},
-				MissingMetaIndexIDs:         []uint64{12},
-				QueryColumns:                []string{"missing", "value"},
-				MatchedColumns:              []string{"value"},
-				MissingColumns:              []string{"missing"},
-				LocationBlocksByType:        map[string]int{"chunk-meta": 2, "meta-index": 1},
-				DecodeBlocksByType:          map[string]int{"chunk-meta": 1},
-				BaselineDecodeBytes:         288,
-				OptimizedDecodeBytes:        96,
-				SavedDecodeBytes:            192,
-				BaselineReadSegments:        3,
-				OptimizedReadSegments:       1,
-				SavedReadSegments:           2,
-				BaselineCursorReadCalls:     3,
-				OptimizedCursorReadCalls:    1,
-				BaselineReadAtCalls:         6,
-				OptimizedReadAtCalls:        2,
-				IteratorCostFiles:           1,
-				IteratorCostBlocks:          3,
-				IteratorCostBytes:           273,
+				Mode:                         "tssp-location-cursor-ascending",
+				BaselineDecodeBlocks:         3,
+				OptimizedDecodeBlocks:        1,
+				SavedDecodeBlocks:            2,
+				QueryKeys:                    []string{"cpu,host=a value", "cpu,host=b value"},
+				MatchedKeys:                  []string{"cpu,host=a value"},
+				MissingKeys:                  []string{"cpu,host=b value"},
+				QuerySeriesIDs:               []uint64{7, 9},
+				MatchedSeriesIDs:             []uint64{7},
+				MissingSeriesIDs:             []uint64{9},
+				QueryMetaIndexIDs:            []uint64{11, 12},
+				MatchedMetaIndexIDs:          []uint64{11},
+				MissingMetaIndexIDs:          []uint64{12},
+				QueryColumns:                 []string{"missing", "value"},
+				MatchedColumns:               []string{"value"},
+				MissingColumns:               []string{"missing"},
+				LocationBlocksByType:         map[string]int{"chunk-meta": 2, "meta-index": 1},
+				DecodeBlocksByType:           map[string]int{"chunk-meta": 1},
+				BaselineDecodeBytes:          288,
+				OptimizedDecodeBytes:         96,
+				SavedDecodeBytes:             192,
+				BaselineReadSegments:         3,
+				OptimizedReadSegments:        1,
+				SavedReadSegments:            2,
+				BaselineCursorReadCalls:      3,
+				OptimizedCursorReadCalls:     1,
+				BaselineReadAtCalls:          6,
+				OptimizedReadAtCalls:         2,
+				IteratorCostFiles:            1,
+				IteratorCostBlocks:           3,
+				IteratorCostBytes:            273,
+				BaselineValueOutputPoints:    6,
+				OptimizedValueOutputPoints:   2,
+				ComparedValueOutputPoints:    2,
+				ValueOutputUnavailableBlocks: 1,
+				BaselineCursorOutputPoints:   6,
+				OptimizedCursorOutputPoints:  2,
+				CursorOutputSamples: []DecodePathCursorOutput{
+					{Key: "sid:7/value", Time: 1, Type: "float", OptimizedValue: "1.25"},
+					{Key: "sid:9/value", Time: 2, Type: "float", OptimizedValue: "2.5"},
+				},
+				CursorFinalOutputSamples: []DecodePathCursorOutput{
+					{Key: "sid:7/value", Time: 1, Type: "float", OptimizedValue: "1.25"},
+				},
 				DataBlockProbeBlocks:        4,
 				DataBlockProbeBytes:         256,
 				DataBlockProbeValidBlocks:   3,
@@ -113,6 +126,8 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"cursor_reads 3->1",
 		"read_at calls 6->2",
 		"iterator_cost files=1 blocks=3 bytes=273",
+		"value_output points=6->2 compared=2 unavailable_blocks=1",
+		"cursor_output points=6->2 samples=2 final_samples=1",
 		"data_probe blocks=4 bytes=256 valid=3 failures=4 crc_mismatches=1 short=1 unknown_types=1 read_errors=1 row_blocks=3 row_unknowns=1 row_mismatches=1 output_points=2 value_blocks=2 value_unknowns=1 nulls=3 record_samples=1",
 		"data_probe_failure_reasons segment_overlap_data_crc_unavailable:1 segment_overlap_data_header_unavailable:1 segment_overlap_data_read_unavailable:1",
 		"data_probe_types float-full:2 integer-full:1",
@@ -130,6 +145,92 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 	advice := row[tableColumnIndex(t, result.Table.Columns, "advice")].(string)
 	if !strings.Contains(advice, "read 1 overlapping TSSP segment") {
 		t.Fatalf("advice = %q, want TSSP segment recommendation", advice)
+	}
+}
+
+func TestDecodePathTextOmitsEmptyOutputSummaries(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{})
+	for _, notWant := range []string{"value_output", "cursor_output"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("decode path text = %q, want no %s segment", text, notWant)
+		}
+	}
+}
+
+func TestDecodePathTextIncludesValueOutputSparseCounters(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		summary  DecodePathSummary
+		want     string
+		notWants []string
+	}{
+		{
+			name: "points-only",
+			summary: DecodePathSummary{
+				BaselineValueOutputPoints:  6,
+				OptimizedValueOutputPoints: 4,
+			},
+			want:     "value_output points=6->4",
+			notWants: []string{"compared=", "unavailable_blocks"},
+		},
+		{
+			name: "compared-only",
+			summary: DecodePathSummary{
+				ComparedValueOutputPoints: 2,
+			},
+			want:     "value_output points=0->0 compared=2",
+			notWants: []string{"unavailable_blocks"},
+		},
+		{
+			name: "unavailable-only",
+			summary: DecodePathSummary{
+				ValueOutputUnavailableBlocks: 1,
+			},
+			want:     "value_output points=0->0 unavailable_blocks=1",
+			notWants: []string{"compared="},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := decodePathText(&tc.summary)
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("decode path text = %q, want %q", text, tc.want)
+			}
+			for _, notWant := range tc.notWants {
+				if strings.Contains(text, notWant) {
+					t.Fatalf("decode path text = %q, want no %q", text, notWant)
+				}
+			}
+		})
+	}
+}
+
+func TestDecodePathTextIncludesCursorOutputPointsWithoutSamples(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		BaselineCursorOutputPoints:  6,
+		OptimizedCursorOutputPoints: 4,
+	})
+	if !strings.Contains(text, "cursor_output points=6->4") {
+		t.Fatalf("decode path text = %q, want points-only cursor output summary", text)
+	}
+	if strings.Contains(text, "samples=") {
+		t.Fatalf("decode path text = %q, want no cursor output samples segment", text)
+	}
+}
+
+func TestDecodePathTextIncludesCursorOutputSamplesWithoutPointCounts(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		CursorOutputSamples: []DecodePathCursorOutput{
+			{Key: "sid:7/value", Time: 1, Type: "float", OptimizedValue: "1.25"},
+		},
+		CursorFinalOutputSamples: []DecodePathCursorOutput{
+			{Key: "sid:7/value", Time: 1, Type: "float", OptimizedValue: "1.25"},
+		},
+	})
+	if !strings.Contains(text, "cursor_output samples=1 final_samples=1") {
+		t.Fatalf("decode path text = %q, want samples-only cursor output summary", text)
+	}
+	if strings.Contains(text, "points=") {
+		t.Fatalf("decode path text = %q, want no cursor output points segment", text)
 	}
 }
 

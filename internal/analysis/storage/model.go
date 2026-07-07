@@ -834,6 +834,12 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary.DeduplicatedOutputValues > 0 || summary.DuplicateOutputValues > 0 {
 		parts = append(parts, fmt.Sprintf("dedup outputs=%d duplicates=%d", summary.DeduplicatedOutputValues, summary.DuplicateOutputValues))
 	}
+	if output := valueOutputSummaryText(summary); output != "" {
+		parts = append(parts, output)
+	}
+	if output := cursorOutputSummaryText(summary); output != "" {
+		parts = append(parts, output)
+	}
 	if summary.DataBlockProbeBlocks > 0 || summary.DataBlockProbeBytes > 0 || summary.DataBlockProbeValidBlocks > 0 || summary.DataBlockProbeFailures > 0 || summary.DataBlockProbeCRCMismatches > 0 || summary.DataBlockProbeShortBlocks > 0 || summary.DataBlockProbeUnknownTypes > 0 || summary.DataBlockProbeReadErrors > 0 || summary.DataBlockProbeRowCountBlocks > 0 || summary.DataBlockProbeRowUnknowns > 0 || summary.DataBlockProbeRowMismatches > 0 || summary.DataBlockProbeOutputPoints > 0 || summary.DataBlockProbeValueBlocks > 0 || summary.DataBlockProbeValueUnknowns > 0 || summary.DataBlockProbeNullValues > 0 || summary.DataBlockProbeRecordSamples > 0 {
 		parts = append(parts, fmt.Sprintf("data_probe blocks=%d bytes=%d valid=%d failures=%d crc_mismatches=%d short=%d unknown_types=%d read_errors=%d row_blocks=%d row_unknowns=%d row_mismatches=%d output_points=%d value_blocks=%d value_unknowns=%d nulls=%d record_samples=%d", summary.DataBlockProbeBlocks, summary.DataBlockProbeBytes, summary.DataBlockProbeValidBlocks, summary.DataBlockProbeFailures, summary.DataBlockProbeCRCMismatches, summary.DataBlockProbeShortBlocks, summary.DataBlockProbeUnknownTypes, summary.DataBlockProbeReadErrors, summary.DataBlockProbeRowCountBlocks, summary.DataBlockProbeRowUnknowns, summary.DataBlockProbeRowMismatches, summary.DataBlockProbeOutputPoints, summary.DataBlockProbeValueBlocks, summary.DataBlockProbeValueUnknowns, summary.DataBlockProbeNullValues, summary.DataBlockProbeRecordSamples))
 	}
@@ -865,6 +871,42 @@ func decodePathText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func valueOutputSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	if summary.BaselineValueOutputPoints == 0 && summary.OptimizedValueOutputPoints == 0 &&
+		summary.ComparedValueOutputPoints == 0 && summary.ValueOutputUnavailableBlocks == 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("points=%d->%d", summary.BaselineValueOutputPoints, summary.OptimizedValueOutputPoints)}
+	if summary.ComparedValueOutputPoints > 0 {
+		parts = append(parts, fmt.Sprintf("compared=%d", summary.ComparedValueOutputPoints))
+	}
+	if summary.ValueOutputUnavailableBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("unavailable_blocks=%d", summary.ValueOutputUnavailableBlocks))
+	}
+	return "value_output " + strings.Join(parts, " ")
+}
+
+func cursorOutputSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	if summary.BaselineCursorOutputPoints == 0 && summary.OptimizedCursorOutputPoints == 0 &&
+		len(summary.CursorOutputSamples) == 0 && len(summary.CursorFinalOutputSamples) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 2)
+	if summary.BaselineCursorOutputPoints > 0 || summary.OptimizedCursorOutputPoints > 0 {
+		parts = append(parts, fmt.Sprintf("points=%d->%d", summary.BaselineCursorOutputPoints, summary.OptimizedCursorOutputPoints))
+	}
+	if len(summary.CursorOutputSamples) > 0 || len(summary.CursorFinalOutputSamples) > 0 {
+		parts = append(parts, fmt.Sprintf("samples=%d final_samples=%d", len(summary.CursorOutputSamples), len(summary.CursorFinalOutputSamples)))
+	}
+	return "cursor_output " + strings.Join(parts, " ")
 }
 
 func queryTargetSummaryText(summary *DecodePathSummary) string {
