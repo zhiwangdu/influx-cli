@@ -798,8 +798,8 @@ func decodePathText(summary *DecodePathSummary) string {
 	if query := queryContextSummaryText(summary); query != "" {
 		parts = append(parts, query)
 	}
-	if summary.BaselineDecodeBlocks > 0 || summary.OptimizedDecodeBlocks > 0 || summary.SavedDecodeBlocks > 0 {
-		parts = append(parts, fmt.Sprintf("blocks %d->%d", summary.BaselineDecodeBlocks, summary.OptimizedDecodeBlocks))
+	if blocks := countDeltaSummaryText("blocks", summary.BaselineDecodeBlocks, summary.OptimizedDecodeBlocks, summary.SavedDecodeBlocks); blocks != "" {
+		parts = append(parts, blocks)
 	}
 	if filter := blockFilterSummaryText(summary); filter != "" {
 		parts = append(parts, filter)
@@ -819,14 +819,14 @@ func decodePathText(summary *DecodePathSummary) string {
 	if values := decodeValueSummaryText(summary); values != "" {
 		parts = append(parts, values)
 	}
-	if summary.BaselineReadSegments > 0 || summary.OptimizedReadSegments > 0 || summary.SavedReadSegments > 0 {
-		parts = append(parts, fmt.Sprintf("segments %d->%d", summary.BaselineReadSegments, summary.OptimizedReadSegments))
+	if segments := countDeltaSummaryText("segments", summary.BaselineReadSegments, summary.OptimizedReadSegments, summary.SavedReadSegments); segments != "" {
+		parts = append(parts, segments)
 	}
 	if summary.BaselineCursorReadCalls > 0 || summary.OptimizedCursorReadCalls > 0 {
 		parts = append(parts, fmt.Sprintf("cursor_reads %d->%d", summary.BaselineCursorReadCalls, summary.OptimizedCursorReadCalls))
 	}
-	if summary.BaselineReadAtCalls > 0 || summary.OptimizedReadAtCalls > 0 {
-		parts = append(parts, fmt.Sprintf("read_at calls %d->%d", summary.BaselineReadAtCalls, summary.OptimizedReadAtCalls))
+	if readAt := countDeltaSummaryText("read_at calls", summary.BaselineReadAtCalls, summary.OptimizedReadAtCalls, summary.SavedReadAtCalls); readAt != "" {
+		parts = append(parts, readAt)
 	}
 	if summary.IteratorCostFiles > 0 || summary.IteratorCostBlocks > 0 || summary.IteratorCostBytes > 0 {
 		parts = append(parts, fmt.Sprintf("iterator_cost files=%d blocks=%d bytes=%d", summary.IteratorCostFiles, summary.IteratorCostBlocks, summary.IteratorCostBytes))
@@ -883,6 +883,17 @@ func decodePathText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func countDeltaSummaryText(label string, baseline, optimized, saved int) string {
+	if baseline == 0 && optimized == 0 && saved == 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("%s %d->%d", label, baseline, optimized)}
+	if saved > 0 {
+		parts = append(parts, fmt.Sprintf("saved=%d", saved))
+	}
+	return strings.Join(parts, " ")
 }
 
 func queryContextSummaryText(summary *DecodePathSummary) string {

@@ -48,6 +48,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				OptimizedCursorReadCalls:     1,
 				BaselineReadAtCalls:          6,
 				OptimizedReadAtCalls:         2,
+				SavedReadAtCalls:             4,
 				IteratorCostFiles:            1,
 				IteratorCostBlocks:           3,
 				IteratorCostBytes:            273,
@@ -150,16 +151,16 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 	for _, want := range []string{
 		"tssp-location-cursor-ascending",
 		"query range=1970-01-01T00:00:00.0000001Z..1970-01-01T00:00:00.0000002Z seek=1970-01-01T00:00:00.0000001Z target_filter=true",
-		"blocks 3->1",
+		"blocks 3->1 saved=2",
 		"block_filter locations=3 decoded=1 skipped_key=1 skipped_projection=1 skipped_before=1 skipped_after=1 tombstoned=1",
 		"keys=2/1/1 series_ids=2/1/1 meta_index_ids=2/1/1 columns=2/1/1",
 		"location_block_types chunk-meta:2 meta-index:1",
 		"decode_block_types chunk-meta:1",
 		"decode_bytes 288->96 saved=192",
 		"values decode=9->3 saved=6 output=6->2",
-		"segments 3->1",
+		"segments 3->1 saved=2",
 		"cursor_reads 3->1",
-		"read_at calls 6->2",
+		"read_at calls 6->2 saved=4",
 		"iterator_cost files=1 blocks=3 bytes=273",
 		"value_output points=6->2 compared=2 unavailable_blocks=1",
 		"cursor_output points=6->2 samples=2 final_samples=1",
@@ -320,6 +321,46 @@ func TestDecodePathTextIncludesSparseBlockFilterCounts(t *testing.T) {
 	for _, notWant := range []string{"locations=", "decoded=", "skipped_key=", "skipped_before=", "skipped_after="} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("decode path text = %q, want no %q", text, notWant)
+		}
+	}
+}
+
+func TestDecodePathTextIncludesSavedDeltaCounts(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		BaselineDecodeBlocks:  4,
+		OptimizedDecodeBlocks: 2,
+		SavedDecodeBlocks:     2,
+		BaselineReadSegments:  6,
+		OptimizedReadSegments: 3,
+		SavedReadSegments:     3,
+		BaselineReadAtCalls:   5,
+		OptimizedReadAtCalls:  2,
+		SavedReadAtCalls:      3,
+	})
+	for _, want := range []string{
+		"blocks 4->2 saved=2",
+		"segments 6->3 saved=3",
+		"read_at calls 5->2 saved=3",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("decode path text = %q, want %q", text, want)
+		}
+	}
+}
+
+func TestDecodePathTextIncludesSparseSavedDeltaCounts(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		SavedDecodeBlocks: 1,
+		SavedReadSegments: 2,
+		SavedReadAtCalls:  3,
+	})
+	for _, want := range []string{
+		"blocks 0->0 saved=1",
+		"segments 0->0 saved=2",
+		"read_at calls 0->0 saved=3",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("decode path text = %q, want %q", text, want)
 		}
 	}
 }
@@ -716,7 +757,7 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)
 	for _, want := range []string{
 		"tssp-file-set-location-cursor-ascending",
-		"blocks 8->3",
+		"blocks 8->3 saved=5",
 		"location_block_types chunk-meta:6 meta-index:2",
 		"decode_block_types chunk-meta:3",
 		"data_probe blocks=6 bytes=0 valid=5 failures=3 crc_mismatches=0 short=1 unknown_types=1 read_errors=1 row_blocks=4 row_unknowns=1 row_mismatches=1 output_points=5 value_blocks=0 value_unknowns=0 nulls=0 record_samples=0",
