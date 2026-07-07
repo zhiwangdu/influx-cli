@@ -1046,10 +1046,11 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 		))
 	}
 	if summary.DataBlockProbeFailures > 0 {
-		recommendations = append(recommendations, fmt.Sprintf(
-			"TSSP data block probe found %d invalid block(s)",
-			summary.DataBlockProbeFailures,
-		))
+		recommendation := fmt.Sprintf("TSSP data block probe found %d invalid block(s)", summary.DataBlockProbeFailures)
+		if reasons := countMapText(summary.DataBlockProbeFailureReasons); reasons != "" {
+			recommendation += ": " + reasons
+		}
+		recommendations = append(recommendations, recommendation)
 	}
 	if len(recommendations) == 0 && summary.FilteredDecodeBlocks > 0 {
 		recommendations = append(recommendations, "query range maps directly to overlapping TSSP chunk segments")

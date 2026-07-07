@@ -3112,7 +3112,7 @@ func TestAnalyzeTSSPAttachedShortDataBlockBreakdown(t *testing.T) {
 	if got, want := decode.Samples[0].Reason, "segment_overlap_data_header_unavailable"; got != want {
 		t.Fatalf("sample reason = %q, want %q", got, want)
 	}
-	if !containsString(decode.Recommendations, "TSSP data block probe found 1 invalid block") {
+	if !containsString(decode.Recommendations, "TSSP data block probe found 1 invalid block(s): segment_overlap_data_header_unavailable:1") {
 		t.Fatalf("recommendations = %v, want data block probe failure recommendation", decode.Recommendations)
 	}
 }

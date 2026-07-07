@@ -2835,11 +2835,15 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 		))
 	}
 	if summary.DataBlockProbeFailures > 0 {
-		recommendations = append(recommendations, fmt.Sprintf(
+		recommendation := fmt.Sprintf(
 			"detached TSSP data block probe found %d invalid block(s), including %d crc mismatch(es)",
 			summary.DataBlockProbeFailures,
 			summary.DataBlockProbeCRCMismatches,
-		))
+		)
+		if reasons := countMapText(summary.DataBlockProbeFailureReasons); reasons != "" {
+			recommendation += ": " + reasons
+		}
+		recommendations = append(recommendations, recommendation)
 	}
 	if summary.BaselineCursorReadCalls > summary.OptimizedCursorReadCalls {
 		recommendations = append(recommendations, fmt.Sprintf(
