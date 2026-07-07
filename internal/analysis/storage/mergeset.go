@@ -89,6 +89,7 @@ type mergesetTSIIndexSummary struct {
 	TSIDToKeySamples    []string
 	TagToTSIDSamples    []string
 	TagValueSamples     []string
+	measurements        map[string]*mergesetTSIMeasurement
 }
 
 type mergesetFieldIndexSummary struct {
@@ -129,6 +130,13 @@ type mergesetBlockHeader struct {
 	LensBlockOffset  uint64
 	ItemsBlockSize   uint32
 	LensBlockSize    uint32
+}
+
+type mergesetTSIMeasurement struct {
+	Name              string
+	SeriesIDs         map[uint64]struct{}
+	TagValues         map[string]map[string]struct{}
+	TagValueSeriesIDs map[string]map[string]map[uint64]struct{}
 }
 
 func analyzeMergesetPart(path string, info os.FileInfo, options Options) (FileReport, error) {
@@ -213,7 +221,7 @@ func analyzeMergesetPart(path string, info os.FileInfo, options Options) (FileRe
 		addMergesetIndexSummary(&report, indexSummary, componentSizes, metaindex, metadata.ItemsCount, options)
 		payloadSummary, payloadNotices := readMergesetItemPayloads(path, indexSummary.Headers, componentSizes, options, firstItem, lastItem)
 		report.Notices = append(report.Notices, payloadNotices...)
-		addMergesetItemPayloadSummary(&report, payloadSummary, firstItem, lastItem, metadata.ItemsCount)
+		addMergesetItemPayloadSummary(&report, payloadSummary, firstItem, lastItem, metadata.ItemsCount, options)
 	}
 	return report, nil
 }
@@ -681,6 +689,7 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 	if componentSizes[mergesetLensFile] > 0 {
 		lensSize = uint64(componentSizes[mergesetLensFile])
 	}
+	trackTSIQueryState := len(options.QueryMeasurements) > 0 || len(options.QueryTags) > 0
 	notices := []string{}
 	for i, header := range headers {
 		search.ObserveHeader(i, header)
@@ -723,7 +732,7 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 		}
 		summary.LastItem = append(summary.LastItem[:0], decoded.LastItem...)
 		observeMergesetCLVTextIndexItems(&summary.CLVText, decoded.Items, options.BlockSampleLimit)
-		observeMergesetTSIIndexItems(&summary.TSIIndex, decoded.Items, options.BlockSampleLimit, summary.CLVText.Detected)
+		observeMergesetTSIIndexItems(&summary.TSIIndex, decoded.Items, options.BlockSampleLimit, summary.CLVText.Detected, trackTSIQueryState)
 		observeMergesetFieldIndexItems(&summary.FieldIndex, decoded.Items, options.BlockSampleLimit)
 		if payloadSampleLimit > len(decoded.Samples) {
 			payloadSampleLimit = len(decoded.Samples)
@@ -1365,7 +1374,7 @@ func mergesetSearchRecommendations(summary *DecodePathSummary, options Options) 
 	return recommendations
 }
 
-func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPayloadSummary, metadataFirstItem, metadataLastItem []byte, metadataItemsCount uint64) {
+func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPayloadSummary, metadataFirstItem, metadataLastItem []byte, metadataItemsCount uint64, options Options) {
 	report.Extra["item_payload_block_count"] = fmt.Sprint(summary.Blocks)
 	report.Extra["item_payload_blocks_decoded"] = fmt.Sprint(summary.DecodedBlocks)
 	report.Extra["item_payload_items_decoded"] = fmt.Sprint(summary.ItemsDecoded)
@@ -1389,7 +1398,7 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 		report.Extra["item_payload_samples_hex"] = strings.Join(samples, ",")
 	}
 	addMergesetCLVTextIndexSummary(report, summary.CLVText)
-	addMergesetTSIIndexSummary(report, summary.TSIIndex)
+	addMergesetTSIIndexSummary(report, summary.TSIIndex, options)
 	addMergesetFieldIndexSummary(report, summary.FieldIndex)
 	if summary.ItemsDecoded != metadataItemsCount {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded item payload count=%d differs from metadata items_count=%d", summary.ItemsDecoded, metadataItemsCount))
@@ -1434,11 +1443,18 @@ type mergesetTSIIndexItem struct {
 	Measurement string
 	TagKey      string
 	TagValue    string
+	Tags        []TagFilter
 	TSID        uint64
 	TSIDs       []uint64
 }
 
-func observeMergesetTSIIndexItems(summary *mergesetTSIIndexSummary, items [][]byte, sampleLimit int, clvTextDetected bool) {
+type openGeminiTSIParsedSeriesKey struct {
+	Measurement string
+	Tags        []TagFilter
+	Display     string
+}
+
+func observeMergesetTSIIndexItems(summary *mergesetTSIIndexSummary, items [][]byte, sampleLimit int, clvTextDetected bool, trackQueryState bool) {
 	for _, item := range items {
 		parsed, err := parseMergesetTSIIndexItem(item)
 		if err != nil {
@@ -1462,26 +1478,103 @@ func observeMergesetTSIIndexItems(summary *mergesetTSIIndexSummary, items [][]by
 		switch parsed.Type {
 		case "key-tsid":
 			summary.KeyToTSIDCount++
+			observeMergesetTSISeriesKey(summary, parsed, trackQueryState)
 			if sampleLimit > 0 && len(summary.KeyToTSIDSamples) < sampleLimit {
 				summary.KeyToTSIDSamples = append(summary.KeyToTSIDSamples, fmt.Sprintf("%s->%d", parsed.SeriesKey, parsed.TSID))
 			}
 		case "tsid-key":
 			summary.TSIDToKeyCount++
+			observeMergesetTSISeriesKey(summary, parsed, trackQueryState)
 			if sampleLimit > 0 && len(summary.TSIDToKeySamples) < sampleLimit {
 				summary.TSIDToKeySamples = append(summary.TSIDToKeySamples, fmt.Sprintf("%d:%s", parsed.TSID, parsed.SeriesKey))
 			}
 		case "tag-tsid":
 			summary.TagToTSIDCount++
 			summary.TagToTSIDValueCount += len(parsed.TSIDs)
+			observeMergesetTSITagTSIDs(summary, parsed, trackQueryState)
 			if sampleLimit > 0 && len(summary.TagToTSIDSamples) < sampleLimit {
 				summary.TagToTSIDSamples = append(summary.TagToTSIDSamples, formatMergesetTSITagToTSIDSample(parsed))
 			}
 		case "tag-value":
 			summary.TagValueCount++
+			observeMergesetTSITagValue(summary, parsed)
 			if sampleLimit > 0 && len(summary.TagValueSamples) < sampleLimit {
 				summary.TagValueSamples = append(summary.TagValueSamples, fmt.Sprintf("%s:%s=%s", parsed.Measurement, parsed.TagKey, parsed.TagValue))
 			}
 		}
+	}
+}
+
+func observeMergesetTSISeriesKey(summary *mergesetTSIIndexSummary, item mergesetTSIIndexItem, trackQueryState bool) {
+	measurement := summary.ensureMeasurement(item.Measurement)
+	measurement.addSeriesID(item.TSID)
+	for _, tag := range item.Tags {
+		measurement.addTagValueSeriesIDs(tag.Key, tag.Value, []uint64{item.TSID}, trackQueryState)
+	}
+}
+
+func observeMergesetTSITagTSIDs(summary *mergesetTSIIndexSummary, item mergesetTSIIndexItem, trackQueryState bool) {
+	measurement := summary.ensureMeasurement(item.Measurement)
+	measurement.addTagValueSeriesIDs(item.TagKey, item.TagValue, item.TSIDs, trackQueryState)
+}
+
+func observeMergesetTSITagValue(summary *mergesetTSIIndexSummary, item mergesetTSIIndexItem) {
+	measurement := summary.ensureMeasurement(item.Measurement)
+	measurement.addTagValue(item.TagKey, item.TagValue)
+}
+
+func (s *mergesetTSIIndexSummary) ensureMeasurement(name string) *mergesetTSIMeasurement {
+	if s.measurements == nil {
+		s.measurements = map[string]*mergesetTSIMeasurement{}
+	}
+	measurement := s.measurements[name]
+	if measurement == nil {
+		measurement = &mergesetTSIMeasurement{
+			Name:      name,
+			SeriesIDs: map[uint64]struct{}{},
+			TagValues: map[string]map[string]struct{}{},
+		}
+		s.measurements[name] = measurement
+	}
+	return measurement
+}
+
+func (m *mergesetTSIMeasurement) addSeriesID(tsid uint64) {
+	m.SeriesIDs[tsid] = struct{}{}
+}
+
+func (m *mergesetTSIMeasurement) addTagValue(tagKey, tagValue string) {
+	values := m.TagValues[tagKey]
+	if values == nil {
+		values = map[string]struct{}{}
+		m.TagValues[tagKey] = values
+	}
+	values[tagValue] = struct{}{}
+}
+
+func (m *mergesetTSIMeasurement) addTagValueSeriesIDs(tagKey, tagValue string, tsids []uint64, trackQueryState bool) {
+	m.addTagValue(tagKey, tagValue)
+	for _, tsid := range tsids {
+		m.addSeriesID(tsid)
+	}
+	if !trackQueryState {
+		return
+	}
+	if m.TagValueSeriesIDs == nil {
+		m.TagValueSeriesIDs = map[string]map[string]map[uint64]struct{}{}
+	}
+	values := m.TagValueSeriesIDs[tagKey]
+	if values == nil {
+		values = map[string]map[uint64]struct{}{}
+		m.TagValueSeriesIDs[tagKey] = values
+	}
+	seriesIDs := values[tagValue]
+	if seriesIDs == nil {
+		seriesIDs = map[uint64]struct{}{}
+		values[tagValue] = seriesIDs
+	}
+	for _, tsid := range tsids {
+		seriesIDs[tsid] = struct{}{}
 	}
 }
 
@@ -1499,25 +1592,29 @@ func parseMergesetTSIIndexItem(item []byte) (mergesetTSIIndexItem, error) {
 		if sep < 1 || item[sep] != opengeminiTSINSSeparator {
 			return parsed, fmt.Errorf("key-to-tsid item missing separator")
 		}
-		seriesKey, err := parseOpenGeminiTSIIndexKey(item[1:sep])
+		seriesKey, err := parseOpenGeminiTSIIndexKeyStruct(item[1:sep])
 		if err != nil {
 			return parsed, err
 		}
 		parsed.Type = "key-tsid"
-		parsed.SeriesKey = seriesKey
+		parsed.SeriesKey = seriesKey.Display
+		parsed.Measurement = seriesKey.Measurement
+		parsed.Tags = seriesKey.Tags
 		parsed.TSID = binary.BigEndian.Uint64(item[len(item)-8:])
 		return parsed, nil
 	case opengeminiTSINSPrefixTSIDToKey:
 		if len(item) < 17 {
 			return parsed, fmt.Errorf("short tsid-to-key item")
 		}
-		seriesKey, err := parseOpenGeminiTSIIndexKey(item[9:])
+		seriesKey, err := parseOpenGeminiTSIIndexKeyStruct(item[9:])
 		if err != nil {
 			return parsed, err
 		}
 		parsed.Type = "tsid-key"
 		parsed.TSID = binary.BigEndian.Uint64(item[1:9])
-		parsed.SeriesKey = seriesKey
+		parsed.SeriesKey = seriesKey.Display
+		parsed.Measurement = seriesKey.Measurement
+		parsed.Tags = seriesKey.Tags
 		return parsed, nil
 	case opengeminiTSINSPrefixTagToTSIDs:
 		if len(item) < 13 {
@@ -1585,22 +1682,23 @@ func parseOpenGeminiTSITagTupleWithTail(data []byte) (string, string, string, []
 	return measurement, tagKey, string(tagValue), tail, nil
 }
 
-func parseOpenGeminiTSIIndexKey(data []byte) (string, error) {
+func parseOpenGeminiTSIIndexKeyStruct(data []byte) (openGeminiTSIParsedSeriesKey, error) {
+	var parsed openGeminiTSIParsedSeriesKey
 	if len(data) < 8 {
-		return "", fmt.Errorf("short TSI index key")
+		return parsed, fmt.Errorf("short TSI index key")
 	}
 	keyLen := int(binary.BigEndian.Uint32(data[:4]))
 	if keyLen != len(data) {
-		return "", fmt.Errorf("TSI index key length=%d differs from payload size=%d", keyLen, len(data))
+		return parsed, fmt.Errorf("TSI index key length=%d differs from payload size=%d", keyLen, len(data))
 	}
 	tail := data[4:]
 	if len(tail) < 2 {
-		return "", fmt.Errorf("short TSI measurement length")
+		return parsed, fmt.Errorf("short TSI measurement length")
 	}
 	measurementLen := int(binary.BigEndian.Uint16(tail[:2]))
 	tail = tail[2:]
 	if len(tail) < measurementLen+2 {
-		return "", fmt.Errorf("short TSI measurement")
+		return parsed, fmt.Errorf("short TSI measurement")
 	}
 	measurement := string(tail[:measurementLen])
 	tail = tail[measurementLen:]
@@ -1609,33 +1707,37 @@ func parseOpenGeminiTSIIndexKey(data []byte) (string, error) {
 
 	var display strings.Builder
 	display.WriteString(measurement)
+	parsed.Measurement = measurement
+	parsed.Tags = make([]TagFilter, 0, tagCount)
 	for i := 0; i < tagCount; i++ {
 		if len(tail) < 2 {
-			return "", fmt.Errorf("short TSI tag key length")
+			return parsed, fmt.Errorf("short TSI tag key length")
 		}
 		tagKeyLen := int(binary.BigEndian.Uint16(tail[:2]))
 		tail = tail[2:]
 		if len(tail) < tagKeyLen+2 {
-			return "", fmt.Errorf("short TSI tag key")
+			return parsed, fmt.Errorf("short TSI tag key")
 		}
 		tagKey := string(tail[:tagKeyLen])
 		tail = tail[tagKeyLen:]
 		tagValueLen := int(binary.BigEndian.Uint16(tail[:2]))
 		tail = tail[2:]
 		if len(tail) < tagValueLen {
-			return "", fmt.Errorf("short TSI tag value")
+			return parsed, fmt.Errorf("short TSI tag value")
 		}
 		tagValue := string(tail[:tagValueLen])
 		tail = tail[tagValueLen:]
+		parsed.Tags = append(parsed.Tags, TagFilter{Key: tagKey, Value: tagValue})
 		display.WriteByte(',')
 		display.WriteString(tagKey)
 		display.WriteByte('=')
 		display.WriteString(tagValue)
 	}
 	if len(tail) != 0 {
-		return "", fmt.Errorf("TSI index key has %d trailing byte(s)", len(tail))
+		return parsed, fmt.Errorf("TSI index key has %d trailing byte(s)", len(tail))
 	}
-	return display.String(), nil
+	parsed.Display = display.String()
+	return parsed, nil
 }
 
 func parseOpenGeminiTSITagValue(data []byte) ([]byte, []byte, error) {
@@ -1723,9 +1825,12 @@ func formatMergesetTSIListSample(values []uint64) string {
 	return "[" + strings.Join(parts, ",") + "]"
 }
 
-func addMergesetTSIIndexSummary(report *FileReport, summary mergesetTSIIndexSummary) {
+func addMergesetTSIIndexSummary(report *FileReport, summary mergesetTSIIndexSummary, options Options) {
 	if !summary.Detected {
 		return
+	}
+	if index := buildMergesetTSIIndexReport(summary, options); index != nil {
+		report.Index = index
 	}
 	report.Extra["opengemini_tsi_index_detected"] = "true"
 	report.Extra["opengemini_tsi_index_key_tsid_mappings"] = fmt.Sprint(summary.KeyToTSIDCount)
@@ -1755,6 +1860,226 @@ func addMergesetTSIIndexSummary(report *FileReport, summary mergesetTSIIndexSumm
 		report.BlocksByType["opengemini-tsi-index-invalid-item"] = summary.InvalidItems
 		report.Notices = append(report.Notices, fmt.Sprintf("openGemini TSI index has %d invalid namespaced item(s)", summary.InvalidItems))
 	}
+}
+
+func buildMergesetTSIIndexReport(summary mergesetTSIIndexSummary, options Options) *IndexSummary {
+	if len(summary.measurements) == 0 {
+		return nil
+	}
+	names := sortedMergesetTSIMeasurementNames(summary.measurements)
+	index := &IndexSummary{
+		Type:             "opengemini-tsi-mergeset",
+		MeasurementCount: len(names),
+	}
+	for _, name := range names {
+		measurement := summary.measurements[name]
+		tagKeyCount, tagValueCount := measurement.tagCounts()
+		index.SeriesRefs += int64(len(measurement.SeriesIDs))
+		index.TagKeyCount += tagKeyCount
+		index.TagValueCount += tagValueCount
+		if len(index.MeasurementSamples) < options.KeySampleLimit {
+			index.MeasurementSamples = append(index.MeasurementSamples, IndexMeasurementReport{
+				Name:          name,
+				SeriesCount:   uint64(len(measurement.SeriesIDs)),
+				TagKeyCount:   tagKeyCount,
+				TagValueCount: tagValueCount,
+			})
+		}
+	}
+	index.Query = buildMergesetTSIIndexQuerySummary(summary.measurements, names, options)
+	return index
+}
+
+func buildMergesetTSIIndexQuerySummary(measurements map[string]*mergesetTSIMeasurement, names []string, options Options) *IndexQuerySummary {
+	if len(options.QueryMeasurements) == 0 && len(options.QueryTags) == 0 {
+		return nil
+	}
+	query := &IndexQuerySummary{
+		MeasurementFilterApplied: len(options.QueryMeasurements) > 0,
+		TagFilterApplied:         len(options.QueryTags) > 0,
+		QueryMeasurements:        append([]string(nil), options.QueryMeasurements...),
+		QueryTags:                append([]TagFilter(nil), options.QueryTags...),
+	}
+	measurementSet := queryKeySet(options.QueryMeasurements)
+	for _, measurement := range query.QueryMeasurements {
+		if _, ok := measurements[measurement]; ok {
+			query.MatchedMeasurements = append(query.MatchedMeasurements, measurement)
+		} else {
+			query.MissingMeasurements = append(query.MissingMeasurements, measurement)
+		}
+	}
+
+	matchedTags := map[string]TagFilter{}
+	for _, name := range names {
+		measurement := measurements[name]
+		if len(measurementSet) > 0 {
+			if _, ok := measurementSet[name]; !ok {
+				continue
+			}
+		}
+		for _, filter := range query.QueryTags {
+			if measurement.hasTagSeries(filter) {
+				matchedTags[tagFilterID(filter.Key, filter.Value)] = filter
+			}
+		}
+		matchingSeriesIDs := measurement.matchingSeriesIDs(query.QueryTags)
+		if len(matchingSeriesIDs) == 0 {
+			continue
+		}
+		tagKeyCount, tagValueCount := measurement.tagCounts()
+		query.CandidateMeasurements++
+		query.SeriesRefs += int64(len(matchingSeriesIDs))
+		query.TagKeyCount += tagKeyCount
+		query.TagValueCount += tagValueCount
+		if len(query.MeasurementSamples) < options.KeySampleLimit {
+			query.MeasurementSamples = append(query.MeasurementSamples, IndexQueryMeasurementReport{
+				Name:        name,
+				SeriesCount: uint64(len(matchingSeriesIDs)),
+				Tags:        measurement.queryTagReports(query.QueryTags, options.BlockSampleLimit),
+			})
+		}
+	}
+	for _, filter := range query.QueryTags {
+		id := tagFilterID(filter.Key, filter.Value)
+		if matched, ok := matchedTags[id]; ok {
+			query.MatchedTags = append(query.MatchedTags, matched)
+		} else {
+			query.MissingTags = append(query.MissingTags, filter)
+		}
+	}
+	return query
+}
+
+func sortedMergesetTSIMeasurementNames(measurements map[string]*mergesetTSIMeasurement) []string {
+	names := make([]string, 0, len(measurements))
+	for name := range measurements {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (m *mergesetTSIMeasurement) tagCounts() (tagKeyCount, tagValueCount int) {
+	tagKeyCount = len(m.TagValues)
+	for _, values := range m.TagValues {
+		tagValueCount += len(values)
+	}
+	return tagKeyCount, tagValueCount
+}
+
+func (m *mergesetTSIMeasurement) hasTagSeries(filter TagFilter) bool {
+	if m == nil {
+		return false
+	}
+	values := m.TagValueSeriesIDs[filter.Key]
+	if len(values) == 0 {
+		return false
+	}
+	return len(values[filter.Value]) > 0
+}
+
+func (m *mergesetTSIMeasurement) matchingSeriesIDs(filters []TagFilter) map[uint64]struct{} {
+	if m == nil {
+		return nil
+	}
+	if len(filters) == 0 {
+		return cloneMergesetTSISeriesIDSet(m.SeriesIDs)
+	}
+	var matches map[uint64]struct{}
+	for _, filter := range filters {
+		values := m.TagValueSeriesIDs[filter.Key]
+		if len(values) == 0 {
+			return nil
+		}
+		seriesIDs := values[filter.Value]
+		if len(seriesIDs) == 0 {
+			return nil
+		}
+		if matches == nil {
+			matches = cloneMergesetTSISeriesIDSet(seriesIDs)
+		} else {
+			matches = intersectTSISeriesIDSets(matches, seriesIDs)
+		}
+		if len(matches) == 0 {
+			return nil
+		}
+	}
+	return matches
+}
+
+func cloneMergesetTSISeriesIDSet(src map[uint64]struct{}) map[uint64]struct{} {
+	dst := make(map[uint64]struct{}, len(src))
+	for id := range src {
+		dst[id] = struct{}{}
+	}
+	return dst
+}
+
+func (m *mergesetTSIMeasurement) queryTagReports(filters []TagFilter, sampleLimit int) []IndexQueryTagReport {
+	if m == nil || sampleLimit <= 0 {
+		return nil
+	}
+	if len(filters) > 0 {
+		reports := make([]IndexQueryTagReport, 0, minInt(len(filters), sampleLimit))
+		for _, filter := range filters {
+			if len(reports) >= sampleLimit {
+				break
+			}
+			seriesIDs := m.TagValueSeriesIDs[filter.Key][filter.Value]
+			if len(seriesIDs) == 0 {
+				continue
+			}
+			reports = append(reports, IndexQueryTagReport{
+				Key: filter.Key,
+				Values: []IndexQueryTagValueReport{{
+					Value:       filter.Value,
+					SeriesCount: uint64(len(seriesIDs)),
+				}},
+			})
+		}
+		return reports
+	}
+
+	tagKeys := make([]string, 0, len(m.TagValues))
+	for key := range m.TagValues {
+		tagKeys = append(tagKeys, key)
+	}
+	sort.Strings(tagKeys)
+	reports := make([]IndexQueryTagReport, 0, minInt(len(tagKeys), sampleLimit))
+	for _, key := range tagKeys {
+		if len(reports) >= sampleLimit {
+			break
+		}
+		values := sortedMergesetTSITagValues(m.TagValues[key])
+		report := IndexQueryTagReport{Key: key}
+		for _, value := range values {
+			if len(report.Values) >= sampleLimit {
+				break
+			}
+			seriesIDs := m.TagValueSeriesIDs[key][value]
+			if len(seriesIDs) == 0 {
+				continue
+			}
+			report.Values = append(report.Values, IndexQueryTagValueReport{
+				Value:       value,
+				SeriesCount: uint64(len(seriesIDs)),
+			})
+		}
+		if len(report.Values) == 0 {
+			continue
+		}
+		reports = append(reports, report)
+	}
+	return reports
+}
+
+func sortedMergesetTSITagValues(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 type mergesetCLVTextIndexItem struct {

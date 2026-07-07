@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -2715,6 +2716,35 @@ func TestAnalyzeMergesetOpenGeminiTSIIndexItems(t *testing.T) {
 	if got, want := file.BlocksByType["opengemini-tsi-index-tag-value"], 1; got != want {
 		t.Fatalf("tag value block count = %d, want %d", got, want)
 	}
+	if file.Index == nil {
+		t.Fatal("expected openGemini TSI index summary")
+	}
+	if got, want := file.Index.Type, "opengemini-tsi-mergeset"; got != want {
+		t.Fatalf("index type = %q, want %q", got, want)
+	}
+	if got, want := file.Index.MeasurementCount, 1; got != want {
+		t.Fatalf("index measurement count = %d, want %d", got, want)
+	}
+	if got, want := file.Index.SeriesRefs, int64(1); got != want {
+		t.Fatalf("index series refs = %d, want %d", got, want)
+	}
+	if got, want := file.Index.TagKeyCount, 1; got != want {
+		t.Fatalf("index tag key count = %d, want %d", got, want)
+	}
+	if got, want := file.Index.TagValueCount, 1; got != want {
+		t.Fatalf("index tag value count = %d, want %d", got, want)
+	}
+	if got := file.Index.Query; got != nil {
+		t.Fatalf("index query = %+v, want nil", got)
+	}
+	if got, want := file.Index.MeasurementSamples, []IndexMeasurementReport{{
+		Name:          "cpu",
+		SeriesCount:   1,
+		TagKeyCount:   1,
+		TagValueCount: 1,
+	}}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("index measurement samples = %+v, want %+v", got, want)
+	}
 }
 
 func TestAnalyzeMergesetOpenGeminiTSIIndexMultiTSIDTagRow(t *testing.T) {
@@ -2746,6 +2776,227 @@ func TestAnalyzeMergesetOpenGeminiTSIIndexMultiTSIDTagRow(t *testing.T) {
 	}
 	if got, want := file.Extra["opengemini_tsi_index_invalid_items"], "0"; got != want {
 		t.Fatalf("invalid TSI index items = %q, want %q", got, want)
+	}
+	if file.Index == nil {
+		t.Fatal("expected openGemini TSI index summary")
+	}
+	if got, want := file.Index.SeriesRefs, int64(2); got != want {
+		t.Fatalf("index series refs = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiTSIIndexQueryFilters(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiTSITagToTSIDs("cpu", "host", "a", 42, 43),
+		encodeTestOpenGeminiTSITagToTSID("cpu", "region", "us", 42),
+		encodeTestOpenGeminiTSITagToTSID("mem", "host", "a", 99),
+	}
+	partPath := filepath.Join(t.TempDir(), "3_1_tsiquery")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:            FormatMergeset,
+		KeySampleLimit:    2,
+		BlockSampleLimit:  2,
+		QueryMeasurements: []string{"disk", "cpu", "cpu"},
+		QueryTags: []TagFilter{
+			{Key: "region", Value: "us"},
+			{Key: "host", Value: "a"},
+			{Key: "host", Value: "a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	index := report.Files[0].Index
+	if index == nil {
+		t.Fatal("expected openGemini TSI index summary")
+	}
+	if got, want := index.MeasurementCount, 2; got != want {
+		t.Fatalf("measurement count = %d, want %d", got, want)
+	}
+	if got, want := index.SeriesRefs, int64(3); got != want {
+		t.Fatalf("series refs = %d, want %d", got, want)
+	}
+	query := index.Query
+	if query == nil {
+		t.Fatal("expected index query summary")
+	}
+	if got, want := query.QueryMeasurements, []string{"cpu", "disk"}; !equalStrings(got, want) {
+		t.Fatalf("query measurements = %v, want %v", got, want)
+	}
+	if got, want := query.QueryTags, []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "us"}}; !equalTagFilters(got, want) {
+		t.Fatalf("query tags = %+v, want %+v", got, want)
+	}
+	if got, want := query.MatchedMeasurements, []string{"cpu"}; !equalStrings(got, want) {
+		t.Fatalf("matched measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MissingMeasurements, []string{"disk"}; !equalStrings(got, want) {
+		t.Fatalf("missing measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "us"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if len(query.MissingTags) != 0 {
+		t.Fatalf("missing tags = %+v, want none", query.MissingTags)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(1); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples, []IndexQueryMeasurementReport{{
+		Name:        "cpu",
+		SeriesCount: 1,
+		Tags: []IndexQueryTagReport{
+			{Key: "host", Values: []IndexQueryTagValueReport{{Value: "a", SeriesCount: 2}}},
+			{Key: "region", Values: []IndexQueryTagValueReport{{Value: "us", SeriesCount: 1}}},
+		},
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("measurement samples = %+v, want %+v", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiTSIIndexQueryUsesSeriesKeyTags(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiTSIKeyToTSID("cpu", "host", "a", 42),
+	}
+	partPath := filepath.Join(t.TempDir(), "1_1_tsiquerykey")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:            FormatMergeset,
+		KeySampleLimit:    1,
+		BlockSampleLimit:  1,
+		QueryMeasurements: []string{"cpu"},
+		QueryTags:         []TagFilter{{Key: "host", Value: "a"}},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected index query summary")
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if len(query.MissingTags) != 0 {
+		t.Fatalf("missing tags = %+v, want none", query.MissingTags)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(1); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples, []IndexQueryMeasurementReport{{
+		Name:        "cpu",
+		SeriesCount: 1,
+		Tags: []IndexQueryTagReport{{
+			Key:    "host",
+			Values: []IndexQueryTagValueReport{{Value: "a", SeriesCount: 1}},
+		}},
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("measurement samples = %+v, want %+v", got, want)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiTSIIndexQueryEmptyIntersection(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiTSITagToTSID("cpu", "host", "a", 42),
+		encodeTestOpenGeminiTSITagToTSID("cpu", "region", "eu", 99),
+		encodeTestOpenGeminiTSITagToTSID("cpu", "region", "us", 42),
+	}
+	partPath := filepath.Join(t.TempDir(), "3_1_tsiqueryempty")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:            FormatMergeset,
+		KeySampleLimit:    2,
+		BlockSampleLimit:  2,
+		QueryMeasurements: []string{"cpu"},
+		QueryTags: []TagFilter{
+			{Key: "host", Value: "a"},
+			{Key: "region", Value: "eu"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected index query summary")
+	}
+	if got, want := query.MatchedTags, []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "eu"}}; !equalTagFilters(got, want) {
+		t.Fatalf("matched tags = %+v, want %+v", got, want)
+	}
+	if len(query.MissingTags) != 0 {
+		t.Fatalf("missing tags = %+v, want none", query.MissingTags)
+	}
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(0); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if got := len(query.MeasurementSamples); got != 0 {
+		t.Fatalf("measurement samples = %d, want 0", got)
+	}
+}
+
+func TestAnalyzeMergesetOpenGeminiTSIIndexMeasurementQuerySkipsSerieslessTagSamples(t *testing.T) {
+	items := [][]byte{
+		encodeTestOpenGeminiTSITagToTSID("cpu", "host", "a", 42),
+		encodeTestOpenGeminiTSITagValue("cpu", "host", "b"),
+	}
+	partPath := filepath.Join(t.TempDir(), "2_1_tsiquerymeasurement")
+	if err := writeTestMergesetPartWithItems(partPath, items); err != nil {
+		t.Fatalf("writeTestMergesetPartWithItems() error = %v", err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:            FormatMergeset,
+		KeySampleLimit:    1,
+		BlockSampleLimit:  4,
+		QueryMeasurements: []string{"cpu"},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	index := report.Files[0].Index
+	if index == nil {
+		t.Fatal("expected openGemini TSI index summary")
+	}
+	if got, want := index.TagValueCount, 2; got != want {
+		t.Fatalf("index tag value count = %d, want %d", got, want)
+	}
+	query := index.Query
+	if query == nil {
+		t.Fatal("expected index query summary")
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(1); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples, []IndexQueryMeasurementReport{{
+		Name:        "cpu",
+		SeriesCount: 1,
+		Tags: []IndexQueryTagReport{{
+			Key:    "host",
+			Values: []IndexQueryTagValueReport{{Value: "a", SeriesCount: 1}},
+		}},
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("measurement samples = %+v, want %+v", got, want)
 	}
 }
 
