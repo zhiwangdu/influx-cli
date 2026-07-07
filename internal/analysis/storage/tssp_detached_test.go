@@ -754,6 +754,12 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if got, want := decode.DataBlockProbeCRCMismatches, 0; got != want {
 		t.Fatalf("data block probe crc mismatches = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeRowCountBlocks, 2; got != want {
+		t.Fatalf("data block probe row count blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeOutputPoints, 1; got != want {
+		t.Fatalf("data block probe output points = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeTypes["integer-full"], 2; got != want {
 		t.Fatalf("decode data block probe integer-full blocks = %d, want %d", got, want)
 	}

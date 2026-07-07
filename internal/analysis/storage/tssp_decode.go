@@ -135,6 +135,10 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeBlocks = dataProbe.BlocksChecked
 		summary.DataBlockProbeBytes = dataProbe.BytesRead
 		summary.DataBlockProbeFailures = dataProbe.Failures()
+		summary.DataBlockProbeRowCountBlocks = dataProbe.RowCountBlocks
+		summary.DataBlockProbeRowUnknowns = dataProbe.RowCountUnknowns
+		summary.DataBlockProbeRowMismatches = dataProbe.RowCountMismatches
+		summary.DataBlockProbeOutputPoints = dataProbe.OutputPoints
 		summary.DataBlockProbeValueBlocks = dataProbe.ValueBlocks
 		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
 		addTSSPDecodePathCounts(summary.DataBlockProbeTypes, dataProbe.BlockTypes)
@@ -420,6 +424,10 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeBytes += src.DataBlockProbeBytes
 	dst.DataBlockProbeFailures += src.DataBlockProbeFailures
 	dst.DataBlockProbeCRCMismatches += src.DataBlockProbeCRCMismatches
+	dst.DataBlockProbeRowCountBlocks += src.DataBlockProbeRowCountBlocks
+	dst.DataBlockProbeRowUnknowns += src.DataBlockProbeRowUnknowns
+	dst.DataBlockProbeRowMismatches += src.DataBlockProbeRowMismatches
+	dst.DataBlockProbeOutputPoints += src.DataBlockProbeOutputPoints
 	dst.DataBlockProbeValueBlocks += src.DataBlockProbeValueBlocks
 	dst.DataBlockProbeValueUnknowns += src.DataBlockProbeValueUnknowns
 	addTSSPDecodePathCounts(dst.DataBlockProbeTypes, src.DataBlockProbeTypes)

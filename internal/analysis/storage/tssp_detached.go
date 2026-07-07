@@ -2301,6 +2301,10 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeBytes = dataProbe.BytesRead
 		summary.DataBlockProbeFailures = dataProbe.Failures()
 		summary.DataBlockProbeCRCMismatches = dataProbe.CRCMismatches
+		summary.DataBlockProbeRowCountBlocks = dataProbe.RowCountBlocks
+		summary.DataBlockProbeRowUnknowns = dataProbe.RowCountUnknowns
+		summary.DataBlockProbeRowMismatches = dataProbe.RowCountMismatches
+		summary.DataBlockProbeOutputPoints = dataProbe.OutputPoints
 		summary.DataBlockProbeValueBlocks = dataProbe.ValueBlocks
 		summary.DataBlockProbeValueUnknowns = dataProbe.ValueUnknowns
 		addTSSPDecodePathCounts(summary.DataBlockProbeTypes, dataProbe.BlockTypes)
