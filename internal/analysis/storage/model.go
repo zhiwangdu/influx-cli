@@ -87,13 +87,14 @@ type Report struct {
 }
 
 type Summary struct {
-	FileCount          int   `json:"file_count"`
-	TotalSizeBytes     int64 `json:"total_size_bytes"`
-	KeyCount           int   `json:"key_count"`
-	BlockCount         int   `json:"block_count"`
-	QueryOverlapFiles  int   `json:"query_overlap_files,omitempty"`
-	QueryOverlapBlocks int   `json:"query_overlap_blocks,omitempty"`
-	TombstoneFiles     int   `json:"tombstone_files,omitempty"`
+	FileCount          int            `json:"file_count"`
+	TotalSizeBytes     int64          `json:"total_size_bytes"`
+	KeyCount           int            `json:"key_count"`
+	BlockCount         int            `json:"block_count"`
+	BlocksByType       map[string]int `json:"blocks_by_type,omitempty"`
+	QueryOverlapFiles  int            `json:"query_overlap_files,omitempty"`
+	QueryOverlapBlocks int            `json:"query_overlap_blocks,omitempty"`
+	TombstoneFiles     int            `json:"tombstone_files,omitempty"`
 }
 
 type FileReport struct {
@@ -614,7 +615,7 @@ func (r Report) Result() result.Result {
 			r.Summary.BlockCount,
 			r.Summary.QueryOverlapBlocks,
 			tombstone,
-			fmt.Sprintf("files=%d", len(r.Files)),
+			summaryDetailsText(r.Summary, len(r.Files)),
 			"",
 			decodePathText(r.DecodePath),
 			joinSamples(decodePathRecommendations(r.DecodePath)),
@@ -649,6 +650,14 @@ func fileDetailsText(file FileReport) string {
 		parts = append(parts, secondaryIndexDetailsText(file.SecondaryIndex))
 	}
 	return strings.Join(nonEmptyStrings(parts), "; ")
+}
+
+func summaryDetailsText(summary Summary, fileCount int) string {
+	parts := []string{fmt.Sprintf("files=%d", fileCount)}
+	if blocksByType := countMapText(summary.BlocksByType); blocksByType != "" {
+		parts = append(parts, "block_types "+blocksByType)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func indexDetailsText(summary *IndexSummary) string {

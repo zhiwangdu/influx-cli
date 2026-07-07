@@ -660,6 +660,16 @@ func accumulateSummary(summary *Summary, file FileReport, queryRange TimeRange) 
 	summary.TotalSizeBytes += file.SizeBytes
 	summary.KeyCount += file.KeyCount
 	summary.BlockCount += file.BlockCount
+	if len(file.BlocksByType) > 0 {
+		if summary.BlocksByType == nil {
+			summary.BlocksByType = map[string]int{}
+		}
+		for blockType, count := range file.BlocksByType {
+			if count > 0 {
+				summary.BlocksByType[blockType] += count
+			}
+		}
+	}
 	if file.Tombstones.Exists {
 		summary.TombstoneFiles++
 	}

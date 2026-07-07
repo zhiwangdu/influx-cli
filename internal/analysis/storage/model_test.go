@@ -117,6 +117,7 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 			TotalSizeBytes:     300,
 			KeyCount:           6,
 			BlockCount:         8,
+			BlocksByType:       map[string]int{"chunk-meta": 2, "data": 6},
 			QueryOverlapBlocks: 3,
 			TombstoneFiles:     1,
 		},
@@ -160,7 +161,7 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	if got, want := row[tableColumnIndex(t, result.Table.Columns, "tombstone")], "1 files"; got != want {
 		t.Fatalf("aggregate tombstone = %v, want %v", got, want)
 	}
-	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2"; got != want {
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2; block_types chunk-meta:2 data:6"; got != want {
 		t.Fatalf("aggregate details = %v, want %v", got, want)
 	}
 	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)
@@ -175,6 +176,82 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	advice := row[tableColumnIndex(t, result.Table.Columns, "advice")].(string)
 	if !strings.Contains(advice, "final TSSP file-set output samples") {
 		t.Fatalf("aggregate advice = %q, want file-set recommendation", advice)
+	}
+}
+
+func TestAccumulateSummaryIncludesBlockTypes(t *testing.T) {
+	var summary Summary
+	accumulateSummary(&summary, FileReport{
+		SizeBytes:  100,
+		KeyCount:   2,
+		BlockCount: 4,
+		BlocksByType: map[string]int{
+			"float":   2,
+			"integer": 1,
+			"ignored": 0,
+		},
+	}, TimeRange{})
+	accumulateSummary(&summary, FileReport{
+		SizeBytes:  50,
+		KeyCount:   1,
+		BlockCount: 2,
+		BlocksByType: map[string]int{
+			"float":   3,
+			"ignored": -1,
+		},
+	}, TimeRange{})
+
+	if got, want := summary.TotalSizeBytes, int64(150); got != want {
+		t.Fatalf("total size = %d, want %d", got, want)
+	}
+	if got, want := summary.KeyCount, 3; got != want {
+		t.Fatalf("key count = %d, want %d", got, want)
+	}
+	if got, want := summary.BlockCount, 6; got != want {
+		t.Fatalf("block count = %d, want %d", got, want)
+	}
+	if got, want := summary.BlocksByType["float"], 5; got != want {
+		t.Fatalf("float blocks = %d, want %d", got, want)
+	}
+	if got, want := summary.BlocksByType["integer"], 1; got != want {
+		t.Fatalf("integer blocks = %d, want %d", got, want)
+	}
+	if got := summary.BlocksByType["ignored"]; got != 0 {
+		t.Fatalf("ignored blocks = %d, want omitted", got)
+	}
+}
+
+func TestReportResultOmitsEmptyReportLevelBlockTypes(t *testing.T) {
+	report := Report{
+		Files: []FileReport{{
+			Path:       "00000001-0001-00000000.tssp",
+			Format:     FormatTSSP,
+			SizeBytes:  100,
+			KeyCount:   2,
+			BlockCount: 3,
+		}},
+		Summary: Summary{
+			TotalSizeBytes: 100,
+			KeyCount:       2,
+			BlockCount:     3,
+		},
+		DecodePath: &DecodePathSummary{
+			Mode:                  "tssp-file-set-location-cursor-ascending",
+			BaselineDecodeBlocks:  3,
+			OptimizedDecodeBlocks: 1,
+		},
+	}
+
+	result := report.Result()
+	if got, want := len(result.Table.Rows), 2; got != want {
+		t.Fatalf("table rows = %d, want %d", got, want)
+	}
+	row := result.Table.Rows[1]
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "file")], "<file-set>"; got != want {
+		t.Fatalf("aggregate file = %v, want %v", got, want)
+	}
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=1"; got != want {
+		t.Fatalf("aggregate details = %v, want %v", got, want)
 	}
 }
 
