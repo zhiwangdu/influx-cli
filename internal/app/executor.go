@@ -126,27 +126,31 @@ func (e *Executor) executeMeta(ctx context.Context, input string) (result.Result
 		snapshot := e.Session.Snapshot()
 		q := query.New("SHOW MEASUREMENTS", snapshot.Database, snapshot.RP, snapshot.Precision)
 		return e.Adapter.Query(ctx, q)
-	case ":schema", ":fields", ":tags":
+	case ":schema":
 		if len(fields) != 2 {
 			return result.Result{}, fmt.Errorf("usage: %s <measurement>", command)
 		}
-		sessionSnapshot := e.Session.Snapshot()
-		schemaSnapshot, err := e.Adapter.GetSchema(ctx, schema.Scope{
-			Database:        sessionSnapshot.Database,
-			RetentionPolicy: sessionSnapshot.RP,
-			Measurement:     fields[1],
-		})
+		schemaSnapshot, err := e.schemaSnapshot(ctx, fields[1])
 		if err != nil {
 			return result.Result{}, err
 		}
-		switch command {
-		case ":fields":
-			return fieldsResult(schemaSnapshot), nil
-		case ":tags":
-			return tagsResult(schemaSnapshot), nil
-		default:
-			return result.SchemaResult(schemaSnapshot), nil
+		return result.SchemaResult(schemaSnapshot), nil
+	case ":fields", ":tags":
+		if len(fields) > 2 {
+			return result.Result{}, fmt.Errorf("usage: %s [measurement]", command)
 		}
+		measurement := ""
+		if len(fields) == 2 {
+			measurement = fields[1]
+		}
+		schemaSnapshot, err := e.schemaSnapshot(ctx, measurement)
+		if err != nil {
+			return result.Result{}, err
+		}
+		if command == ":fields" {
+			return fieldsResult(schemaSnapshot), nil
+		}
+		return tagsResult(schemaSnapshot), nil
 	case ":refresh":
 		if len(fields) != 2 || strings.ToLower(fields[1]) != "schema" {
 			return result.Result{}, fmt.Errorf("usage: :refresh schema")
@@ -185,6 +189,16 @@ func contextResult(database, retentionPolicy string) result.Result {
 	table.AddRow("database", database)
 	table.AddRow("retention_policy", retentionPolicy)
 	return result.FromTable(table)
+}
+
+func (e *Executor) schemaSnapshot(ctx context.Context, measurement string) (schema.Snapshot, error) {
+	// Empty measurement is the adapter contract for database-wide schema lookup.
+	snapshot := e.Session.Snapshot()
+	return e.Adapter.GetSchema(ctx, schema.Scope{
+		Database:        snapshot.Database,
+		RetentionPolicy: snapshot.RP,
+		Measurement:     measurement,
+	})
 }
 
 func fieldsResult(snapshot schema.Snapshot) result.Result {
@@ -266,8 +280,8 @@ func helpResult() result.Result {
 	table.AddRow(":dbs", "show databases")
 	table.AddRow(":measurements", "show measurements in current database")
 	table.AddRow(":msts", "alias for :measurements")
-	table.AddRow(":fields <measurement>", "show field keys for a measurement")
-	table.AddRow(":tags <measurement>", "show tag keys for a measurement")
+	table.AddRow(":fields [measurement]", "show field keys for all measurements or one measurement")
+	table.AddRow(":tags [measurement]", "show tag keys for all measurements or one measurement")
 	table.AddRow(":schema <measurement>", "show field and tag keys for a measurement")
 	table.AddRow(":refresh schema", "clear autocomplete schema cache")
 	table.AddRow(":format [format]", "show or set REPL render format: auto, table, sparkline, chart, json")

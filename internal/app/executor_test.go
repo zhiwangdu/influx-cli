@@ -194,13 +194,82 @@ func TestExecutorFieldsAndTagsCommandsUseMeasurementSchema(t *testing.T) {
 	}
 }
 
-func TestExecutorFieldsAndTagsRejectInvalidMeasurementArity(t *testing.T) {
+func TestExecutorFieldsAndTagsCommandsUseDatabaseSchemaWithoutMeasurement(t *testing.T) {
+	fake := newFakeAdapter()
+	session := NewSession(config.Effective{
+		Adapter:         "fake",
+		Database:        "metrics",
+		RetentionPolicy: "autogen",
+		Precision:       "rfc3339",
+	})
+	executor := NewExecutor(session, fake)
+
+	fields, err := executor.Execute(context.Background(), ":fields")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fields.Table.Columns, []string{"measurement", "field", "type"}; !equalStringSlices(got, want) {
+		t.Fatalf("field columns = %#v, want %#v", got, want)
+	}
+	if got, want := fields.Table.RowCount(), 4; got != want {
+		t.Fatalf("field rows = %d, want %d", got, want)
+	}
+	if !hasTableRow(fields.Table.Rows, "cpu", "usage_idle", "float") ||
+		!hasTableRow(fields.Table.Rows, "disk", "used_bytes", "integer") ||
+		!hasTableRow(fields.Table.Rows, "mem", "used_percent", "float") {
+		t.Fatalf("unexpected field rows: %#v", fields.Table.Rows)
+	}
+	if fake.schemaScopes[0].Measurement != "" {
+		t.Fatalf("field schema measurement = %q, want database-wide schema", fake.schemaScopes[0].Measurement)
+	}
+
+	tags, err := executor.Execute(context.Background(), ":tags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tags.Table.Columns, []string{"measurement", "tag"}; !equalStringSlices(got, want) {
+		t.Fatalf("tag columns = %#v, want %#v", got, want)
+	}
+	if got, want := tags.Table.RowCount(), 4; got != want {
+		t.Fatalf("tag rows = %d, want %d", got, want)
+	}
+	if !hasTableRow(tags.Table.Rows, "cpu", "host") ||
+		!hasTableRow(tags.Table.Rows, "cpu", "region") ||
+		!hasTableRow(tags.Table.Rows, "disk", "path") ||
+		!hasTableRow(tags.Table.Rows, "mem", "host") {
+		t.Fatalf("unexpected tag rows: %#v", tags.Table.Rows)
+	}
+	if fake.schemaScopes[1].Measurement != "" {
+		t.Fatalf("tag schema measurement = %q, want database-wide schema", fake.schemaScopes[1].Measurement)
+	}
+}
+
+func TestExecutorSchemaFieldsTagsRejectInvalidArity(t *testing.T) {
 	executor := newTestExecutor()
-	for _, command := range []string{":fields", ":fields cpu extra", ":tags", ":tags cpu extra"} {
+	for _, command := range []string{":fields cpu extra", ":tags cpu extra", ":schema", ":schema cpu extra"} {
 		if _, err := executor.Execute(context.Background(), command); err == nil {
 			t.Fatalf("%s succeeded with invalid measurement arity", command)
 		}
 	}
+}
+
+func hasTableRow(rows [][]any, values ...any) bool {
+	for _, row := range rows {
+		if len(row) != len(values) {
+			continue
+		}
+		matches := true
+		for i := range values {
+			if row[i] != values[i] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
 }
 
 func newTestExecutor() *Executor {

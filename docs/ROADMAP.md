@@ -123,8 +123,8 @@ REPL meta command：
 :hist [limit] [filter]
 :measurements
 :msts
-:fields <measurement>
-:tags <measurement>
+:fields [measurement]
+:tags [measurement]
 :schema <measurement>
 :refresh schema
 :cancel
