@@ -16,6 +16,8 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				BaselineDecodeBlocks:        3,
 				OptimizedDecodeBlocks:       1,
 				SavedDecodeBlocks:           2,
+				LocationBlocksByType:        map[string]int{"chunk-meta": 2, "meta-index": 1},
+				DecodeBlocksByType:          map[string]int{"chunk-meta": 1},
 				BaselineDecodeBytes:         288,
 				OptimizedDecodeBytes:        96,
 				SavedDecodeBytes:            192,
@@ -55,6 +57,8 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 	for _, want := range []string{
 		"tssp-location-cursor-ascending",
 		"blocks 3->1",
+		"location_block_types chunk-meta:2 meta-index:1",
+		"decode_block_types chunk-meta:1",
 		"saved_bytes 192",
 		"segments 3->1",
 		"cursor_reads 3->1",
@@ -93,6 +97,18 @@ func TestDecodePathTextOmitsEmptyFilterOperatorCounts(t *testing.T) {
 	}
 }
 
+func TestDecodePathTextOmitsEmptyBlockTypeCounts(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{
+		LocationBlocksByType: map[string]int{"chunk-meta": 0},
+		DecodeBlocksByType:   map[string]int{"chunk-meta": -1},
+	})
+	for _, notWant := range []string{"location_block_types", "decode_block_types"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("decode path text = %q, want no %s segment", text, notWant)
+		}
+	}
+}
+
 func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	report := Report{
 		Files: []FileReport{
@@ -126,6 +142,8 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 			BaselineDecodeBlocks:  8,
 			OptimizedDecodeBlocks: 3,
 			SavedDecodeBlocks:     5,
+			LocationBlocksByType:  map[string]int{"chunk-meta": 6, "meta-index": 2},
+			DecodeBlocksByType:    map[string]int{"chunk-meta": 3},
 			Recommendations: []string{
 				"final TSSP file-set output samples include locally deduplicated rows",
 			},
@@ -168,6 +186,8 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	for _, want := range []string{
 		"tssp-file-set-location-cursor-ascending",
 		"blocks 8->3",
+		"location_block_types chunk-meta:6 meta-index:2",
+		"decode_block_types chunk-meta:3",
 	} {
 		if !strings.Contains(decodeText, want) {
 			t.Fatalf("aggregate decode path = %q, want %q", decodeText, want)

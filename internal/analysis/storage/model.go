@@ -787,6 +787,12 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary.BaselineDecodeBlocks > 0 || summary.OptimizedDecodeBlocks > 0 || summary.SavedDecodeBlocks > 0 {
 		parts = append(parts, fmt.Sprintf("blocks %d->%d", summary.BaselineDecodeBlocks, summary.OptimizedDecodeBlocks))
 	}
+	if locationBlockTypes := countMapText(summary.LocationBlocksByType); locationBlockTypes != "" {
+		parts = append(parts, "location_block_types "+locationBlockTypes)
+	}
+	if decodeBlockTypes := countMapText(summary.DecodeBlocksByType); decodeBlockTypes != "" {
+		parts = append(parts, "decode_block_types "+decodeBlockTypes)
+	}
 	if summary.SavedDecodeBytes > 0 {
 		parts = append(parts, fmt.Sprintf("saved_bytes %d", summary.SavedDecodeBytes))
 	}
