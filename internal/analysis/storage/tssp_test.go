@@ -993,6 +993,12 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_none_filter_evaluations"], "0"; got != want {
 		t.Fatalf("data block probe none filter evaluations = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_filter_evaluation_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter evaluation matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_evaluation_misses"], "2"; got != want {
+		t.Fatalf("data block probe filter evaluation misses = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "=:1,>:2"; got != want {
 		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
 	}
@@ -1011,6 +1017,12 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	}
 	if got, want := decode.DataBlockProbeNoneEvals, 0; got != want {
 		t.Fatalf("decode none filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterEvalHits, 1; got != want {
+		t.Fatalf("decode filter evaluation matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterEvalMiss, 2; got != want {
+		t.Fatalf("decode filter evaluation misses = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeFilterOps["="], 1; got != want {
 		t.Fatalf("decode equality filter evaluations = %d, want %d", got, want)
@@ -1032,6 +1044,9 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "required=2 any=1 none=0") {
 		t.Fatalf("recommendations = %v, want predicate clause breakdown", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "matches=1 misses=2") {
+		t.Fatalf("recommendations = %v, want predicate match/miss breakdown", decode.Recommendations)
 	}
 }
 
@@ -1078,12 +1093,24 @@ func TestAnalyzeTSSPNoneFieldFilterRejectsMatchingRows(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_none_filter_evaluations"], "2"; got != want {
 		t.Fatalf("data block probe none filter evaluations = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_filter_evaluation_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter evaluation matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_evaluation_misses"], "1"; got != want {
+		t.Fatalf("data block probe filter evaluation misses = %q, want %q", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("decode path is nil")
 	}
 	if got, want := decode.DataBlockProbeNoneEvals, 2; got != want {
 		t.Fatalf("decode none filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterEvalHits, 1; got != want {
+		t.Fatalf("decode filter evaluation matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterEvalMiss, 1; got != want {
+		t.Fatalf("decode filter evaluation misses = %d, want %d", got, want)
 	}
 	wantNone := []FieldFilter{{Key: "status", Value: "false"}}
 	if got := decode.QueryNoneFields; !equalFieldFilters(got, wantNone) {

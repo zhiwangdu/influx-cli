@@ -34,6 +34,8 @@ type tsspAttachedDataProbe struct {
 	FilterRequiredEvals int
 	FilterAnyEvals      int
 	FilterNoneEvals     int
+	FilterEvalMatches   int
+	FilterEvalMisses    int
 	FilterOperators     map[string]int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
@@ -179,6 +181,8 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 					probe.FilterRequiredEvals += filterStats.RequiredEvaluations
 					probe.FilterAnyEvals += filterStats.AnyEvaluations
 					probe.FilterNoneEvals += filterStats.NoneEvaluations
+					probe.FilterEvalMatches += filterStats.MatchEvaluations
+					probe.FilterEvalMisses += filterStats.MissEvaluations
 					addTSSPFilterOperatorCounts(probe.FilterOperators, filterStats.OperatorEvaluations)
 				}
 				chunkOutputPoints += matchedRows
@@ -282,16 +286,23 @@ type tsspDataBlockFilterStats struct {
 	RequiredEvaluations int
 	AnyEvaluations      int
 	NoneEvaluations     int
+	MatchEvaluations    int
+	MissEvaluations     int
 	OperatorEvaluations map[string]int
 }
 
-func (s *tsspDataBlockFilterStats) observe(filter FieldFilter, clause string) {
+func (s *tsspDataBlockFilterStats) observe(filter FieldFilter, clause string, matched bool) {
 	if s.OperatorEvaluations == nil {
 		s.OperatorEvaluations = map[string]int{}
 	}
 	op := fieldFilterOperator(filter)
 	s.Evaluations++
 	s.OperatorEvaluations[op]++
+	if matched {
+		s.MatchEvaluations++
+	} else {
+		s.MissEvaluations++
+	}
 	switch clause {
 	case "required":
 		s.RequiredEvaluations++
@@ -337,8 +348,9 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		}
 		match := true
 		for _, filterBlock := range filterBlocks {
-			stats.observe(filterBlock.filter, "required")
-			if !tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter) {
+			predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+			stats.observe(filterBlock.filter, "required", predicateMatch)
+			if !predicateMatch {
 				match = false
 				break
 			}
@@ -346,8 +358,9 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		if match && len(anyFilterBlocks) > 0 {
 			match = false
 			for _, filterBlock := range anyFilterBlocks {
-				stats.observe(filterBlock.filter, "any")
-				if tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter) {
+				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+				stats.observe(filterBlock.filter, "any", predicateMatch)
+				if predicateMatch {
 					match = true
 					break
 				}
@@ -355,8 +368,9 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		}
 		if match && len(noneFilterBlocks) > 0 {
 			for _, filterBlock := range noneFilterBlocks {
-				stats.observe(filterBlock.filter, "none")
-				if tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter) {
+				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+				stats.observe(filterBlock.filter, "none", predicateMatch)
+				if predicateMatch {
 					match = false
 					break
 				}

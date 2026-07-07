@@ -151,6 +151,8 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["data_block_probe_required_filter_evaluations"] = fmt.Sprint(dataProbe.FilterRequiredEvals)
 			report.Extra["data_block_probe_any_filter_evaluations"] = fmt.Sprint(dataProbe.FilterAnyEvals)
 			report.Extra["data_block_probe_none_filter_evaluations"] = fmt.Sprint(dataProbe.FilterNoneEvals)
+			report.Extra["data_block_probe_filter_evaluation_matches"] = fmt.Sprint(dataProbe.FilterEvalMatches)
+			report.Extra["data_block_probe_filter_evaluation_misses"] = fmt.Sprint(dataProbe.FilterEvalMisses)
 			if len(dataProbe.FilterOperators) > 0 {
 				report.Extra["data_block_probe_filter_operator_evaluations"] = tsspDetachedDataProbeTypeSummary(dataProbe.FilterOperators)
 			}
@@ -389,6 +391,8 @@ type tsspDetachedDataProbe struct {
 	FilterRequiredEvals int
 	FilterAnyEvals      int
 	FilterNoneEvals     int
+	FilterEvalMatches   int
+	FilterEvalMisses    int
 	FilterOperators     map[string]int
 	BlockTypes          map[string]int
 	chunkAvailable      map[uint64]bool
@@ -617,6 +621,8 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 					probe.FilterRequiredEvals += filterStats.RequiredEvaluations
 					probe.FilterAnyEvals += filterStats.AnyEvaluations
 					probe.FilterNoneEvals += filterStats.NoneEvaluations
+					probe.FilterEvalMatches += filterStats.MatchEvaluations
+					probe.FilterEvalMisses += filterStats.MissEvaluations
 					addTSSPFilterOperatorCounts(probe.FilterOperators, filterStats.OperatorEvaluations)
 				}
 				chunkOutputPoints += matchedRows
@@ -2260,6 +2266,8 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeRequiredEvals = dataProbe.FilterRequiredEvals
 		summary.DataBlockProbeAnyEvals = dataProbe.FilterAnyEvals
 		summary.DataBlockProbeNoneEvals = dataProbe.FilterNoneEvals
+		summary.DataBlockProbeFilterEvalHits = dataProbe.FilterEvalMatches
+		summary.DataBlockProbeFilterEvalMiss = dataProbe.FilterEvalMisses
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
@@ -2606,8 +2614,10 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 	}
 	if summary.DataBlockProbeFilterEvals > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"executed %d detached TSSP decoded-row field predicate evaluation(s): required=%d any=%d none=%d",
+			"executed %d detached TSSP decoded-row field predicate evaluation(s): matches=%d misses=%d required=%d any=%d none=%d",
 			summary.DataBlockProbeFilterEvals,
+			summary.DataBlockProbeFilterEvalHits,
+			summary.DataBlockProbeFilterEvalMiss,
 			summary.DataBlockProbeRequiredEvals,
 			summary.DataBlockProbeAnyEvals,
 			summary.DataBlockProbeNoneEvals,

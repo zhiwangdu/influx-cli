@@ -137,6 +137,8 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeRequiredEvals = dataProbe.FilterRequiredEvals
 		summary.DataBlockProbeAnyEvals = dataProbe.FilterAnyEvals
 		summary.DataBlockProbeNoneEvals = dataProbe.FilterNoneEvals
+		summary.DataBlockProbeFilterEvalHits = dataProbe.FilterEvalMatches
+		summary.DataBlockProbeFilterEvalMiss = dataProbe.FilterEvalMisses
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 	}
@@ -397,6 +399,8 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	dst.DataBlockProbeRequiredEvals += src.DataBlockProbeRequiredEvals
 	dst.DataBlockProbeAnyEvals += src.DataBlockProbeAnyEvals
 	dst.DataBlockProbeNoneEvals += src.DataBlockProbeNoneEvals
+	dst.DataBlockProbeFilterEvalHits += src.DataBlockProbeFilterEvalHits
+	dst.DataBlockProbeFilterEvalMiss += src.DataBlockProbeFilterEvalMiss
 	addTSSPDecodePathCounts(dst.DataBlockProbeFilterOps, src.DataBlockProbeFilterOps)
 	dst.IteratorCostFiles += src.IteratorCostFiles
 	dst.IteratorCostBlocks += src.IteratorCostBlocks
@@ -792,8 +796,10 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if summary.DataBlockProbeFilterEvals > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"executed %d TSSP decoded-row field predicate evaluation(s): required=%d any=%d none=%d",
+			"executed %d TSSP decoded-row field predicate evaluation(s): matches=%d misses=%d required=%d any=%d none=%d",
 			summary.DataBlockProbeFilterEvals,
+			summary.DataBlockProbeFilterEvalHits,
+			summary.DataBlockProbeFilterEvalMiss,
 			summary.DataBlockProbeRequiredEvals,
 			summary.DataBlockProbeAnyEvals,
 			summary.DataBlockProbeNoneEvals,
