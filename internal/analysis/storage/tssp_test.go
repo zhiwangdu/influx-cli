@@ -3034,6 +3034,89 @@ func TestAnalyzeTSSPSamplesAttachedFloatFullUnsupportedCodecReason(t *testing.T)
 	}
 }
 
+func TestAnalyzeTSSPAttachedShortDataBlockBreakdown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithShortDataBlock(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_blocks"], "2"; got != want {
+		t.Fatalf("data block probe blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_valid_blocks"], "1"; got != want {
+		t.Fatalf("data block probe valid blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_failures"], "1"; got != want {
+		t.Fatalf("data block probe failures = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_short_blocks"], "1"; got != want {
+		t.Fatalf("data block probe short blocks = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_unknown_block_types"], "0"; got != want {
+		t.Fatalf("data block probe unknown block types = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_read_errors"], "0"; got != want {
+		t.Fatalf("data block probe read errors = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_failure_reasons"], "segment_overlap_data_header_unavailable:1"; got != want {
+		t.Fatalf("data block probe failure reasons = %q, want %q", got, want)
+	}
+	if !containsString(report.Notices, "TSSP data block probe found 1 invalid block") {
+		t.Fatalf("notices = %v, want data block probe notice", report.Notices)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.DataBlockProbeBlocks, 2; got != want {
+		t.Fatalf("data block probe blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeValidBlocks, 1; got != want {
+		t.Fatalf("data block probe valid blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFailures, 1; got != want {
+		t.Fatalf("data block probe failures = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeShortBlocks, 1; got != want {
+		t.Fatalf("data block probe short blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeUnknownTypes, 0; got != want {
+		t.Fatalf("data block probe unknown block types = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeReadErrors, 0; got != want {
+		t.Fatalf("data block probe read errors = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFailureReasons["segment_overlap_data_header_unavailable"], 1; got != want {
+		t.Fatalf("data block probe header failure reason = %d, want %d", got, want)
+	}
+	if got, want := decode.ValueOutputUnavailableBlocks, 1; got != want {
+		t.Fatalf("value output unavailable blocks = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.Samples[0].Reason, "segment_overlap_data_header_unavailable"; got != want {
+		t.Fatalf("sample reason = %q, want %q", got, want)
+	}
+	if !containsString(decode.Recommendations, "TSSP data block probe found 1 invalid block") {
+		t.Fatalf("recommendations = %v, want data block probe failure recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPSamplesAttachedIntegerFullUncompressedBlocks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSPWithIntegerFullData(path); err != nil {
@@ -4879,6 +4962,61 @@ func writeTestTSSPWithUnsupportedFloatFullCodec(path string, codec byte) ([]int6
 	})
 	writeGeminiInt64(&buf, trailerOffset)
 	return times, os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPWithShortDataBlock(path string) error {
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+
+	dataOffset := int64(buf.Len())
+	valueOffset := int64(buf.Len())
+	buf.WriteByte(31)
+	valueSize := uint32(1)
+	timeSize := writeTestTSSPAttachedIntegerFullBlock(&buf, []int64{333, 444})
+	dataSize := int64(valueSize + timeSize)
+	chunk := testTSSPChunkSpec{
+		sid:      7,
+		minTime:  333,
+		maxTime:  444,
+		offset:   valueOffset,
+		size:     valueSize,
+		timeSize: timeSize,
+	}
+
+	payload := testTSSPChunkMetaPayload(chunk)
+	payloadOffset := int64(buf.Len())
+	buf.Write(payload)
+
+	metaOffset := int64(buf.Len())
+	writeTestTSSPMetaIndex(&buf, tsspMetaIndex{
+		ID:      7,
+		MinTime: 333,
+		MaxTime: 444,
+		Offset:  payloadOffset,
+		Count:   1,
+		Size:    uint32(len(payload)),
+	})
+
+	trailerOffset := int64(buf.Len())
+	writeTestTSSPTrailer(&buf, tsspTrailer{
+		DataOffset:         dataOffset,
+		DataSize:           dataSize,
+		IndexSize:          metaOffset - dataOffset - dataSize,
+		MetaIndexSize:      int64(buf.Len()) - metaOffset,
+		BloomSize:          0,
+		IDTimeSize:         0,
+		IDCount:            1,
+		MinID:              7,
+		MaxID:              7,
+		MinTime:            333,
+		MaxTime:            444,
+		MetaIndexItemCount: 1,
+		ChunkMetaCompress:  tsspChunkMetaCompressNone,
+		MeasurementName:    "cpu",
+	})
+	writeGeminiInt64(&buf, trailerOffset)
+	return os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
 func writeTestTSSPWithIntegerFullData(path string) error {
