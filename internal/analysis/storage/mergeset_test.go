@@ -968,6 +968,56 @@ func TestAnalyzeMergesetBlocksMismatchNotice(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetMetadataItemOrderNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "2_1_0000000000000001")
+	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
+		ItemsCount:  2,
+		BlocksCount: 1,
+		FirstItem:   "01",
+		LastItem:    "02",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := mergesetPartMetadata{
+		ItemsCount:  2,
+		BlocksCount: 1,
+		FirstItem:   "ff",
+		LastItem:    "01",
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partPath, mergesetMetadataFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(report.Files), 1; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	file := report.Files[0]
+	wantNotice := "mergeset metadata first_item=ff is greater than last_item=01"
+	if !containsString(file.Notices, wantNotice) {
+		t.Fatalf("notices = %v, want %q", file.Notices, wantNotice)
+	}
+	if !containsString(report.Notices, wantNotice) {
+		t.Fatalf("report notices = %v, want %q", report.Notices, wantNotice)
+	}
+	if got, want := file.Extra["first_item_hex"], "ff"; got != want {
+		t.Fatalf("first item extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["last_item_hex"], "01"; got != want {
+		t.Fatalf("last item extra = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeMergesetItemsMismatchErrors(t *testing.T) {
 	partPath := filepath.Join(t.TempDir(), "10_1_0000000000000001")
 	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{

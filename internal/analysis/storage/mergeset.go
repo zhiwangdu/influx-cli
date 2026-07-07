@@ -171,6 +171,9 @@ func analyzeMergesetPart(path string, info os.FileInfo, options Options) (FileRe
 	if err != nil {
 		return FileReport{}, err
 	}
+	if bytes.Compare(firstItem, lastItem) > 0 {
+		notices = append(notices, fmt.Sprintf("mergeset metadata first_item=%s is greater than last_item=%s", metadata.FirstItem, metadata.LastItem))
+	}
 	metaindex, metaindexErr := readMergesetMetaindex(filepath.Join(path, mergesetMetaindexFile))
 	if metaindexErr != nil {
 		notices = append(notices, fmt.Sprintf("mergeset metaindex decode unavailable: %v", metaindexErr))
