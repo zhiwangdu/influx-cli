@@ -168,6 +168,13 @@ type SecondaryIndexSummary struct {
 	PieceCount             int64  `json:"piece_count,omitempty"`
 	PartCount              int64  `json:"part_count,omitempty"`
 	ItemCount              int64  `json:"item_count,omitempty"`
+	DocumentCount          int64  `json:"document_count,omitempty"`
+	TermCount              int64  `json:"term_count,omitempty"`
+	DictionaryCount        int64  `json:"dictionary_count,omitempty"`
+	DictionaryVersionCount int64  `json:"dictionary_version_count,omitempty"`
+	PositionCount          int64  `json:"position_count,omitempty"`
+	SIDGroupCount          int64  `json:"sid_group_count,omitempty"`
+	DocumentIDCount        int64  `json:"document_id_count,omitempty"`
 	PayloadSizeBytes       int64  `json:"payload_size_bytes,omitempty"`
 	BlockSizeBytes         int64  `json:"block_size_bytes,omitempty"`
 	PieceSizeBytes         int64  `json:"piece_size_bytes,omitempty"`

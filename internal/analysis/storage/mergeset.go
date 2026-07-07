@@ -2449,6 +2449,7 @@ func addMergesetCLVTextIndexSummary(report *FileReport, summary mergesetCLVTextI
 	if !summary.Detected {
 		return
 	}
+	report.SecondaryIndex = buildMergesetCLVTextSecondaryIndexSummary(summary)
 	report.Extra["opengemini_clv_text_index_detected"] = "true"
 	report.Extra["opengemini_clv_text_index_document_rows"] = fmt.Sprint(summary.DocumentRows)
 	report.Extra["opengemini_clv_text_index_position_entries"] = fmt.Sprint(summary.PositionEntries)
@@ -2478,6 +2479,22 @@ func addMergesetCLVTextIndexSummary(report *FileReport, summary mergesetCLVTextI
 	if summary.InvalidItems > 0 {
 		report.BlocksByType["opengemini-clv-text-invalid-item"] = summary.InvalidItems
 		report.Notices = append(report.Notices, fmt.Sprintf("openGemini CLV text index has %d invalid namespaced item(s)", summary.InvalidItems))
+	}
+}
+
+func buildMergesetCLVTextSecondaryIndexSummary(summary mergesetCLVTextIndexSummary) *SecondaryIndexSummary {
+	itemCount := summary.DocumentRows + summary.TermRows + summary.DictionaryRows + summary.DictionaryVersionRows
+	return &SecondaryIndexSummary{
+		Type:                   "opengemini-clv-text-mergeset",
+		Layout:                 "mergeset-namespace",
+		ItemCount:              int64(itemCount),
+		DocumentCount:          int64(summary.DocumentRows),
+		TermCount:              int64(summary.TermRows),
+		DictionaryCount:        int64(summary.DictionaryRows),
+		DictionaryVersionCount: int64(summary.DictionaryVersionRows),
+		PositionCount:          int64(summary.PositionEntries),
+		SIDGroupCount:          int64(summary.PositionSIDGroups),
+		DocumentIDCount:        int64(summary.DocumentIDs),
 	}
 }
 

@@ -3233,6 +3233,39 @@ func TestAnalyzeMergesetOpenGeminiCLVTextIndexItems(t *testing.T) {
 	if got, want := file.BlocksByType["opengemini-clv-text-dictionary-version"], 1; got != want {
 		t.Fatalf("CLV dictionary version block count = %d, want %d", got, want)
 	}
+	if file.SecondaryIndex == nil {
+		t.Fatal("expected CLV text secondary index summary")
+	}
+	if got, want := file.SecondaryIndex.Type, "opengemini-clv-text-mergeset"; got != want {
+		t.Fatalf("secondary index type = %q, want %q", got, want)
+	}
+	if got, want := file.SecondaryIndex.Layout, "mergeset-namespace"; got != want {
+		t.Fatalf("secondary index layout = %q, want %q", got, want)
+	}
+	if got, want := file.SecondaryIndex.ItemCount, int64(4); got != want {
+		t.Fatalf("secondary index item count = %d, want %d", got, want)
+	}
+	if got, want := file.SecondaryIndex.DocumentCount, int64(1); got != want {
+		t.Fatalf("secondary index document count = %d, want %d", got, want)
+	}
+	if got, want := file.SecondaryIndex.TermCount, int64(1); got != want {
+		t.Fatalf("secondary index term count = %d, want %d", got, want)
+	}
+	if got, want := file.SecondaryIndex.DictionaryCount, int64(1); got != want {
+		t.Fatalf("secondary index dictionary count = %d, want %d", got, want)
+	}
+	if got, want := file.SecondaryIndex.DictionaryVersionCount, int64(1); got != want {
+		t.Fatalf("secondary index dictionary version count = %d, want %d", got, want)
+	}
+	if got, want := file.SecondaryIndex.PositionCount, int64(2); got != want {
+		t.Fatalf("secondary index position count = %d, want %d", got, want)
+	}
+	if got, want := file.SecondaryIndex.SIDGroupCount, int64(1); got != want {
+		t.Fatalf("secondary index sid group count = %d, want %d", got, want)
+	}
+	if got, want := file.SecondaryIndex.DocumentIDCount, int64(2); got != want {
+		t.Fatalf("secondary index document id count = %d, want %d", got, want)
+	}
 	if _, ok := file.Extra["opengemini_tsi_index_detected"]; ok {
 		t.Fatalf("unexpected TSI detection for CLV text index items: %v", file.Extra)
 	}
