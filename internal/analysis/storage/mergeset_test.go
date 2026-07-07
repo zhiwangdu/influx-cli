@@ -1385,7 +1385,8 @@ func TestAnalyzeMergesetMetaindexIndexRangeOverlapAndGapNotice(t *testing.T) {
 	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format: FormatMergeset,
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1399,6 +1400,10 @@ func TestAnalyzeMergesetMetaindexIndexRangeOverlapAndGapNotice(t *testing.T) {
 	}
 	if got, want := file.Extra["metaindex_index_gap_bytes"], "1"; got != want {
 		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	wantRangeSamples := fmt.Sprintf("overlap#2 start=%d end=%d covered_end=%d,gap start=%d end=%d bytes=1", firstEnd-1, secondEnd, firstEnd, secondEnd, secondEnd+1)
+	if got := file.Extra["metaindex_index_range_samples"]; got != wantRangeSamples {
+		t.Fatalf("metaindex index range samples = %q, want %q", got, wantRangeSamples)
 	}
 	if got, want := file.BlocksByType["mergeset-metaindex-index-range-overlap"], 1; got != want {
 		t.Fatalf("metaindex range overlap block type count = %d, want %d", got, want)
@@ -1442,7 +1447,8 @@ func TestAnalyzeMergesetMetaindexIndexRangeAllOutOfBoundsNotice(t *testing.T) {
 	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format: FormatMergeset,
+		Format:           FormatMergeset,
+		BlockSampleLimit: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1456,6 +1462,9 @@ func TestAnalyzeMergesetMetaindexIndexRangeAllOutOfBoundsNotice(t *testing.T) {
 	}
 	if got, want := file.Extra["metaindex_index_gap_bytes"], "0"; got != want {
 		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_samples"], fmt.Sprintf("out_of_bounds#1 start=%d size=1 component_size=%d", len(indexData)+1, len(indexData)); got != want {
+		t.Fatalf("metaindex index range samples = %q, want %q", got, want)
 	}
 	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 0; got != want {
 		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
@@ -1502,7 +1511,8 @@ func TestAnalyzeMergesetMetaindexIndexRangeTrailingGapNotice(t *testing.T) {
 	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format: FormatMergeset,
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1513,6 +1523,9 @@ func TestAnalyzeMergesetMetaindexIndexRangeTrailingGapNotice(t *testing.T) {
 	}
 	if got, want := file.Extra["metaindex_index_gap_bytes"], "1"; got != want {
 		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["metaindex_index_range_samples"], fmt.Sprintf("gap start=%d end=%d bytes=1", len(indexData)-1, len(indexData)); got != want {
+		t.Fatalf("metaindex index range samples = %q, want %q", got, want)
 	}
 	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 1; got != want {
 		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
@@ -1553,7 +1566,8 @@ func TestAnalyzeMergesetMetaindexIndexRangePureLeadingGapNotice(t *testing.T) {
 	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format: FormatMergeset,
+		Format:           FormatMergeset,
+		BlockSampleLimit: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1568,11 +1582,51 @@ func TestAnalyzeMergesetMetaindexIndexRangePureLeadingGapNotice(t *testing.T) {
 	if got, want := file.Extra["metaindex_index_gap_bytes"], "1"; got != want {
 		t.Fatalf("metaindex index gap bytes = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["metaindex_index_range_samples"], "gap start=0 end=1 bytes=1"; got != want {
+		t.Fatalf("metaindex index range samples = %q, want %q", got, want)
+	}
 	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 1; got != want {
 		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
 	}
 	if !containsString(file.Notices, "metaindex leaves 1 index.bin byte(s) across 1 valid row range gap") {
 		t.Fatalf("notices = %v, want leading index range gap notice", file.Notices)
+	}
+}
+
+func TestMergesetRangeSamplesUsePerAnomalyLimit(t *testing.T) {
+	summary := summarizeMergesetByteRanges([]mergesetByteRange{
+		{Start: 31, Size: 1},
+		{Start: 32, Size: 1},
+		{Start: 10, Size: 10},
+		{Start: 5, Size: 10},
+		{Start: 4, Size: 10},
+		{Start: 0, Size: 2},
+		{Start: 25, Size: 1},
+	}, 30, 1)
+
+	if got, want := summary.OutOfBounds, 2; got != want {
+		t.Fatalf("out-of-bounds count = %d, want %d", got, want)
+	}
+	if got, want := summary.OrderViolations, 3; got != want {
+		t.Fatalf("order violation count = %d, want %d", got, want)
+	}
+	if got, want := summary.Overlaps, 2; got != want {
+		t.Fatalf("overlap count = %d, want %d", got, want)
+	}
+	if got, want := summary.GapRanges, 3; got != want {
+		t.Fatalf("gap count = %d, want %d", got, want)
+	}
+	if got, want := summary.GapBytes, uint64(11); got != want {
+		t.Fatalf("gap bytes = %d, want %d", got, want)
+	}
+	wantSamples := []string{
+		"out_of_bounds#1 start=31 size=1 component_size=30",
+		"order_violation#4 start=5 previous_max_start=10",
+		"gap start=2 end=4 bytes=2",
+		"overlap#4 start=5 end=15 covered_end=14",
+	}
+	if got := summary.Samples; !equalStrings(got, wantSamples) {
+		t.Fatalf("range samples = %v, want %v", got, wantSamples)
 	}
 }
 
@@ -1885,7 +1939,8 @@ func TestAnalyzeMergesetItemsRangeOrderViolationAndOverlap(t *testing.T) {
 	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format: FormatMergeset,
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1899,6 +1954,9 @@ func TestAnalyzeMergesetItemsRangeOrderViolationAndOverlap(t *testing.T) {
 	}
 	if got, want := file.Extra["items_range_gaps"], "0"; got != want {
 		t.Fatalf("items range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["items_range_samples"], fmt.Sprintf("order_violation#2 start=0 previous_max_start=1,overlap#1 start=1 end=%d covered_end=2", len(itemsData)); got != want {
+		t.Fatalf("items range samples = %q, want %q", got, want)
 	}
 	if got, want := file.BlocksByType["mergeset-items-range-order-violation"], 1; got != want {
 		t.Fatalf("items range order violation block type count = %d, want %d", got, want)
@@ -1949,7 +2007,8 @@ func TestAnalyzeMergesetItemsRangeGapAndOutOfBounds(t *testing.T) {
 	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format: FormatMergeset,
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1963,6 +2022,9 @@ func TestAnalyzeMergesetItemsRangeGapAndOutOfBounds(t *testing.T) {
 	}
 	if got, want := file.Extra["items_range_gap_bytes"], "1"; got != want {
 		t.Fatalf("items range gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["items_range_samples"], fmt.Sprintf("out_of_bounds#2 start=%d size=1 component_size=%d,gap start=0 end=1 bytes=1", len(itemsData)+1, len(itemsData)); got != want {
+		t.Fatalf("items range samples = %q, want %q", got, want)
 	}
 	if got, want := file.BlocksByType["mergeset-items-range-gap"], 1; got != want {
 		t.Fatalf("items range gap block type count = %d, want %d", got, want)
@@ -2019,7 +2081,8 @@ func TestAnalyzeMergesetLensRangeGapAndOutOfBounds(t *testing.T) {
 	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format: FormatMergeset,
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2033,6 +2096,9 @@ func TestAnalyzeMergesetLensRangeGapAndOutOfBounds(t *testing.T) {
 	}
 	if got, want := file.Extra["lens_range_gap_bytes"], "1"; got != want {
 		t.Fatalf("lens range gap bytes = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["lens_range_samples"], fmt.Sprintf("out_of_bounds#2 start=%d size=1 component_size=%d,gap start=0 end=1 bytes=1", len(lensData)+1, len(lensData)); got != want {
+		t.Fatalf("lens range samples = %q, want %q", got, want)
 	}
 	if got, want := file.BlocksByType["mergeset-lens-range-gap"], 1; got != want {
 		t.Fatalf("lens range gap block type count = %d, want %d", got, want)
@@ -2089,7 +2155,8 @@ func TestAnalyzeMergesetLensRangeOrderViolationAndOverlap(t *testing.T) {
 	writeTestMergesetPartComponents(t, partPath, metadata, metaindex, indexData, itemsData, lensData)
 
 	report, err := Analyze(context.Background(), []string{partPath}, Options{
-		Format: FormatMergeset,
+		Format:           FormatMergeset,
+		BlockSampleLimit: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2103,6 +2170,9 @@ func TestAnalyzeMergesetLensRangeOrderViolationAndOverlap(t *testing.T) {
 	}
 	if got, want := file.Extra["lens_range_gaps"], "0"; got != want {
 		t.Fatalf("lens range gaps = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["lens_range_samples"], fmt.Sprintf("order_violation#2 start=0 previous_max_start=1,overlap#1 start=1 end=%d covered_end=2", len(lensData)); got != want {
+		t.Fatalf("lens range samples = %q, want %q", got, want)
 	}
 	if got, want := file.BlocksByType["mergeset-lens-range-order-violation"], 1; got != want {
 		t.Fatalf("lens range order violation block type count = %d, want %d", got, want)

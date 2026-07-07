@@ -62,6 +62,8 @@ type mergesetRangeSummary struct {
 	Overlaps        int
 	GapRanges       int
 	GapBytes        uint64
+	Samples         []string
+	sampleCounts    map[string]int
 }
 
 type mergesetByteRange struct {
@@ -70,6 +72,7 @@ type mergesetByteRange struct {
 }
 
 type mergesetResolvedByteRange struct {
+	Index int
 	Start uint64
 	End   uint64
 }
@@ -244,7 +247,7 @@ func analyzeMergesetPart(path string, info os.FileInfo, options Options) (FileRe
 		Notices: notices,
 	}
 	if metaindexErr == nil {
-		addMergesetMetaindexSummary(&report, metaindex, componentSizes[mergesetIndexFile], metadata.BlocksCount)
+		addMergesetMetaindexSummary(&report, metaindex, componentSizes[mergesetIndexFile], metadata.BlocksCount, options)
 		indexSummary, indexNotices := readMergesetIndexBlocks(path, metaindex.Rows, componentSizes)
 		report.Notices = append(report.Notices, indexNotices...)
 		addMergesetIndexSummary(&report, indexSummary, componentSizes, metaindex, metadata.ItemsCount, firstItem, lastItem, options)
@@ -424,7 +427,7 @@ func parseMergesetMetaindexRow(data []byte) (mergesetMetaindexRow, int, error) {
 	return row, originalLen - len(data), nil
 }
 
-func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindexSummary, indexSize int64, metadataBlockCount uint64) {
+func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindexSummary, indexSize int64, metadataBlockCount uint64, options Options) {
 	rows := metaindex.Rows
 	report.BlocksByType["mergeset-metaindex-row"] = len(rows)
 	report.Extra["metaindex_row_count"] = fmt.Sprint(len(rows))
@@ -442,7 +445,7 @@ func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindex
 		totalHeaders += uint64(row.BlockHeadersCount)
 		totalIndexBytes += uint64(row.IndexBlockSize)
 	}
-	rangeSummary := summarizeMergesetMetaindexIndexRanges(rows, indexSizeUint)
+	rangeSummary := summarizeMergesetMetaindexIndexRanges(rows, indexSizeUint, options.BlockSampleLimit)
 	report.Extra["metaindex_block_headers"] = fmt.Sprint(totalHeaders)
 	report.Extra["metaindex_index_bytes"] = fmt.Sprint(totalIndexBytes)
 	report.Extra["metaindex_index_range_out_of_bounds"] = fmt.Sprint(rangeSummary.OutOfBounds)
@@ -450,6 +453,9 @@ func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindex
 	report.Extra["metaindex_index_range_overlaps"] = fmt.Sprint(rangeSummary.Overlaps)
 	report.Extra["metaindex_index_range_gaps"] = fmt.Sprint(rangeSummary.GapRanges)
 	report.Extra["metaindex_index_gap_bytes"] = fmt.Sprint(rangeSummary.GapBytes)
+	if len(rangeSummary.Samples) > 0 {
+		report.Extra["metaindex_index_range_samples"] = strings.Join(rangeSummary.Samples, ",")
+	}
 	if totalHeaders != metadataBlockCount {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex block_headers_count total=%d differs from metadata blocks_count=%d", totalHeaders, metadataBlockCount))
 	}
@@ -471,7 +477,7 @@ func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindex
 	}
 }
 
-func summarizeMergesetMetaindexIndexRanges(rows []mergesetMetaindexRow, indexSize uint64) mergesetRangeSummary {
+func summarizeMergesetMetaindexIndexRanges(rows []mergesetMetaindexRow, indexSize uint64, sampleLimit int) mergesetRangeSummary {
 	ranges := make([]mergesetByteRange, 0, len(rows))
 	for _, row := range rows {
 		ranges = append(ranges, mergesetByteRange{
@@ -479,27 +485,30 @@ func summarizeMergesetMetaindexIndexRanges(rows []mergesetMetaindexRow, indexSiz
 			Size:  uint64(row.IndexBlockSize),
 		})
 	}
-	return summarizeMergesetByteRanges(ranges, indexSize)
+	return summarizeMergesetByteRanges(ranges, indexSize, sampleLimit)
 }
 
-func summarizeMergesetByteRanges(ranges []mergesetByteRange, componentSize uint64) mergesetRangeSummary {
+func summarizeMergesetByteRanges(ranges []mergesetByteRange, componentSize uint64, sampleLimit int) mergesetRangeSummary {
 	var summary mergesetRangeSummary
 	validRanges := make([]mergesetResolvedByteRange, 0, len(ranges))
 	var maxSeenValidOffset uint64
 	haveSeenValidOffset := false
-	for _, rowRange := range ranges {
+	for i, rowRange := range ranges {
 		if rowRange.Start > componentSize || rowRange.Size > componentSize-rowRange.Start {
 			summary.OutOfBounds++
+			summary.appendSample(sampleLimit, "out_of_bounds", "out_of_bounds#%d start=%d size=%d component_size=%d", i+1, rowRange.Start, rowRange.Size, componentSize)
 			continue
 		}
 		if haveSeenValidOffset && rowRange.Start < maxSeenValidOffset {
 			summary.OrderViolations++
+			summary.appendSample(sampleLimit, "order_violation", "order_violation#%d start=%d previous_max_start=%d", i+1, rowRange.Start, maxSeenValidOffset)
 		}
 		if !haveSeenValidOffset || rowRange.Start > maxSeenValidOffset {
 			maxSeenValidOffset = rowRange.Start
 		}
 		haveSeenValidOffset = true
 		validRanges = append(validRanges, mergesetResolvedByteRange{
+			Index: i + 1,
 			Start: rowRange.Start,
 			End:   rowRange.Start + rowRange.Size,
 		})
@@ -507,7 +516,7 @@ func summarizeMergesetByteRanges(ranges []mergesetByteRange, componentSize uint6
 	if len(validRanges) == 0 {
 		return summary
 	}
-	sort.Slice(validRanges, func(i, j int) bool {
+	sort.SliceStable(validRanges, func(i, j int) bool {
 		if validRanges[i].Start == validRanges[j].Start {
 			return validRanges[i].End < validRanges[j].End
 		}
@@ -519,12 +528,14 @@ func summarizeMergesetByteRanges(ranges []mergesetByteRange, componentSize uint6
 			if rowRange.Start > 0 {
 				summary.GapRanges++
 				summary.GapBytes += rowRange.Start
+				summary.appendSample(sampleLimit, "gap", "gap start=0 end=%d bytes=%d", rowRange.Start, rowRange.Start)
 			}
 			coveredEnd = rowRange.End
 			continue
 		}
 		if rowRange.Start < coveredEnd {
 			summary.Overlaps++
+			summary.appendSample(sampleLimit, "overlap", "overlap#%d start=%d end=%d covered_end=%d", rowRange.Index, rowRange.Start, rowRange.End, coveredEnd)
 			if rowRange.End > coveredEnd {
 				coveredEnd = rowRange.End
 			}
@@ -533,14 +544,30 @@ func summarizeMergesetByteRanges(ranges []mergesetByteRange, componentSize uint6
 		if rowRange.Start > coveredEnd {
 			summary.GapRanges++
 			summary.GapBytes += rowRange.Start - coveredEnd
+			summary.appendSample(sampleLimit, "gap", "gap start=%d end=%d bytes=%d", coveredEnd, rowRange.Start, rowRange.Start-coveredEnd)
 		}
 		coveredEnd = rowRange.End
 	}
 	if coveredEnd < componentSize {
 		summary.GapRanges++
 		summary.GapBytes += componentSize - coveredEnd
+		summary.appendSample(sampleLimit, "gap", "gap start=%d end=%d bytes=%d", coveredEnd, componentSize, componentSize-coveredEnd)
 	}
 	return summary
+}
+
+func (s *mergesetRangeSummary) appendSample(sampleLimit int, kind, format string, args ...any) {
+	if sampleLimit <= 0 {
+		return
+	}
+	if s.sampleCounts == nil {
+		s.sampleCounts = map[string]int{}
+	}
+	if s.sampleCounts[kind] >= sampleLimit {
+		return
+	}
+	s.sampleCounts[kind]++
+	s.Samples = append(s.Samples, fmt.Sprintf(format, args...))
 }
 
 func readMergesetIndexBlocks(path string, rows []mergesetMetaindexRow, componentSizes map[string]int64) (mergesetIndexSummary, []string) {
@@ -755,8 +782,8 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 			invalidCommonPrefix++
 		}
 	}
-	itemsRangeSummary := summarizeMergesetByteRanges(itemRanges, itemsSize)
-	lensRangeSummary := summarizeMergesetByteRanges(lensRanges, lensSize)
+	itemsRangeSummary := summarizeMergesetByteRanges(itemRanges, itemsSize, options.BlockSampleLimit)
+	lensRangeSummary := summarizeMergesetByteRanges(lensRanges, lensSize, options.BlockSampleLimit)
 	report.Extra["index_first_block_item_hex"] = hex.EncodeToString(summary.Headers[0].FirstItem)
 	report.Extra["index_last_block_item_hex"] = hex.EncodeToString(summary.Headers[len(summary.Headers)-1].FirstItem)
 	report.Extra["item_count_from_blocks"] = fmt.Sprint(itemCount)
@@ -772,11 +799,17 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	report.Extra["items_range_overlaps"] = fmt.Sprint(itemsRangeSummary.Overlaps)
 	report.Extra["items_range_gaps"] = fmt.Sprint(itemsRangeSummary.GapRanges)
 	report.Extra["items_range_gap_bytes"] = fmt.Sprint(itemsRangeSummary.GapBytes)
+	if len(itemsRangeSummary.Samples) > 0 {
+		report.Extra["items_range_samples"] = strings.Join(itemsRangeSummary.Samples, ",")
+	}
 	report.Extra["lens_range_out_of_bounds"] = fmt.Sprint(lensRangeSummary.OutOfBounds)
 	report.Extra["lens_range_order_violations"] = fmt.Sprint(lensRangeSummary.OrderViolations)
 	report.Extra["lens_range_overlaps"] = fmt.Sprint(lensRangeSummary.Overlaps)
 	report.Extra["lens_range_gaps"] = fmt.Sprint(lensRangeSummary.GapRanges)
 	report.Extra["lens_range_gap_bytes"] = fmt.Sprint(lensRangeSummary.GapBytes)
+	if len(lensRangeSummary.Samples) > 0 {
+		report.Extra["lens_range_samples"] = strings.Join(lensRangeSummary.Samples, ",")
+	}
 	if uint64(len(summary.Headers)) != metaindexBlockHeaders(metaindex.Rows) {
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset decoded index block headers=%d differs from metaindex block_headers=%d", len(summary.Headers), metaindexBlockHeaders(metaindex.Rows)))
 	}
