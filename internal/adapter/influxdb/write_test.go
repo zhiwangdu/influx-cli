@@ -43,11 +43,10 @@ func TestWriteLineProtocolPostsToWriteEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := New(Config{
-		URL:      server.URL,
-		Username: "u",
-		Password: "p",
-	})
+	config := configForServerURL(t, server.URL)
+	config.Username = "u"
+	config.Password = "p"
+	adapter, err := New(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +71,10 @@ func TestWriteLineProtocolUsesConfiguredDefaults(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := New(Config{
-		URL:             server.URL,
-		Database:        "defaultdb",
-		RetentionPolicy: "raw",
-	})
+	config := configForServerURL(t, server.URL)
+	config.Database = "defaultdb"
+	config.RetentionPolicy = "raw"
+	adapter, err := New(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +90,7 @@ func TestWriteLineProtocolReturnsHTTPStatusError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := New(Config{URL: server.URL})
+	adapter, err := New(configForServerURL(t, server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +100,26 @@ func TestWriteLineProtocolReturnsHTTPStatusError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bad line protocol") {
 		t.Fatalf("error = %q, want response body", err)
+	}
+}
+
+func TestWriteLineProtocolUsesUnsafeSSLClient(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/write" {
+			t.Fatalf("path = %q, want /write", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	config := configForServerURL(t, server.URL)
+	config.UnsafeSSL = true
+	adapter, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.WriteLineProtocol(context.Background(), adapterpkgWriteRequest("metrics", "", "ns", []byte("cpu value=1 42"))); err != nil {
+		t.Fatal(err)
 	}
 }
 

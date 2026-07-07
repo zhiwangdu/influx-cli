@@ -3,10 +3,11 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/url"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +28,10 @@ type Defaults struct {
 
 type Profile struct {
 	Adapter         string `yaml:"adapter"`
-	URL             string `yaml:"url"`
+	Host            string `yaml:"host"`
+	Port            *int   `yaml:"port"`
+	SSL             *bool  `yaml:"ssl"`
+	UnsafeSSL       *bool  `yaml:"unsafeSsl"`
 	Username        string `yaml:"username"`
 	Password        string `yaml:"password"`
 	Token           string `yaml:"token"`
@@ -36,10 +40,23 @@ type Profile struct {
 	Precision       string `yaml:"precision"`
 }
 
+type IntOverride struct {
+	Value int
+	Set   bool
+}
+
+type BoolOverride struct {
+	Value bool
+	Set   bool
+}
+
 type Overrides struct {
 	Profile         string
 	Adapter         string
-	URL             string
+	Host            string
+	Port            IntOverride
+	SSL             BoolOverride
+	UnsafeSSL       BoolOverride
 	Username        string
 	Password        string
 	Token           string
@@ -53,7 +70,10 @@ type Overrides struct {
 type Effective struct {
 	Profile         string
 	Adapter         string
-	URL             string
+	Host            string
+	Port            int
+	SSL             bool
+	UnsafeSSL       bool
 	Username        string
 	Password        string
 	Token           string
@@ -92,6 +112,9 @@ func Resolve(path string, overrides Overrides, getenv EnvGetter) (Effective, err
 	if err != nil {
 		return Effective{}, err
 	}
+	if strings.TrimSpace(getenv("INFLUX_CLI_URL")) != "" {
+		return Effective{}, errors.New("INFLUX_CLI_URL has been removed; use INFLUX_CLI_HOST, INFLUX_CLI_PORT, and INFLUX_CLI_SSL instead")
+	}
 
 	profileName := firstNonEmpty(overrides.Profile, getenv("INFLUX_CLI_PROFILE"), file.Defaults.Profile)
 	profile, hasProfile := file.Profiles[profileName]
@@ -105,7 +128,10 @@ func Resolve(path string, overrides Overrides, getenv EnvGetter) (Effective, err
 	effective := Effective{
 		Profile:         profileName,
 		Adapter:         firstNonEmpty(profile.Adapter, "influxdb"),
-		URL:             firstNonEmpty(profile.URL, "http://127.0.0.1:8086"),
+		Host:            firstNonEmpty(profile.Host, "localhost"),
+		Port:            intValue(profile.Port, 8086),
+		SSL:             boolValue(profile.SSL, false),
+		UnsafeSSL:       boolValue(profile.UnsafeSSL, false),
 		Username:        profile.Username,
 		Password:        profile.Password,
 		Token:           profile.Token,
@@ -117,7 +143,9 @@ func Resolve(path string, overrides Overrides, getenv EnvGetter) (Effective, err
 		ConfigFound:     found,
 	}
 
-	applyEnv(&effective, getenv)
+	if err := applyEnv(&effective, getenv); err != nil {
+		return Effective{}, err
+	}
 	applyOverrides(&effective, overrides)
 
 	timeoutRaw := firstNonEmpty(overrides.Timeout, getenv("INFLUX_CLI_TIMEOUT"), file.Defaults.Timeout, "10s")
@@ -140,12 +168,14 @@ func (e Effective) Validate() error {
 	if strings.TrimSpace(e.Adapter) == "" {
 		return errors.New("adapter is required")
 	}
-	parsed, err := url.Parse(e.URL)
-	if err != nil {
-		return fmt.Errorf("parse URL: %w", err)
+	if _, err := NormalizeHost(e.Host); err != nil {
+		return err
 	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return errors.New("URL must include scheme and host")
+	if e.Port < 1 || e.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", e.Port)
+	}
+	if e.UnsafeSSL && !e.SSL {
+		return errors.New("unsafeSsl requires ssl; set --ssl when using --unsafeSsl")
 	}
 	if e.Render == "" {
 		return errors.New("render format is required")
@@ -156,11 +186,41 @@ func (e Effective) Validate() error {
 	return nil
 }
 
+func NormalizeHost(host string) (string, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", errors.New("host is required")
+	}
+	if strings.Contains(host, "://") || strings.ContainsAny(host, "/?#") {
+		return "", errors.New("host must not include a scheme, path, query, or fragment")
+	}
+	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
+			return "", errors.New("host must not include a port; use --port")
+		}
+		inner := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if net.ParseIP(inner) == nil {
+			return "", fmt.Errorf("invalid bracketed IPv6 host %q", host)
+		}
+		return inner, nil
+	}
+	if splitHost, splitPort, err := net.SplitHostPort(host); err == nil && splitHost != "" && splitPort != "" {
+		return "", errors.New("host must not include a port; use --port")
+	}
+	if strings.Contains(host, ":") && net.ParseIP(host) == nil {
+		return "", fmt.Errorf("invalid host %q; use --port for the port", host)
+	}
+	return host, nil
+}
+
 func (e Effective) RedactedLines() []string {
 	return []string{
 		"profile: " + printable(e.Profile),
 		"adapter: " + e.Adapter,
-		"url: " + e.URL,
+		"host: " + printable(e.Host),
+		"port: " + fmt.Sprint(e.Port),
+		"ssl: " + fmt.Sprint(e.SSL),
+		"unsafeSsl: " + fmt.Sprint(e.UnsafeSSL),
 		"username: " + printable(e.Username),
 		"password: " + redact(e.Password),
 		"token: " + redact(e.Token),
@@ -182,6 +242,9 @@ func loadFile(path string) (File, bool, error) {
 	if err != nil {
 		return File{}, false, fmt.Errorf("read config %s: %w", path, err)
 	}
+	if err := rejectLegacyURLField(body, path); err != nil {
+		return File{}, false, err
+	}
 	var file File
 	if err := yaml.Unmarshal(body, &file); err != nil {
 		return File{}, false, fmt.Errorf("parse config %s: %w", path, err)
@@ -190,6 +253,37 @@ func loadFile(path string) (File, bool, error) {
 		file.Profiles = map[string]Profile{}
 	}
 	return file, true, nil
+}
+
+func rejectLegacyURLField(body []byte, path string) error {
+	var document yaml.Node
+	if err := yaml.Unmarshal(body, &document); err != nil {
+		return nil
+	}
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	root := document.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key := root.Content[i]
+		value := root.Content[i+1]
+		if key.Value != "profiles" || value.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(value.Content); j += 2 {
+			profileName := value.Content[j].Value
+			profileValue := value.Content[j+1]
+			if profileValue.Kind != yaml.MappingNode {
+				continue
+			}
+			for k := 0; k+1 < len(profileValue.Content); k += 2 {
+				if profileValue.Content[k].Value == "url" {
+					return fmt.Errorf("config %s profile %q uses removed field \"url\"; use host, port, ssl, and unsafeSsl instead", path, profileName)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func selectDefaultProfile(profiles map[string]Profile) (string, Profile, bool) {
@@ -213,9 +307,18 @@ func selectDefaultProfile(profiles map[string]Profile) (string, Profile, bool) {
 	return name, profiles[name], true
 }
 
-func applyEnv(e *Effective, getenv EnvGetter) {
+func applyEnv(e *Effective, getenv EnvGetter) error {
 	applyString(&e.Adapter, getenv("INFLUX_CLI_ADAPTER"))
-	applyString(&e.URL, getenv("INFLUX_CLI_URL"))
+	applyString(&e.Host, getenv("INFLUX_CLI_HOST"))
+	if err := applyEnvInt(&e.Port, "INFLUX_CLI_PORT", getenv); err != nil {
+		return err
+	}
+	if err := applyEnvBool(&e.SSL, "INFLUX_CLI_SSL", getenv); err != nil {
+		return err
+	}
+	if err := applyEnvBool(&e.UnsafeSSL, "INFLUX_CLI_UNSAFE_SSL", getenv); err != nil {
+		return err
+	}
 	applyString(&e.Username, getenv("INFLUX_CLI_USERNAME"))
 	applyString(&e.Password, getenv("INFLUX_CLI_PASSWORD"))
 	applyString(&e.Token, getenv("INFLUX_CLI_TOKEN"))
@@ -223,11 +326,21 @@ func applyEnv(e *Effective, getenv EnvGetter) {
 	applyString(&e.RetentionPolicy, getenv("INFLUX_CLI_RP"))
 	applyString(&e.Precision, getenv("INFLUX_CLI_PRECISION"))
 	applyString(&e.Render, getenv("INFLUX_CLI_RENDER"))
+	return nil
 }
 
 func applyOverrides(e *Effective, overrides Overrides) {
 	applyString(&e.Adapter, overrides.Adapter)
-	applyString(&e.URL, overrides.URL)
+	applyString(&e.Host, overrides.Host)
+	if overrides.Port.Set {
+		e.Port = overrides.Port.Value
+	}
+	if overrides.SSL.Set {
+		e.SSL = overrides.SSL.Value
+	}
+	if overrides.UnsafeSSL.Set {
+		e.UnsafeSSL = overrides.UnsafeSSL.Value
+	}
 	applyString(&e.Username, overrides.Username)
 	applyString(&e.Password, overrides.Password)
 	applyString(&e.Token, overrides.Token)
@@ -241,6 +354,57 @@ func applyString(target *string, value string) {
 	if value != "" {
 		*target = value
 	}
+}
+
+func applyEnvInt(target *int, name string, getenv EnvGetter) error {
+	value := strings.TrimSpace(getenv(name))
+	if value == "" {
+		return nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("parse %s %q: %w", name, value, err)
+	}
+	*target = parsed
+	return nil
+}
+
+func applyEnvBool(target *bool, name string, getenv EnvGetter) error {
+	value := strings.TrimSpace(getenv(name))
+	if value == "" {
+		return nil
+	}
+	parsed, err := parseBool(value)
+	if err != nil {
+		return fmt.Errorf("parse %s %q: %w", name, value, err)
+	}
+	*target = parsed
+	return nil
+}
+
+func parseBool(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "t", "true", "y", "yes", "on":
+		return true, nil
+	case "0", "f", "false", "n", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("expected true or false")
+	}
+}
+
+func intValue(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func boolValue(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func firstNonEmpty(values ...string) string {

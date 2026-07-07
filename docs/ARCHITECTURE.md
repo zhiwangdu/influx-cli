@@ -609,7 +609,10 @@ type AppError struct {
 profiles:
   local:
     adapter: influxdb
-    url: http://127.0.0.1:8086
+    host: localhost
+    port: 8086
+    ssl: false
+    unsafeSsl: false
     username: ""
     password: ""
     database: metrics
@@ -625,11 +628,22 @@ defaults:
 
 | 变量 | 用途 |
 | --- | --- |
-| `INFLUX_CLI_URL` | server URL |
+| `INFLUX_CLI_HOST` | server host |
+| `INFLUX_CLI_PORT` | server port |
+| `INFLUX_CLI_SSL` | use HTTPS |
+| `INFLUX_CLI_UNSAFE_SSL` | skip HTTPS certificate verification |
 | `INFLUX_CLI_USERNAME` | username |
 | `INFLUX_CLI_PASSWORD` | password |
 | `INFLUX_CLI_TOKEN` | token |
 | `INFLUX_CLI_PROFILE` | profile |
+
+URL-style connection config has been removed. Migration examples:
+
+| Old | New |
+| --- | --- |
+| `--url http://localhost:8086` | `--host localhost --port 8086` |
+| `--url https://db.example.com:443` | `--host db.example.com --port 443 --ssl` |
+| self-signed HTTPS URL | `--host <host> --port <port> --ssl --unsafeSsl` |
 
 ## 15. 并发与取消
 

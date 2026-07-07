@@ -2,11 +2,14 @@ package influxdb
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +21,10 @@ import (
 
 type Config struct {
 	Name            string
-	URL             string
+	Host            string
+	Port            int
+	SSL             bool
+	UnsafeSSL       bool
 	Username        string
 	Password        string
 	Token           string
@@ -41,16 +47,28 @@ type Adapter struct {
 }
 
 func New(config Config) (*Adapter, error) {
-	rawURL := strings.TrimSpace(config.URL)
-	if rawURL == "" {
-		rawURL = "http://127.0.0.1:8086"
+	host := strings.TrimSpace(config.Host)
+	if host == "" {
+		host = "localhost"
 	}
-	parsed, err := url.Parse(rawURL)
+	host, err := normalizeHost(host)
 	if err != nil {
-		return nil, fmt.Errorf("parse adapter URL: %w", err)
+		return nil, err
 	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("adapter URL must include scheme and host")
+	port := config.Port
+	if port == 0 {
+		port = 8086
+	}
+	if port < 1 || port > 65535 {
+		return nil, fmt.Errorf("adapter port must be between 1 and 65535, got %d", port)
+	}
+	scheme := "http"
+	if config.SSL {
+		scheme = "https"
+	}
+	parsed, err := url.Parse(scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return nil, fmt.Errorf("build adapter URL: %w", err)
 	}
 
 	name := strings.TrimSpace(config.Name)
@@ -59,7 +77,7 @@ func New(config Config) (*Adapter, error) {
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = newHTTPClient(10*time.Second, config.SSL, config.UnsafeSSL)
 	}
 
 	return &Adapter{
@@ -73,6 +91,43 @@ func New(config Config) (*Adapter, error) {
 		defaultPrecision: config.Precision,
 		client:           client,
 	}, nil
+}
+
+func newHTTPClient(timeout time.Duration, ssl, unsafeSSL bool) *http.Client {
+	client := &http.Client{Timeout: timeout}
+	if ssl && unsafeSSL {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		client.Transport = transport
+	}
+	return client
+}
+
+func normalizeHost(host string) (string, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", fmt.Errorf("adapter host is required")
+	}
+	if strings.Contains(host, "://") || strings.ContainsAny(host, "/?#") {
+		return "", fmt.Errorf("adapter host must not include a scheme, path, query, or fragment")
+	}
+	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
+			return "", fmt.Errorf("adapter host must not include a port")
+		}
+		inner := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if net.ParseIP(inner) == nil {
+			return "", fmt.Errorf("invalid bracketed IPv6 adapter host %q", host)
+		}
+		return inner, nil
+	}
+	if splitHost, splitPort, err := net.SplitHostPort(host); err == nil && splitHost != "" && splitPort != "" {
+		return "", fmt.Errorf("adapter host must not include a port")
+	}
+	if strings.Contains(host, ":") && net.ParseIP(host) == nil {
+		return "", fmt.Errorf("invalid adapter host %q", host)
+	}
+	return host, nil
 }
 
 func (a *Adapter) Name() string {

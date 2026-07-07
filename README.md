@@ -46,10 +46,13 @@ Implemented query surface:
 ```bash
 influx-cli query "SHOW DATABASES"
 influx-cli query --db metrics "SELECT mean(value) FROM cpu WHERE time > now() - 1h GROUP BY time(1m)"
+influx-cli --host influx.example.com --port 443 --ssl --unsafeSsl query "SHOW DATABASES"
 influx-cli repl
 influx-cli tui
 influx-cli config show
 ```
+
+Connection flags follow the InfluxDB 1.x CLI shape: use `--host`, `--port`, `--ssl`, and `--unsafeSsl`. The old URL-style connection option is not supported; use `--host localhost --port 8086` instead of `--url http://localhost:8086`.
 
 ## TUI Usage
 

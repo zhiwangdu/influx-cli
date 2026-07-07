@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -67,7 +68,10 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&flags.configPath, "config", "", "config file path")
 	root.PersistentFlags().StringVar(&flags.overrides.Profile, "profile", "", "config profile")
 	root.PersistentFlags().StringVar(&flags.overrides.Adapter, "adapter", "", "adapter name: influxdb or opengemini")
-	root.PersistentFlags().StringVar(&flags.overrides.URL, "url", "", "InfluxDB-compatible server URL")
+	root.PersistentFlags().StringVar(&flags.overrides.Host, "host", "", "InfluxDB-compatible server host")
+	root.PersistentFlags().IntVar(&flags.overrides.Port.Value, "port", 8086, "InfluxDB-compatible server port")
+	root.PersistentFlags().BoolVar(&flags.overrides.SSL.Value, "ssl", false, "connect over HTTPS")
+	root.PersistentFlags().BoolVar(&flags.overrides.UnsafeSSL.Value, "unsafeSsl", false, "skip HTTPS certificate verification")
 	root.PersistentFlags().StringVar(&flags.overrides.Username, "username", "", "username")
 	root.PersistentFlags().StringVar(&flags.overrides.Password, "password", "", "password")
 	root.PersistentFlags().StringVar(&flags.overrides.Token, "token", "", "auth token")
@@ -94,7 +98,7 @@ func newQueryCommand(flags *globalFlags) *cobra.Command {
 		Short: "Execute a single query",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			effective, err := config.Resolve(flags.configPath, flags.overrides, os.Getenv)
+			effective, err := resolveEffective(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -133,7 +137,7 @@ func newReplCommand(flags *globalFlags) *cobra.Command {
 		Use:   "repl",
 		Short: "Start an interactive query REPL",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			effective, err := config.Resolve(flags.configPath, flags.overrides, os.Getenv)
+			effective, err := resolveEffective(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -157,7 +161,7 @@ func newTUICommand(flags *globalFlags) *cobra.Command {
 		Use:   "tui",
 		Short: "Start the full-screen query TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			effective, err := config.Resolve(flags.configPath, flags.overrides, os.Getenv)
+			effective, err := resolveEffective(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -211,7 +215,7 @@ func newIngestCommand(flags *globalFlags) *cobra.Command {
 		Short: "Generate and write reproducible TSDB datasets",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			effective, err := config.Resolve(flags.configPath, flags.overrides, os.Getenv)
+			effective, err := resolveEffective(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -337,7 +341,7 @@ func newConfigCommand(flags *globalFlags) *cobra.Command {
 		Use:   "show",
 		Short: "Print the effective configuration with secrets redacted",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			effective, err := config.Resolve(flags.configPath, flags.overrides, os.Getenv)
+			effective, err := resolveEffective(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -366,13 +370,16 @@ func newIngestWriter(effective config.Effective, out io.Writer, dryRun bool) (ad
 }
 
 func newExecutor(effective config.Effective) (*app.Executor, error) {
-	client := &http.Client{Timeout: effective.Timeout}
+	client := newHTTPClient(effective.Timeout, effective.SSL, effective.UnsafeSSL)
 	adapterName := strings.ToLower(effective.Adapter)
 	switch adapterName {
 	case "influxdb", "opengemini":
 		adapter, err := influxdb.New(influxdb.Config{
 			Name:            adapterName,
-			URL:             effective.URL,
+			Host:            effective.Host,
+			Port:            effective.Port,
+			SSL:             effective.SSL,
+			UnsafeSSL:       effective.UnsafeSSL,
 			Username:        effective.Username,
 			Password:        effective.Password,
 			Token:           effective.Token,
@@ -390,6 +397,29 @@ func newExecutor(effective config.Effective) (*app.Executor, error) {
 	default:
 		return nil, fmt.Errorf("unsupported adapter %q", effective.Adapter)
 	}
+}
+
+func resolveEffective(cmd *cobra.Command, flags *globalFlags) (config.Effective, error) {
+	overrides := flags.overrides
+	overrides.Port.Set = flagChanged(cmd, "port")
+	overrides.SSL.Set = flagChanged(cmd, "ssl")
+	overrides.UnsafeSSL.Set = flagChanged(cmd, "unsafeSsl")
+	return config.Resolve(flags.configPath, overrides, os.Getenv)
+}
+
+func flagChanged(cmd *cobra.Command, name string) bool {
+	flag := cmd.Flag(name)
+	return flag != nil && flag.Changed
+}
+
+func newHTTPClient(timeout time.Duration, ssl, unsafeSSL bool) *http.Client {
+	client := &http.Client{Timeout: timeout}
+	if ssl && unsafeSSL {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		client.Transport = transport
+	}
+	return client
 }
 
 func printIngestSummary(w io.Writer, summary ingest.Summary, dryRun bool) {

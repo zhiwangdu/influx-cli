@@ -45,7 +45,7 @@ Phase 0 仍应通过本地 InfluxDB/openGemini 兼容端点做人工验收。
 | --- | --- |
 | Go project | `go.mod`、`cmd/influx-cli/main.go` |
 | CLI | `query`、`repl`、`config` 基础命令 |
-| config | profile、URL、认证、db/rp |
+| config | profile、host/port/SSL、认证、db/rp |
 | adapter | InfluxDB 1.x HTTP query adapter |
 | result | InfluxDB JSON normalize 成 table/series |
 | render | table renderer、sparkline renderer |

@@ -11,7 +11,10 @@ import (
 func TestIngestDryRunPrintsLineProtocolAndSummary(t *testing.T) {
 	t.Setenv("INFLUX_CLI_PROFILE", "")
 	t.Setenv("INFLUX_CLI_RENDER", "")
-	t.Setenv("INFLUX_CLI_URL", "")
+	t.Setenv("INFLUX_CLI_HOST", "")
+	t.Setenv("INFLUX_CLI_PORT", "")
+	t.Setenv("INFLUX_CLI_SSL", "")
+	t.Setenv("INFLUX_CLI_UNSAFE_SSL", "")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -20,7 +23,6 @@ func TestIngestDryRunPrintsLineProtocolAndSummary(t *testing.T) {
 	command.SetErr(&stderr)
 	command.SetArgs([]string{
 		"--config", filepath.Join(t.TempDir(), "missing.yaml"),
-		"--url", "http://127.0.0.1:8086",
 		"ingest", "demo-cpu",
 		"--rate", "2/s",
 		"--duration", "1s",
@@ -54,7 +56,10 @@ func TestIngestDryRunPrintsLineProtocolAndSummary(t *testing.T) {
 func TestIngestStressBasicDryRun(t *testing.T) {
 	t.Setenv("INFLUX_CLI_PROFILE", "")
 	t.Setenv("INFLUX_CLI_RENDER", "")
-	t.Setenv("INFLUX_CLI_URL", "")
+	t.Setenv("INFLUX_CLI_HOST", "")
+	t.Setenv("INFLUX_CLI_PORT", "")
+	t.Setenv("INFLUX_CLI_SSL", "")
+	t.Setenv("INFLUX_CLI_UNSAFE_SSL", "")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -63,7 +68,6 @@ func TestIngestStressBasicDryRun(t *testing.T) {
 	command.SetErr(&stderr)
 	command.SetArgs([]string{
 		"--config", filepath.Join(t.TempDir(), "missing.yaml"),
-		"--url", "http://127.0.0.1:8086",
 		"--precision", "s",
 		"ingest", "stress-basic",
 		"--point-count", "2",
@@ -111,7 +115,10 @@ func TestIngestStressBasicDryRun(t *testing.T) {
 func TestIngestIQLDryRun(t *testing.T) {
 	t.Setenv("INFLUX_CLI_PROFILE", "")
 	t.Setenv("INFLUX_CLI_RENDER", "")
-	t.Setenv("INFLUX_CLI_URL", "")
+	t.Setenv("INFLUX_CLI_HOST", "")
+	t.Setenv("INFLUX_CLI_PORT", "")
+	t.Setenv("INFLUX_CLI_SSL", "")
+	t.Setenv("INFLUX_CLI_UNSAFE_SSL", "")
 
 	iqlFile := filepath.Join(t.TempDir(), "mock.iql")
 	if err := os.WriteFile(iqlFile, []byte(strings.TrimSpace(`
@@ -143,7 +150,6 @@ CREATE DATABASE ignored
 	command.SetErr(&stderr)
 	command.SetArgs([]string{
 		"--config", filepath.Join(t.TempDir(), "missing.yaml"),
-		"--url", "http://127.0.0.1:8086",
 		"ingest", "iql",
 		"--file", iqlFile,
 		"--dry-run",

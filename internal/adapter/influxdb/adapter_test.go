@@ -3,9 +3,13 @@ package influxdb
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/zhiwangdu/influx-cli/internal/schema"
@@ -42,7 +46,7 @@ func TestShowRetentionPoliciesPreservesDefaultFlag(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := New(Config{URL: server.URL})
+	adapter, err := New(configForServerURL(t, server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +99,7 @@ func TestShowMeasurementsUsesDatabaseAndRetentionPolicy(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := New(Config{URL: server.URL})
+	adapter, err := New(configForServerURL(t, server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +166,7 @@ func TestGetSchemaUsesMeasurementScopedQueries(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := New(Config{URL: server.URL})
+	adapter, err := New(configForServerURL(t, server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +250,7 @@ func TestGetSchemaWithoutMeasurementUsesDatabaseWideQueries(t *testing.T) {
 	}))
 	defer server.Close()
 
-	adapter, err := New(Config{URL: server.URL})
+	adapter, err := New(configForServerURL(t, server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,4 +298,83 @@ func tagNames(measurement schema.Measurement) []string {
 		names = append(names, tag.Name)
 	}
 	return names
+}
+
+func TestQueryUnsafeSSLAllowsSelfSignedServer(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/query" {
+			t.Fatalf("path = %q, want /query", r.URL.Path)
+		}
+		io.WriteString(w, `{"results":[{"statement_id":0,"series":[{"name":"databases","columns":["name"],"values":[["metrics"]]}]}]}`)
+	}))
+	defer server.Close()
+
+	config := configForServerURL(t, server.URL)
+	config.UnsafeSSL = false
+	adapter, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.ShowDatabases(context.Background()); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("query err = %v, want certificate verification error", err)
+	}
+
+	config.UnsafeSSL = true
+	adapter, err = New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	databases, err := adapter.ShowDatabases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(databases) != 1 || databases[0] != "metrics" {
+		t.Fatalf("databases = %#v, want metrics", databases)
+	}
+}
+
+func TestNormalizeHostSupportsIPv6AndRejectsPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host string
+		want string
+	}{
+		{name: "bare IPv6", host: "::1", want: "::1"},
+		{name: "bracketed IPv6", host: "[::1]", want: "::1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeHost(tc.host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("host = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	if _, err := normalizeHost("localhost/foo"); err == nil || !strings.Contains(err.Error(), "path") {
+		t.Fatalf("path host error = %v, want path rejection", err)
+	}
+}
+
+func configForServerURL(t *testing.T, rawURL string) Config {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portRaw, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Config{
+		Host: host,
+		Port: port,
+		SSL:  parsed.Scheme == "https",
+	}
 }
