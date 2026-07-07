@@ -213,6 +213,46 @@ func TestParseStorageFieldFiltersAllowsEmptyEqualityAndInequalityValues(t *testi
 	}
 }
 
+func TestParseStorageFieldFiltersParsesBetweenOperators(t *testing.T) {
+	got, err := parseStorageFieldFilters([]string{
+		"value between (1,3)",
+		"plain between(1,3)",
+		"value not-between(1,3)",
+		"region not between (a,z)",
+		"name between (\"a=b\",\"z\")",
+		"status in (\"a<>b\",\"c\")",
+		"name is between (1,3)",
+		"raw between 1,3",
+		"raw not between 1,3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		key   string
+		op    string
+		value string
+	}{
+		{"value", "between", "(1,3)"},
+		{"plain", "between", "(1,3)"},
+		{"value", "not-between", "(1,3)"},
+		{"region", "not-between", "(a,z)"},
+		{"name", "between", "(\"a=b\",\"z\")"},
+		{"status", "in", "(\"a<>b\",\"c\")"},
+		{"name", "", "between (1,3)"},
+		{"raw", "between", "1,3"},
+		{"raw", "not-between", "1,3"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("field filters = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Key != want[i].key || got[i].Op != want[i].op || got[i].Value != want[i].value {
+			t.Fatalf("field filter %d = %+v, want key=%q op=%q value=%q", i, got[i], want[i].key, want[i].op, want[i].value)
+		}
+	}
+}
+
 func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	if _, err := parseStorageFieldFilters([]string{"value"}); err == nil || !strings.Contains(err.Error(), "key=value") || !strings.Contains(err.Error(), "key=~regex") {
 		t.Fatalf("error = %v, want key=value guidance", err)
@@ -228,6 +268,9 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	}
 	if _, err := parseStorageFieldFilters([]string{"not in (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing key guidance", err)
+	}
+	if _, err := parseStorageFieldFilters([]string{"not between (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing between key guidance", err)
 	}
 }
 

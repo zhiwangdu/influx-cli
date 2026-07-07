@@ -1874,6 +1874,65 @@ func TestAnalyzeTSSPFieldFilterMatchesFloatComparison(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterMatchesFloatBetween(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "between", Value: "(1.0,2.0)"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "1"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: "between", Value: "(1.0,2.0)"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 3; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "sid:7/record", Time: times[0], Type: "record", OptimizedValue: "status=true,value=1.25", Matches: true},
+		{Key: "sid:7/status", Time: times[0], Type: "boolean-full", OptimizedValue: "true", Matches: true},
+		{Key: "sid:7/value", Time: times[0], Type: "float-full", OptimizedValue: "1.25", Matches: true},
+	} {
+		got := decode.CursorOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterMatchesFloatInSet(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)
@@ -2260,6 +2319,51 @@ func TestAnalyzeTSSPFieldFilterMatchesStringComparison(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterMatchesStringBetween(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithStringFullData(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "between", Value: "(blue,red)"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "2"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 2; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "sid:7/value", Time: 333, Type: "string-full", OptimizedValue: "red", Matches: true},
+		{Key: "sid:7/value", Time: 444, Type: "string-full", OptimizedValue: "blue", Matches: true},
+	} {
+		got := decode.CursorOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterMatchesStringRegex(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSPWithStringFullData(path); err != nil {
@@ -2356,6 +2460,43 @@ func TestAnalyzeTSSPFieldFilterOrderedBooleanDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterBooleanBetweenDoesNotMatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "status", Op: "not-between", Value: "(false,true)"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_output_points"], "0"; got != want {
+		t.Fatalf("data block probe output points = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 0; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterMatchesIntegerComparison(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSPWithIntegerConstDeltaData(path); err != nil {
@@ -2395,6 +2536,94 @@ func TestAnalyzeTSSPFieldFilterMatchesIntegerComparison(t *testing.T) {
 		if got != want {
 			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
 		}
+	}
+}
+
+func TestAnalyzeTSSPFieldFilterMatchesIntegerBetween(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		filter            FieldFilter
+		wantOutputPoints  string
+		wantSamples       []DecodePathCursorOutput
+		wantValueOutCount int
+	}{
+		{
+			name:             "between",
+			filter:           FieldFilter{Key: "value", Op: "between", Value: "(99,100)"},
+			wantOutputPoints: "2",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "sid:7/value", Time: 333, Type: "integer-full", OptimizedValue: "99", Matches: true},
+				{Key: "sid:7/value", Time: 444, Type: "integer-full", OptimizedValue: "100", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+		{
+			name:             "between-no-parens",
+			filter:           FieldFilter{Key: "value", Op: "between", Value: "99,100"},
+			wantOutputPoints: "2",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "sid:7/value", Time: 333, Type: "integer-full", OptimizedValue: "99", Matches: true},
+				{Key: "sid:7/value", Time: 444, Type: "integer-full", OptimizedValue: "100", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+		{
+			name:             "not-between",
+			filter:           FieldFilter{Key: "value", Op: "not-between", Value: "(99,100)"},
+			wantOutputPoints: "1",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "sid:7/value", Time: 555, Type: "integer-full", OptimizedValue: "101", Matches: true},
+			},
+			wantValueOutCount: 1,
+		},
+		{
+			name:              "inverted",
+			filter:            FieldFilter{Key: "value", Op: "between", Value: "(100,99)"},
+			wantOutputPoints:  "0",
+			wantValueOutCount: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+			if err := writeTestTSSPWithIntegerConstDeltaData(path); err != nil {
+				t.Fatal(err)
+			}
+			queryRange, err := NewTimeRange(333, 555)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := Analyze(context.Background(), []string{path}, Options{
+				Format:           FormatTSSP,
+				QueryRange:       queryRange,
+				QueryFields:      []FieldFilter{tc.filter},
+				KeySampleLimit:   3,
+				BlockSampleLimit: 8,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := report.Files[0]
+			if got := file.Extra["data_block_probe_output_points"]; got != tc.wantOutputPoints {
+				t.Fatalf("data block probe output points = %q, want %q", got, tc.wantOutputPoints)
+			}
+			decode := file.DecodePath
+			if decode == nil {
+				t.Fatal("decode path is nil")
+			}
+			if got := decode.OptimizedValueOutputPoints; got != tc.wantValueOutCount {
+				t.Fatalf("optimized value output points = %d, want %d", got, tc.wantValueOutCount)
+			}
+			if got, want := len(decode.CursorOutputSamples), len(tc.wantSamples); got != want {
+				t.Fatalf("cursor output samples = %d, want %d", got, want)
+			}
+			for i, want := range tc.wantSamples {
+				got := decode.CursorOutputSamples[i]
+				if got != want {
+					t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -4112,6 +4341,59 @@ func TestAnalyzeQueryFieldsRejectEmptySetOperator(t *testing.T) {
 			})
 			if err == nil || !strings.Contains(err.Error(), "requires at least one value") {
 				t.Fatalf("error = %v, want empty set guidance", err)
+			}
+		})
+	}
+}
+
+func TestAnalyzeQueryFieldsRejectInvalidBetweenValueCount(t *testing.T) {
+	for _, tc := range []struct {
+		op    string
+		value string
+	}{
+		{op: "between", value: "()"},
+		{op: "between", value: "(1)"},
+		{op: "between", value: "(1,2,3)"},
+		{op: "not-between", value: "(1)"},
+	} {
+		t.Run(tc.op+"/"+tc.value, func(t *testing.T) {
+			queryRange, err := NewTimeRange(1, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Analyze(context.Background(), []string{"missing.tssp"}, Options{
+				Format:      FormatTSSP,
+				QueryRange:  queryRange,
+				QueryFields: []FieldFilter{{Key: "value", Op: tc.op, Value: tc.value}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "requires exactly two values") {
+				t.Fatalf("error = %v, want invalid between value count guidance", err)
+			}
+		})
+	}
+}
+
+func TestAnalyzeQueryFieldsRejectNullBetweenBounds(t *testing.T) {
+	for _, tc := range []struct {
+		op    string
+		value string
+	}{
+		{op: "between", value: "(null,5)"},
+		{op: "between", value: `("null",5)`},
+		{op: "not-between", value: "(1,null)"},
+	} {
+		t.Run(tc.op+"/"+tc.value, func(t *testing.T) {
+			queryRange, err := NewTimeRange(1, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Analyze(context.Background(), []string{"missing.tssp"}, Options{
+				Format:      FormatTSSP,
+				QueryRange:  queryRange,
+				QueryFields: []FieldFilter{{Key: "value", Op: tc.op, Value: tc.value}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "does not support null bounds") {
+				t.Fatalf("error = %v, want null between bound guidance", err)
 			}
 		})
 	}

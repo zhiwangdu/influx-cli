@@ -340,7 +340,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
-	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2) for local record filtering, including decoded time when present; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), or key not-between (lower,upper) for local record filtering, including decoded time when present; range parentheses are optional; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.anyFields, "field-any", nil, "TSSP decoded field predicate using the same syntax as --field; at least one repeated --field-any predicate must match; combines with --field as required AND predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.noneFields, "field-none", nil, "TSSP decoded field predicate using the same syntax as --field; no repeated --field-none predicate may match; combines after required AND and OR predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
@@ -465,7 +465,7 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), or key not-in (value1,value2)", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), or key not-between (lower,upper); range parentheses are optional", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -493,13 +493,21 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 	bestIndex := len(value) + 1
 	bestOp := ""
 	for _, op := range []string{">=", "<=", "==", "!=", "<>", "=~", "!~", "=", ">", "<"} {
-		index := strings.Index(value, op)
-		if index < 0 {
-			continue
-		}
-		if index < bestIndex || index == bestIndex && len(op) > len(bestOp) {
-			bestIndex = index
-			bestOp = op
+		searchFrom := 0
+		for {
+			relativeIndex := strings.Index(value[searchFrom:], op)
+			if relativeIndex < 0 {
+				break
+			}
+			index := searchFrom + relativeIndex
+			searchFrom = index + 1
+			if storageFieldOperatorInLiteral(value, index) {
+				continue
+			}
+			if index < bestIndex || index == bestIndex && len(op) > len(bestOp) {
+				bestIndex = index
+				bestOp = op
+			}
 		}
 	}
 	if bestOp != "" {
@@ -509,11 +517,14 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 		text string
 		op   string
 	}{
+		{text: "not-between", op: "not-between"},
+		{text: "not between", op: "not-between"},
 		{text: "not-in", op: "not-in"},
 		{text: "not in", op: "not-in"},
 		{text: "is-not", op: "!="},
 		{text: "is not", op: "!="},
 		{text: "is", op: "="},
+		{text: "between", op: "between"},
 		{text: "in", op: "in"},
 	} {
 		key, filterValue, ok := splitStorageFieldWordOperator(value, operator.text)
@@ -535,14 +546,14 @@ func splitStorageFieldWordOperator(value, operator string) (string, string, bool
 			}
 			index := searchFrom + relativeIndex
 			searchFrom = index + len(needle)
-			if storageFieldOperatorInParentheses(value, index) {
+			if storageFieldOperatorInLiteral(value, index) {
 				continue
 			}
 			key := value[:index]
 			if strings.ContainsAny(key, "=<>!") {
 				continue
 			}
-			if operator == "in" && strings.EqualFold(strings.TrimSpace(key), "not") {
+			if (operator == "in" || operator == "between") && strings.EqualFold(strings.TrimSpace(key), "not") {
 				continue
 			}
 			valueStart := index + 1 + len(operator)
@@ -552,10 +563,29 @@ func splitStorageFieldWordOperator(value, operator string) (string, string, bool
 	return "", "", false
 }
 
-func storageFieldOperatorInParentheses(value string, index int) bool {
+func storageFieldOperatorInLiteral(value string, index int) bool {
 	depth := 0
+	var quote byte
+	escaped := false
 	for i := 0; i < index && i < len(value); i++ {
-		switch value[i] {
+		c := value[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
 		case '(':
 			depth++
 		case ')':
@@ -564,7 +594,7 @@ func storageFieldOperatorInParentheses(value string, index int) bool {
 			}
 		}
 	}
-	return depth > 0
+	return depth > 0 || quote != 0
 }
 
 func parseStorageSeriesIDs(values []string) ([]uint64, error) {

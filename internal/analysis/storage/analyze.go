@@ -236,6 +236,8 @@ func normalizeFieldFilterOperator(op string) string {
 		return ""
 	case "<>":
 		return "!="
+	case "not between", "not-between":
+		return "not-between"
 	case "not in", "not-in":
 		return "not-in"
 	case "is not", "is-not":
@@ -255,7 +257,7 @@ func fieldFilterOperator(filter FieldFilter) string {
 
 func validFieldFilterOperator(op string) bool {
 	switch normalizeFieldFilterOperator(op) {
-	case "", "!=", ">", ">=", "<", "<=", "in", "not-in", "=~", "!~":
+	case "", "!=", ">", ">=", "<", "<=", "in", "not-in", "between", "not-between", "=~", "!~":
 		return true
 	default:
 		return false
@@ -271,6 +273,18 @@ func validateFieldFilters(filters []FieldFilter) error {
 		if op == "in" || op == "not-in" {
 			if len(fieldFilterSetValues(filter.Value)) == 0 {
 				return fmt.Errorf("query field filter %q requires at least one value for operator %q", filter.Key, op)
+			}
+			continue
+		}
+		if op == "between" || op == "not-between" {
+			values := fieldFilterSetValues(filter.Value)
+			if len(values) != 2 {
+				return fmt.Errorf("query field filter %q requires exactly two values for operator %q", filter.Key, op)
+			}
+			for _, value := range values {
+				if value == "null" {
+					return fmt.Errorf("query field filter %q does not support null bounds for operator %q", filter.Key, op)
+				}
 			}
 			continue
 		}

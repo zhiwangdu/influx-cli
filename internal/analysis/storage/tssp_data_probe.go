@@ -693,8 +693,26 @@ func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter 
 		}
 		return matches
 	}
+	if op == "between" || op == "not-between" {
+		values := fieldFilterSetValues(filter.Value)
+		if len(values) != 2 {
+			return false
+		}
+		if !tsspDataBlockSupportsRange(block) {
+			return false
+		}
+		matches := tsspDataBlockLiteralMatches(block, row, ">=", values[0]) && tsspDataBlockLiteralMatches(block, row, "<=", values[1])
+		if op == "not-between" {
+			return !matches
+		}
+		return matches
+	}
 	want := fieldFilterScalarValue(filter.Value)
 	return tsspDataBlockLiteralMatches(block, row, op, want)
+}
+
+func tsspDataBlockSupportsRange(block tsspDetachedDataBlockInfo) bool {
+	return strings.HasPrefix(block.Type, "float") || strings.HasPrefix(block.Type, "integer") || strings.HasPrefix(block.Type, "string")
 }
 
 func tsspDataBlockLiteralMatches(block tsspDetachedDataBlockInfo, row int, op, want string) bool {
