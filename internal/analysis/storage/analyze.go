@@ -234,6 +234,8 @@ func normalizeFieldFilterOperator(op string) string {
 	switch op {
 	case "=", "==", "is", "":
 		return ""
+	case "<>":
+		return "!="
 	case "not in", "not-in":
 		return "not-in"
 	case "is not", "is-not":
