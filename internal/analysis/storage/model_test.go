@@ -160,6 +160,9 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	if got, want := row[tableColumnIndex(t, result.Table.Columns, "tombstone")], "1 files"; got != want {
 		t.Fatalf("aggregate tombstone = %v, want %v", got, want)
 	}
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2"; got != want {
+		t.Fatalf("aggregate details = %v, want %v", got, want)
+	}
 	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)
 	for _, want := range []string{
 		"tssp-file-set-location-cursor-ascending",
@@ -194,6 +197,100 @@ func TestReportResultOmitsReportLevelDecodePathRowWhenUnavailable(t *testing.T) 
 	for i, row := range result.Table.Rows {
 		if got := row[fileColumn]; got == "<file-set>" {
 			t.Fatalf("row %d file = %v, want no aggregate row", i, got)
+		}
+	}
+}
+
+func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
+	report := Report{
+		Files: []FileReport{
+			{
+				Path:   "L0-00000001.tsi",
+				Format: FormatTSI,
+				Index: &IndexSummary{
+					MeasurementCount:                2,
+					DeletedMeasurementCount:         1,
+					SeriesRefs:                      10,
+					TagKeyCount:                     3,
+					TagValueCount:                   4,
+					SeriesIDSetCardinality:          7,
+					TombstoneSeriesIDSetCardinality: 2,
+				},
+			},
+			{
+				Path:   "fields.idx",
+				Format: FormatFieldsIndex,
+				Fields: &FieldIndexSummary{
+					MeasurementCount:   2,
+					FieldCount:         4,
+					FieldsByType:       map[string]int{"float": 1, "integer": 1, "string": 1, "unsigned": 1},
+					ChangeCount:        3,
+					AddFieldChanges:    2,
+					DeleteMeasurements: 1,
+				},
+			},
+			{
+				Path:   "primary.meta",
+				Format: FormatOpenGeminiPKMeta,
+				PrimaryKey: &PrimaryKeySummary{
+					Type:                    "opengemini-detached-primary-meta",
+					ColumnCount:             3,
+					RowCount:                4,
+					DataSizeBytes:           120,
+					ValidDataBytes:          112,
+					CRCMismatches:           1,
+					DataOutOfBoundsBlocks:   2,
+					ColumnOutOfBoundsBlocks: 3,
+					ColumnUnorderedBlocks:   1,
+					BlockIDRangeSet:         true,
+					MinBlockID:              10,
+					MaxBlockID:              13,
+				},
+			},
+			{
+				Path:   "00000001-0001-00000001.content.bf",
+				Format: FormatOpenGeminiBloom,
+				SecondaryIndex: &SecondaryIndexSummary{
+					Type:                  "opengemini-bloom-filter",
+					Layout:                "attached-line-filter",
+					Field:                 "content",
+					BlockCount:            2,
+					CRCMismatches:         1,
+					TrailingBytes:         3,
+					DataOutOfBoundsBlocks: 1,
+				},
+			},
+			{
+				Path:   "41_1_part",
+				Format: FormatMergeset,
+				SecondaryIndex: &SecondaryIndexSummary{
+					Type:            "opengemini-clv-text-mergeset",
+					Layout:          "mergeset-namespace",
+					ItemCount:       4,
+					DocumentCount:   1,
+					TermCount:       1,
+					DictionaryCount: 1,
+					PositionCount:   2,
+				},
+			},
+		},
+	}
+
+	result := report.Result()
+	detailsColumn := tableColumnIndex(t, result.Table.Columns, "details")
+	wants := [][]string{
+		{"index measurements=2", "series_refs=10", "series_ids=7", "tags=3 values=4", "deleted measurements=1 tag_keys=0 tag_values=0 series_ids=2"},
+		{"fields measurements=2 fields=4", "types=float:1 integer:1 string:1 unsigned:1", "changes=3 adds=2 deletes=1"},
+		{"primary_key type=opengemini-detached-primary-meta", "columns=3", "rows=4", "block_ids=10..13", "data=120 valid=112", "crc=1 data_oob=2 column_oob=3 column_unordered=1"},
+		{"secondary_index type=opengemini-bloom-filter", "layout=attached-line-filter", "field=content", "blocks=2", "crc=1 trailing=3 data_oob=1"},
+		{"secondary_index type=opengemini-clv-text-mergeset", "layout=mergeset-namespace", "items=4", "documents=1", "terms=1", "dictionaries=1", "positions=2"},
+	}
+	for rowIndex, wantParts := range wants {
+		details := result.Table.Rows[rowIndex][detailsColumn].(string)
+		for _, want := range wantParts {
+			if !strings.Contains(details, want) {
+				t.Fatalf("row %d details = %q, want %q", rowIndex, details, want)
+			}
 		}
 	}
 }

@@ -566,6 +566,7 @@ func (r Report) Result() result.Result {
 		"blocks",
 		"query_blocks",
 		"tombstone",
+		"details",
 		"samples",
 		"decode_path",
 		"advice",
@@ -592,6 +593,7 @@ func (r Report) Result() result.Result {
 			file.BlockCount,
 			file.QueryOverlapBlocks,
 			tombstone,
+			fileDetailsText(file),
 			joinSamples(file.KeySamples),
 			decodePathText(file.DecodePath),
 			joinSamples(decodePathRecommendations(file.DecodePath)),
@@ -612,6 +614,7 @@ func (r Report) Result() result.Result {
 			r.Summary.BlockCount,
 			r.Summary.QueryOverlapBlocks,
 			tombstone,
+			fmt.Sprintf("files=%d", len(r.Files)),
 			"",
 			decodePathText(r.DecodePath),
 			joinSamples(decodePathRecommendations(r.DecodePath)),
@@ -626,6 +629,139 @@ func (r Report) Result() result.Result {
 			Source:   "storage-analyzer",
 		},
 	}
+}
+
+func fileDetailsText(file FileReport) string {
+	parts := make([]string, 0, 4)
+	if file.Index != nil {
+		parts = append(parts, indexDetailsText(file.Index))
+	}
+	if file.Fields != nil {
+		parts = append(parts, fieldIndexDetailsText(file.Fields))
+	}
+	if file.PrimaryKey != nil {
+		parts = append(parts, primaryKeyDetailsText(file.PrimaryKey))
+	}
+	if file.SecondaryIndex != nil {
+		parts = append(parts, secondaryIndexDetailsText(file.SecondaryIndex))
+	}
+	return strings.Join(nonEmptyStrings(parts), "; ")
+}
+
+func indexDetailsText(summary *IndexSummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("measurements=%d", summary.MeasurementCount)}
+	if summary.SeriesRefs > 0 {
+		parts = append(parts, fmt.Sprintf("series_refs=%d", summary.SeriesRefs))
+	}
+	if summary.SeriesIDSetCardinality > 0 {
+		parts = append(parts, fmt.Sprintf("series_ids=%d", summary.SeriesIDSetCardinality))
+	}
+	if summary.TagKeyCount > 0 || summary.TagValueCount > 0 {
+		parts = append(parts, fmt.Sprintf("tags=%d values=%d", summary.TagKeyCount, summary.TagValueCount))
+	}
+	if summary.DeletedMeasurementCount > 0 || summary.DeletedTagKeyCount > 0 || summary.DeletedTagValueCount > 0 || summary.TombstoneSeriesIDSetCardinality > 0 {
+		parts = append(parts, fmt.Sprintf("deleted measurements=%d tag_keys=%d tag_values=%d series_ids=%d", summary.DeletedMeasurementCount, summary.DeletedTagKeyCount, summary.DeletedTagValueCount, summary.TombstoneSeriesIDSetCardinality))
+	}
+	return "index " + strings.Join(parts, " ")
+}
+
+func fieldIndexDetailsText(summary *FieldIndexSummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := []string{
+		fmt.Sprintf("measurements=%d", summary.MeasurementCount),
+		fmt.Sprintf("fields=%d", summary.FieldCount),
+	}
+	if byType := countMapText(summary.FieldsByType); byType != "" {
+		parts = append(parts, "types="+byType)
+	}
+	if summary.ChangeCount > 0 || summary.AddFieldChanges > 0 || summary.DeleteMeasurements > 0 {
+		parts = append(parts, fmt.Sprintf("changes=%d adds=%d deletes=%d", summary.ChangeCount, summary.AddFieldChanges, summary.DeleteMeasurements))
+	}
+	return "fields " + strings.Join(parts, " ")
+}
+
+func primaryKeyDetailsText(summary *PrimaryKeySummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := make([]string, 0, 8)
+	if summary.Type != "" {
+		parts = append(parts, "type="+summary.Type)
+	}
+	if summary.ColumnCount > 0 {
+		parts = append(parts, fmt.Sprintf("columns=%d", summary.ColumnCount))
+	}
+	if summary.RowCount > 0 {
+		parts = append(parts, fmt.Sprintf("rows=%d", summary.RowCount))
+	}
+	if summary.BlockIDRangeSet {
+		parts = append(parts, fmt.Sprintf("block_ids=%d..%d", summary.MinBlockID, summary.MaxBlockID))
+	}
+	if summary.DataSizeBytes > 0 || summary.ValidDataBytes > 0 {
+		parts = append(parts, fmt.Sprintf("data=%d valid=%d", summary.DataSizeBytes, summary.ValidDataBytes))
+	}
+	if summary.CRCMismatches > 0 || summary.DataOutOfBoundsBlocks > 0 || summary.ColumnOutOfBoundsBlocks > 0 || summary.ColumnUnorderedBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("crc=%d data_oob=%d column_oob=%d column_unordered=%d", summary.CRCMismatches, summary.DataOutOfBoundsBlocks, summary.ColumnOutOfBoundsBlocks, summary.ColumnUnorderedBlocks))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "primary_key " + strings.Join(parts, " ")
+}
+
+func secondaryIndexDetailsText(summary *SecondaryIndexSummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := make([]string, 0, 10)
+	if summary.Type != "" {
+		parts = append(parts, "type="+summary.Type)
+	}
+	if summary.Layout != "" {
+		parts = append(parts, "layout="+summary.Layout)
+	}
+	if summary.Field != "" {
+		parts = append(parts, "field="+summary.Field)
+	}
+	for _, part := range []struct {
+		name  string
+		value int64
+	}{
+		{name: "blocks", value: summary.BlockCount},
+		{name: "groups", value: summary.GroupCount},
+		{name: "pieces", value: summary.PieceCount},
+		{name: "items", value: summary.ItemCount},
+		{name: "documents", value: summary.DocumentCount},
+		{name: "terms", value: summary.TermCount},
+		{name: "dictionaries", value: summary.DictionaryCount},
+		{name: "positions", value: summary.PositionCount},
+	} {
+		if part.value > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", part.name, part.value))
+		}
+	}
+	if summary.CRCMismatches > 0 || summary.TrailingBytes > 0 || summary.DataOutOfBoundsBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("crc=%d trailing=%d data_oob=%d", summary.CRCMismatches, summary.TrailingBytes, summary.DataOutOfBoundsBlocks))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "secondary_index " + strings.Join(parts, " ")
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := values[:0]
+	for _, value := range values {
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func decodePathText(summary *DecodePathSummary) string {
