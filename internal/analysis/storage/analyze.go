@@ -599,9 +599,9 @@ func isStorageCandidate(path string, format Format) bool {
 	case FormatOpenGeminiBloom:
 		return isOpenGeminiBloomFilterPath(path)
 	case FormatOpenGeminiText:
-		return isOpenGeminiTextIndexPartPath(path)
+		return false
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || isTSSPFileCandidatePath(path) || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path) || isOpenGeminiBloomFilterPath(path) || isOpenGeminiTextIndexPartPath(path) || isOpenGeminiPKIndexCandidatePath(path)
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || isTSSPFileCandidatePath(path) || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path) || isOpenGeminiBloomFilterPath(path) || isOpenGeminiPKIndexCandidatePath(path)
 	}
 }
 
