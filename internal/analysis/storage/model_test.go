@@ -59,6 +59,14 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				},
 				DataBlockProbeNullValues:    3,
 				DataBlockProbeRecordSamples: 1,
+				QueryFields:                 []FieldFilter{{Key: "missing", Value: "x"}, {Key: "value", Op: ">", Value: "1.0"}},
+				MatchedFields:               []FieldFilter{{Key: "value", Op: ">", Value: "1.0"}},
+				MissingFields:               []FieldFilter{{Key: "missing", Value: "x"}},
+				QueryAnyFields:              []FieldFilter{{Key: "status", Value: "false"}, {Key: "zone", Value: "west"}},
+				MatchedAnyFields:            []FieldFilter{{Key: "status", Value: "false"}},
+				MissingAnyFields:            []FieldFilter{{Key: "zone", Value: "west"}},
+				QueryNoneFields:             []FieldFilter{{Key: "deleted", Value: "true"}},
+				MatchedNoneFields:           []FieldFilter{{Key: "deleted", Value: "true"}},
 				DataBlockProbeFilterRows:    5,
 				DataBlockProbeFilterMatches: 3,
 				DataBlockProbeFilterRejects: 2,
@@ -96,6 +104,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"data_probe_failure_reasons segment_overlap_data_crc_unavailable:1 segment_overlap_data_header_unavailable:1 segment_overlap_data_read_unavailable:1",
 		"data_probe_types float-full:2 integer-full:1",
 		"data_probe_value_unknown_reasons float-full-codec-7:1",
+		"field_filters required=2 matched=1 missing=1 any=2 any_matched=1 any_missing=1 none=1 none_matched=1 none_missing=0",
 		"field_filter rows=5 matches=3 rejects=2",
 		"field_filter_ops =:3 between:2 not-between:1",
 		"row_range rows=7 matches=5 rejects=2",
@@ -126,6 +135,13 @@ func TestDecodePathTextOmitsEmptyFilterOperatorCounts(t *testing.T) {
 				t.Fatalf("decode path text = %q, want no field_filter_ops segment", text)
 			}
 		})
+	}
+}
+
+func TestDecodePathTextOmitsEmptyFieldFilterSummary(t *testing.T) {
+	text := decodePathText(&DecodePathSummary{})
+	if strings.Contains(text, "field_filters") {
+		t.Fatalf("decode path text = %q, want no field_filters segment", text)
 	}
 }
 

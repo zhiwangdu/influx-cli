@@ -843,6 +843,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	if unknownReasons := countMapText(summary.DataBlockProbeValueReasons); unknownReasons != "" {
 		parts = append(parts, "data_probe_value_unknown_reasons "+unknownReasons)
 	}
+	if filters := fieldFilterSummaryText(summary); filters != "" {
+		parts = append(parts, filters)
+	}
 	if summary.DataBlockProbeFilterRows > 0 || summary.DataBlockProbeFilterMatches > 0 || summary.DataBlockProbeFilterRejects > 0 {
 		parts = append(parts, fmt.Sprintf("field_filter rows=%d matches=%d rejects=%d evals=%d eval_matches=%d eval_misses=%d required=%d required_matches=%d required_misses=%d any=%d any_matches=%d any_misses=%d none=%d none_matches=%d none_misses=%d", summary.DataBlockProbeFilterRows, summary.DataBlockProbeFilterMatches, summary.DataBlockProbeFilterRejects, summary.DataBlockProbeFilterEvals, summary.DataBlockProbeFilterEvalHits, summary.DataBlockProbeFilterEvalMiss, summary.DataBlockProbeRequiredEvals, summary.DataBlockProbeRequiredHits, summary.DataBlockProbeRequiredMiss, summary.DataBlockProbeAnyEvals, summary.DataBlockProbeAnyHits, summary.DataBlockProbeAnyMiss, summary.DataBlockProbeNoneEvals, summary.DataBlockProbeNoneHits, summary.DataBlockProbeNoneMiss))
 	}
@@ -859,6 +862,29 @@ func decodePathText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func fieldFilterSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	if len(summary.QueryFields) == 0 && len(summary.MatchedFields) == 0 && len(summary.MissingFields) == 0 &&
+		len(summary.QueryAnyFields) == 0 && len(summary.MatchedAnyFields) == 0 && len(summary.MissingAnyFields) == 0 &&
+		len(summary.QueryNoneFields) == 0 && len(summary.MatchedNoneFields) == 0 && len(summary.MissingNoneFields) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"field_filters required=%d matched=%d missing=%d any=%d any_matched=%d any_missing=%d none=%d none_matched=%d none_missing=%d",
+		len(summary.QueryFields),
+		len(summary.MatchedFields),
+		len(summary.MissingFields),
+		len(summary.QueryAnyFields),
+		len(summary.MatchedAnyFields),
+		len(summary.MissingAnyFields),
+		len(summary.QueryNoneFields),
+		len(summary.MatchedNoneFields),
+		len(summary.MissingNoneFields),
+	)
 }
 
 func countMapText(counts map[string]int) string {
