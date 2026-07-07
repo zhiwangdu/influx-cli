@@ -36,6 +36,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	}
 	populateTSSPDecodeSeriesMatches(summary, metaIndexes)
 
+	cursorIndex := 0
 	for _, meta := range tsspMetaIndexesForCursor(metaIndexes, options.CursorDescending) {
 		metaChunks := int(meta.Count)
 		if !tsspQuerySeriesSelected(meta.ID, seriesSet) {
@@ -66,10 +67,14 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 			summary.OptimizedDecodeBytes += int64(meta.Size)
 			summary.DecodeBlocksByType["meta-index"] += metaChunks
 			appendTSSPMetaIndexDecodeSample(summary, meta, options.BlockSampleLimit)
+			appendTSSPMetaIndexCursorExecutionSample(summary, meta, cursorIndex, metaChunks, options.BlockSampleLimit)
+			cursorIndex += metaChunks
 			continue
 		}
 
 		for _, chunk := range tsspChunksForCursor(sidChunks, options.CursorDescending) {
+			cursorIndexBefore := cursorIndex
+			cursorIndex++
 			minTime, maxTime := chunk.minMaxTime()
 			segmentCount := len(chunk.TimeRanges)
 			columnProjection := newTSSPColumnProjection(chunk, options.QueryColumns, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields)
@@ -119,6 +124,8 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 			appendTSSPChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
 				baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, valueOutputChecked, valueOutputAvailable, valueOutputPoints, valueUnavailableReason, projectionMiss, options.BlockSampleLimit)
 			appendTSSPChunkCursorWindow(summary, chunk, minTime, maxTime, segmentCount, outputSegments, projectionMiss, options.BlockSampleLimit)
+			appendTSSPLocationCursorExecutionSample(summary, "tssp-location-cursor-step", fmt.Sprintf("sid:%d", chunk.SID),
+				minTime, maxTime, segmentCount, outputSegments, projectionMiss, cursorIndexBefore, options.BlockSampleLimit)
 		}
 	}
 
@@ -166,6 +173,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
 	summary.CursorWindowCount = summary.LocationBlocks
+	markLastTSSPCursorExecutionSampleExhausted(summary, cursorIndex)
 	summary.Recommendations = tsspDecodeRecommendations(summary)
 	return summary
 }
@@ -237,6 +245,7 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
+	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
 	summary.Recommendations = tsspDecodeRecommendations(summary)
 	return summary
 }
@@ -300,6 +309,7 @@ func buildTSSPDetachedFileSetDecodePathSummary(files []FileReport, options Optio
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
+	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
 	summary.Recommendations = tsspDetachedFileSetRecommendations(summary)
 	return summary
 }
@@ -454,6 +464,10 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 	if sampleLimit <= 0 {
 		return
 	}
+	cursorIndexBase := dst.LocationBlocks - src.LocationBlocks
+	if cursorIndexBase < 0 {
+		cursorIndexBase = 0
+	}
 	for _, sample := range src.Samples {
 		if len(dst.Samples) >= sampleLimit {
 			break
@@ -482,6 +496,19 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 		if len(dst.CursorOutputSamples) < sampleLimit {
 			dst.CursorOutputSamples = append(dst.CursorOutputSamples, output)
 		}
+	}
+	for _, sample := range src.CursorExecutionSamples {
+		if len(dst.CursorExecutionSamples) >= sampleLimit {
+			break
+		}
+		if sample.File == "" {
+			sample.File = path
+		}
+		sample.Step = len(dst.CursorExecutionSamples) + 1
+		sample.CursorIndexBefore += cursorIndexBase
+		sample.CursorIndexAfter += cursorIndexBase
+		sample.CursorExhausted = false
+		dst.CursorExecutionSamples = append(dst.CursorExecutionSamples, sample)
 	}
 }
 
@@ -618,6 +645,22 @@ func appendTSSPMetaIndexDecodeSample(summary *DecodePathSummary, meta tsspMetaIn
 	})
 }
 
+func appendTSSPMetaIndexCursorExecutionSample(summary *DecodePathSummary, meta tsspMetaIndex, cursorIndexBefore, locationBlocks, sampleLimit int) {
+	if sampleLimit <= 0 || summary == nil || locationBlocks <= 0 || len(summary.CursorExecutionSamples) >= sampleLimit {
+		return
+	}
+	summary.CursorExecutionSamples = append(summary.CursorExecutionSamples, DecodePathCursorStep{
+		Step:              len(summary.CursorExecutionSamples) + 1,
+		Type:              "tssp-location-cursor-step",
+		Action:            "read_unexpanded_chunk_metadata",
+		Key:               fmt.Sprintf("sid:%d", meta.ID),
+		CandidateValue:    fmt.Sprintf("time_range=%d:%d chunks=%d", meta.MinTime, meta.MaxTime, locationBlocks),
+		CursorIndexBefore: cursorIndexBefore,
+		CursorIndexAfter:  cursorIndexBefore + locationBlocks,
+		CursorAdvanced:    true,
+	})
+}
+
 func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, sizeBytes uint32,
 	baselineReadAtCalls, optimizedReadAtCalls int, readAtRanges []DecodePathReadAtRange, valueOutputChecked, valueOutputAvailable bool, valueOutputPoints int, valueUnavailableReason string, projectionMiss bool, sampleLimit int) {
 	if sampleLimit <= 0 || len(summary.Samples) >= sampleLimit {
@@ -654,6 +697,42 @@ func appendTSSPChunkDecodeSample(summary *DecodePathSummary, chunk tsspChunkMeta
 		Reason:                reason,
 		OptimizedReadAtRanges: readAtRanges,
 	})
+}
+
+func appendTSSPLocationCursorExecutionSample(summary *DecodePathSummary, typ, key string, minTime, maxTime int64, segmentCount, outputSegments int, projectionMiss bool, cursorIndexBefore, sampleLimit int) {
+	if sampleLimit <= 0 || summary == nil || len(summary.CursorExecutionSamples) >= sampleLimit {
+		return
+	}
+	action := "skip_after_range"
+	if projectionMiss {
+		action = "skip_projection"
+	} else if outputSegments > 0 {
+		action = "read_segments"
+	} else if maxTime < summary.QueryRange.Min {
+		action = "skip_before_seek"
+	}
+	summary.CursorExecutionSamples = append(summary.CursorExecutionSamples, DecodePathCursorStep{
+		Step:              len(summary.CursorExecutionSamples) + 1,
+		Type:              typ,
+		Action:            action,
+		Key:               key,
+		CandidateValue:    fmt.Sprintf("time_range=%d:%d segments=%d/%d", minTime, maxTime, outputSegments, segmentCount),
+		CursorIndexBefore: cursorIndexBefore,
+		CursorIndexAfter:  cursorIndexBefore + 1,
+		CursorAdvanced:    true,
+	})
+}
+
+func markLastTSSPCursorExecutionSampleExhausted(summary *DecodePathSummary, finalCursorIndex int) {
+	if summary == nil || finalCursorIndex <= 0 {
+		return
+	}
+	for i := len(summary.CursorExecutionSamples) - 1; i >= 0; i-- {
+		if summary.CursorExecutionSamples[i].CursorIndexAfter == finalCursorIndex {
+			summary.CursorExecutionSamples[i].CursorExhausted = true
+			return
+		}
+	}
 }
 
 func appendTSSPChunkCursorWindow(summary *DecodePathSummary, chunk tsspChunkMeta, minTime, maxTime int64, segmentCount, outputSegments int, projectionMiss bool, sampleLimit int) {
@@ -928,6 +1007,9 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(recommendations) == 0 {
 		recommendations = append(recommendations, "query range has no TSSP chunk segment candidates")
+	}
+	if len(summary.CursorExecutionSamples) > 0 {
+		recommendations = append(recommendations, "TSSP location cursor execution samples show local metadata skip/read steps")
 	}
 	return recommendations
 }

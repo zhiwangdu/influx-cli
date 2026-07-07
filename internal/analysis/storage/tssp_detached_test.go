@@ -120,6 +120,23 @@ func TestAnalyzeTSSPDetachedMetaIndex(t *testing.T) {
 	if got, want := decode.CursorWindows[0].Reason, "detached_chunk_meta_batch_filtered"; got != want {
 		t.Fatalf("cursor window reason = %q, want %q", got, want)
 	}
+	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tssp-detached-chunk-meta-batch-step",
+		Action:            "read_batch_filtered",
+		Key:               "meta-index-id:10-12",
+		CandidateValue:    "time_range=100:450 decoded=1/3",
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  3,
+		CursorAdvanced:    true,
+		CursorExhausted:   true,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantStep {
+		t.Fatalf("cursor execution sample = %+v, want %+v", got, wantStep)
+	}
 	if got, want := len(decode.Samples), 3; got != want {
 		t.Fatalf("sample count = %d, want %d", got, want)
 	}
@@ -134,6 +151,9 @@ func TestAnalyzeTSSPDetachedMetaIndex(t *testing.T) {
 	}
 	if got, want := report.Summary.QueryOverlapBlocks, 1; got != want {
 		t.Fatalf("summary overlap blocks = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP cursor execution samples") {
+		t.Fatalf("recommendations = %v, want cursor execution recommendation", decode.Recommendations)
 	}
 }
 
@@ -252,6 +272,15 @@ func TestAnalyzeTSSPDetachedMetaIndexFileSetDecodePathAcrossFiles(t *testing.T) 
 		if len(window.Files) == 0 {
 			t.Fatalf("cursor window missing file: %+v", window)
 		}
+	}
+	if got, want := len(decode.CursorExecutionSamples), 2; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	if got := decode.CursorExecutionSamples[0]; got.Step != 1 || got.CursorIndexBefore != 0 || got.CursorIndexAfter != 2 || got.File == "" || got.CursorExhausted {
+		t.Fatalf("cursor execution sample[0] = %+v, want first aggregate batch step", got)
+	}
+	if got := decode.CursorExecutionSamples[1]; got.Step != 2 || got.CursorIndexBefore != 2 || got.CursorIndexAfter != 3 || got.File == "" || !got.CursorExhausted {
+		t.Fatalf("cursor execution sample[1] = %+v, want final aggregate batch step", got)
 	}
 	if got, want := report.Summary.QueryOverlapBlocks, 2; got != want {
 		t.Fatalf("summary overlap blocks = %d, want %d", got, want)
@@ -743,6 +772,15 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	if got, want := decode.CursorWindows[0].Reason, "detached_chunk_meta_batch_filtered"; got != want {
 		t.Fatalf("cursor window reason = %q, want %q", got, want)
 	}
+	if got, want := len(decode.CursorExecutionSamples), 2; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	if got := decode.CursorExecutionSamples[0]; got.Type != "tssp-detached-location-cursor-step" || got.Action != "skip_before_seek" || got.Key != "meta-index-id:10" || got.CursorIndexBefore != 0 || got.CursorIndexAfter != 1 {
+		t.Fatalf("cursor execution sample[0] = %+v, want detached location skip", got)
+	}
+	if got := decode.CursorExecutionSamples[1]; got.Type != "tssp-detached-location-cursor-step" || got.Action != "read_segments" || got.Key != "meta-index-id:11" || got.CandidateValue != "time_range=200:260 segments=1/1" || got.CursorIndexBefore != 1 || got.CursorIndexAfter != 2 || !got.CursorExhausted {
+		t.Fatalf("cursor execution sample[1] = %+v, want detached segment read", got)
+	}
 	if got, want := len(decode.Samples), 2; got != want {
 		t.Fatalf("decode samples = %d, want %d", got, want)
 	}
@@ -781,6 +819,115 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "materialized 1 detached TSSP output point") {
 		t.Fatalf("recommendations = %v, want detached row-count materialization recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP cursor execution samples") {
+		t.Fatalf("recommendations = %v, want detached cursor execution recommendation", decode.Recommendations)
+	}
+}
+
+func TestTSSPDetachedCursorExecutionSamplesFollowDescendingOrder(t *testing.T) {
+	queryRange, err := NewTimeRange(210, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaIndexes := []tsspMetaIndex{
+		{ID: 10, MinTime: 100, MaxTime: 150, Offset: 64, Size: 40},
+		{ID: 11, MinTime: 200, MaxTime: 260, Offset: 104, Size: 80},
+		{ID: 12, MinTime: 400, MaxTime: 450, Offset: 184, Size: 60},
+	}
+
+	metaSummary := buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes, Options{
+		QueryRange:       queryRange,
+		BlockSampleLimit: 4,
+		CursorDescending: true,
+	})
+	if metaSummary == nil {
+		t.Fatal("detached meta-index decode path is nil")
+	}
+	if got, want := len(metaSummary.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("meta-index cursor execution samples = %d, want %d", got, want)
+	}
+	if got := metaSummary.CursorExecutionSamples[0]; got.Type != "tssp-detached-chunk-meta-batch-step" || got.Action != "read_batch_filtered" || got.Key != "meta-index-id:12-10" || got.CursorIndexBefore != 0 || got.CursorIndexAfter != 3 || !got.CursorExhausted {
+		t.Fatalf("meta-index cursor execution sample = %+v, want descending batch step", got)
+	}
+
+	chunkSummary := buildTSSPDetachedChunkDecodePathSummary(metaIndexes[:2], []tsspChunkMeta{
+		{SID: 10, TimeRanges: []tsspTimeRange{{Min: 100, Max: 150}}},
+		{SID: 11, TimeRanges: []tsspTimeRange{{Min: 200, Max: 260}}},
+	}, Options{
+		QueryRange:       queryRange,
+		BlockSampleLimit: 4,
+		CursorDescending: true,
+	}, nil, nil)
+	if chunkSummary == nil {
+		t.Fatal("detached chunk decode path is nil")
+	}
+	if got, want := len(chunkSummary.CursorExecutionSamples), 2; got != want {
+		t.Fatalf("chunk cursor execution samples = %d, want %d", got, want)
+	}
+	if got := chunkSummary.CursorExecutionSamples[0]; got.Type != "tssp-detached-location-cursor-step" || got.Action != "read_segments" || got.Key != "meta-index-id:11" || got.CursorIndexBefore != 0 || got.CursorIndexAfter != 1 {
+		t.Fatalf("chunk cursor execution sample[0] = %+v, want descending overlap", got)
+	}
+	if got := chunkSummary.CursorExecutionSamples[1]; got.Type != "tssp-detached-location-cursor-step" || got.Action != "skip_before_seek" || got.Key != "meta-index-id:10" || got.CursorIndexBefore != 1 || got.CursorIndexAfter != 2 || !got.CursorExhausted {
+		t.Fatalf("chunk cursor execution sample[1] = %+v, want descending before-seek skip", got)
+	}
+}
+
+func TestTSSPDetachedChunkFileSetCursorExecutionSamplesUseLocationBlockIndex(t *testing.T) {
+	queryRange, err := NewTimeRange(210, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := Options{
+		QueryRange:       queryRange,
+		BlockSampleLimit: 4,
+	}
+	file1Decode := buildTSSPDetachedChunkDecodePathSummary([]tsspMetaIndex{
+		{ID: 10, MinTime: 100, MaxTime: 150, Offset: 64, Size: 0},
+		{ID: 11, MinTime: 200, MaxTime: 260, Offset: 104, Size: 80},
+	}, []tsspChunkMeta{
+		{SID: 11, TimeRanges: []tsspTimeRange{{Min: 200, Max: 260}}},
+	}, options, nil, nil)
+	if file1Decode == nil {
+		t.Fatal("file1 decode path is nil")
+	}
+	if got, want := file1Decode.LocationBlocks, 1; got != want {
+		t.Fatalf("file1 location blocks = %d, want %d", got, want)
+	}
+	if got, want := len(file1Decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("file1 cursor execution samples = %d, want %d", got, want)
+	}
+	if got := file1Decode.CursorExecutionSamples[0]; got.CursorIndexBefore != 0 || got.CursorIndexAfter != 1 || !got.CursorExhausted {
+		t.Fatalf("file1 cursor execution sample = %+v, want location-block aligned exhausted sample", got)
+	}
+
+	file2Decode := buildTSSPDetachedChunkDecodePathSummary([]tsspMetaIndex{
+		{ID: 20, MinTime: 205, MaxTime: 230, Offset: 64, Size: 80},
+	}, []tsspChunkMeta{
+		{SID: 20, TimeRanges: []tsspTimeRange{{Min: 205, Max: 230}}},
+	}, options, nil, nil)
+	if file2Decode == nil {
+		t.Fatal("file2 decode path is nil")
+	}
+
+	fileSet := buildTSSPDetachedFileSetDecodePathSummary([]FileReport{
+		{Path: "segment-a/segment.idx", Format: FormatTSSPDetachedIndex, DecodePath: file1Decode},
+		{Path: "segment-b/segment.idx", Format: FormatTSSPDetachedIndex, DecodePath: file2Decode},
+	}, options)
+	if fileSet == nil {
+		t.Fatal("file-set decode path is nil")
+	}
+	if got, want := fileSet.LocationBlocks, 2; got != want {
+		t.Fatalf("file-set location blocks = %d, want %d", got, want)
+	}
+	if got, want := len(fileSet.CursorExecutionSamples), 2; got != want {
+		t.Fatalf("file-set cursor execution samples = %d, want %d", got, want)
+	}
+	if got := fileSet.CursorExecutionSamples[0]; got.Step != 1 || got.CursorIndexBefore != 0 || got.CursorIndexAfter != 1 || got.File != "segment-a/segment.idx" || got.CursorExhausted {
+		t.Fatalf("file-set cursor execution sample[0] = %+v, want first aggregate location step", got)
+	}
+	if got := fileSet.CursorExecutionSamples[1]; got.Step != 2 || got.CursorIndexBefore != 1 || got.CursorIndexAfter != 2 || got.File != "segment-b/segment.idx" || !got.CursorExhausted {
+		t.Fatalf("file-set cursor execution sample[1] = %+v, want final aggregate location step", got)
 	}
 }
 

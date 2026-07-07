@@ -159,6 +159,28 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	if got, want := decode.CursorWindows[1].SavedBlocks, 0; got != want {
 		t.Fatalf("second cursor window saved blocks = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorExecutionSamples), 3; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantFirstStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tssp-location-cursor-step",
+		Action:            "skip_before_seek",
+		Key:               "sid:7",
+		CandidateValue:    "time_range=100:120 segments=0/1",
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  1,
+		CursorAdvanced:    true,
+	}
+	if got := decode.CursorExecutionSamples[0]; got != wantFirstStep {
+		t.Fatalf("cursor execution sample[0] = %+v, want %+v", got, wantFirstStep)
+	}
+	if got := decode.CursorExecutionSamples[1]; got.Action != "read_segments" || got.Key != "sid:7" || got.CandidateValue != "time_range=150:180 segments=1/1" || got.CursorIndexBefore != 1 || got.CursorIndexAfter != 2 {
+		t.Fatalf("cursor execution sample[1] = %+v, want overlapping segment read", got)
+	}
+	if got := decode.CursorExecutionSamples[2]; got.Action != "skip_after_range" || got.CursorIndexBefore != 2 || got.CursorIndexAfter != 3 || !got.CursorExhausted {
+		t.Fatalf("cursor execution sample[2] = %+v, want after-range skip", got)
+	}
 	if got, want := decode.Samples[1].OutputSegments, 1; got != want {
 		t.Fatalf("second decode sample output segments = %d, want %d", got, want)
 	}
@@ -167,6 +189,9 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	}
 	if !containsStringWithPrefix(decode.Recommendations, "issue 2 TSSP ReadAt call(s)") {
 		t.Fatalf("recommendations = %v, want ReadAt call recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "TSSP location cursor execution samples") {
+		t.Fatalf("recommendations = %v, want cursor execution recommendation", decode.Recommendations)
 	}
 	overlapSample := decode.Samples[1]
 	if got, want := overlapSample.BaselineReadAtCalls, 2; got != want {
@@ -192,6 +217,95 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	}
 	if len(file.Notices) != 0 {
 		t.Fatalf("notices = %v, want none", file.Notices)
+	}
+}
+
+func TestBuildTSSPDecodePathSummarySamplesUnexpandedMetaIndexCursor(t *testing.T) {
+	queryRange, err := NewTimeRange(150, 175)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	summary := buildTSSPDecodePathSummary([]tsspMetaIndex{{
+		ID:      7,
+		MinTime: 100,
+		MaxTime: 200,
+		Count:   3,
+		Size:    64,
+	}}, nil, Options{
+		QueryRange:       queryRange,
+		BlockSampleLimit: 3,
+	}, nil)
+	if summary == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := summary.LocationBlocks, 3; got != want {
+		t.Fatalf("location blocks = %d, want %d", got, want)
+	}
+	if got, want := len(summary.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	wantStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tssp-location-cursor-step",
+		Action:            "read_unexpanded_chunk_metadata",
+		Key:               "sid:7",
+		CandidateValue:    "time_range=100:200 chunks=3",
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  3,
+		CursorAdvanced:    true,
+		CursorExhausted:   true,
+	}
+	if got := summary.CursorExecutionSamples[0]; got != wantStep {
+		t.Fatalf("cursor execution sample = %+v, want %+v", got, wantStep)
+	}
+}
+
+func TestAnalyzeTSSPCursorExecutionSamplesFollowDescendingOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSP(path); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(150, 175)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		BlockSampleLimit: 3,
+		CursorDescending: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.Mode, "tssp-location-cursor-descending"; got != want {
+		t.Fatalf("decode mode = %q, want %q", got, want)
+	}
+	if got, want := len(decode.CursorExecutionSamples), 3; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	want := []struct {
+		action string
+		value  string
+	}{
+		{"skip_after_range", "time_range=190:200 segments=0/1"},
+		{"read_segments", "time_range=150:180 segments=1/1"},
+		{"skip_before_seek", "time_range=100:120 segments=0/1"},
+	}
+	for i, want := range want {
+		got := decode.CursorExecutionSamples[i]
+		if got.Action != want.action || got.CandidateValue != want.value || got.CursorIndexBefore != i || got.CursorIndexAfter != i+1 {
+			t.Fatalf("cursor execution sample[%d] = %+v, want action=%s value=%s", i, got, want.action, want.value)
+		}
+	}
+	if !decode.CursorExecutionSamples[2].CursorExhausted {
+		t.Fatalf("last cursor execution sample = %+v, want exhausted", decode.CursorExecutionSamples[2])
 	}
 }
 
@@ -3312,6 +3426,26 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 		if len(window.Files) == 0 {
 			t.Fatalf("cursor window missing file: %+v", window)
 		}
+	}
+	if got, want := len(decode.CursorExecutionSamples), 5; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	for i, sample := range decode.CursorExecutionSamples {
+		if got, want := sample.Step, i+1; got != want {
+			t.Fatalf("cursor execution sample[%d] step = %d, want %d", i, got, want)
+		}
+		if got, want := sample.CursorIndexBefore, i; got != want {
+			t.Fatalf("cursor execution sample[%d] index before = %d, want %d", i, got, want)
+		}
+		if got, want := sample.CursorIndexAfter, i+1; got != want {
+			t.Fatalf("cursor execution sample[%d] index after = %d, want %d", i, got, want)
+		}
+		if sample.File == "" {
+			t.Fatalf("cursor execution sample[%d] missing file: %+v", i, sample)
+		}
+	}
+	if decode.CursorExecutionSamples[4].CursorExhausted {
+		t.Fatalf("last sampled file-set cursor execution sample = %+v, want not exhausted because sample limit clipped final location", decode.CursorExecutionSamples[4])
 	}
 }
 

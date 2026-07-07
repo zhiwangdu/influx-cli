@@ -2241,6 +2241,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		valueOutputChecked := false
 		valueUnavailableReason := ""
 		valueOutputPoints := 0
+		cursorIndexBefore := summary.LocationBlocks
 
 		summary.LocationBlocks++
 		summary.LocationBlocksByType["detached-chunk-meta"]++
@@ -2287,6 +2288,8 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		}
 		appendTSSPDetachedChunkDecodeSample(summary, chunk, minTime, maxTime, segmentCount, outputSegments, baselineBytes,
 			baselineReadAtCalls, optimizedReadAtCalls, readAtRanges, valueOutputChecked, valueOutputAvailable, valueOutputPoints, valueUnavailableReason, projectionMiss, options.BlockSampleLimit)
+		appendTSSPLocationCursorExecutionSample(summary, "tssp-detached-location-cursor-step", fmt.Sprintf("meta-index-id:%d", chunk.SID),
+			minTime, maxTime, segmentCount, outputSegments, projectionMiss, cursorIndexBefore, options.BlockSampleLimit)
 	}
 
 	if dataProbe != nil {
@@ -2334,6 +2337,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
 	populateTSSPDetachedChunkMetaBatches(summary, selectedMetas, overlapMetas, options)
+	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
 	summary.Recommendations = tsspDetachedChunkDecodeRecommendations(summary)
 	return summary
 }
@@ -2439,6 +2443,7 @@ func buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes []tsspMetaIndex, op
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
 	populateTSSPDetachedChunkMetaBatches(summary, selectedMetas, overlapMetas, options)
+	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
 	summary.Recommendations = tsspDetachedMetaIndexRecommendations(summary)
 	return summary
 }
@@ -2454,6 +2459,7 @@ func populateTSSPDetachedChunkMetaBatches(summary *DecodePathSummary, selected, 
 	for _, meta := range overlapping {
 		overlapIDs[meta.ID] = struct{}{}
 	}
+	emitBatchExecutionSamples := !hasTSSPDetachedLocationCursorExecutionSamples(summary)
 	for start := 0; start < len(selected) && len(summary.CursorWindows) < options.BlockSampleLimit; start += tsspDetachedChunkMetaReadNum {
 		end := start + tsspDetachedChunkMetaReadNum
 		if end > len(selected) {
@@ -2488,7 +2494,49 @@ func populateTSSPDetachedChunkMetaBatches(summary *DecodePathSummary, selected, 
 			Reason:          reason,
 			FirstBlockIndex: start,
 		})
+		if emitBatchExecutionSamples {
+			appendTSSPDetachedChunkMetaBatchExecutionSample(summary, batch, minTime, maxTime, decoded, start, end, len(selected), options.BlockSampleLimit)
+		}
 	}
+}
+
+func hasTSSPDetachedLocationCursorExecutionSamples(summary *DecodePathSummary) bool {
+	if summary == nil {
+		return false
+	}
+	for _, sample := range summary.CursorExecutionSamples {
+		if sample.Type == "tssp-detached-location-cursor-step" {
+			return true
+		}
+	}
+	return false
+}
+
+func appendTSSPDetachedChunkMetaBatchExecutionSample(summary *DecodePathSummary, batch []tsspMetaIndex, minTime, maxTime int64, decoded, start, end, total, sampleLimit int) {
+	if sampleLimit <= 0 || summary == nil || len(batch) == 0 || len(summary.CursorExecutionSamples) >= sampleLimit {
+		return
+	}
+	action := "read_batch_overlap"
+	if decoded == 0 {
+		action = "skip_batch_outside_range"
+	} else if decoded < len(batch) {
+		action = "read_batch_filtered"
+	}
+	key := fmt.Sprintf("meta-index-id:%d", batch[0].ID)
+	if len(batch) > 1 {
+		key = fmt.Sprintf("meta-index-id:%d-%d", batch[0].ID, batch[len(batch)-1].ID)
+	}
+	summary.CursorExecutionSamples = append(summary.CursorExecutionSamples, DecodePathCursorStep{
+		Step:              len(summary.CursorExecutionSamples) + 1,
+		Type:              "tssp-detached-chunk-meta-batch-step",
+		Action:            action,
+		Key:               key,
+		CandidateValue:    fmt.Sprintf("time_range=%d:%d decoded=%d/%d", minTime, maxTime, decoded, len(batch)),
+		CursorIndexBefore: start,
+		CursorIndexAfter:  end,
+		CursorAdvanced:    true,
+		CursorExhausted:   end >= total,
+	})
 }
 
 func tsspDetachedChunkMetaBatchCount(records int) int {
@@ -2588,6 +2636,9 @@ func tsspDetachedMetaIndexRecommendations(summary *DecodePathSummary) []string {
 			summary.BaselineCursorReadCalls,
 			summary.OptimizedCursorReadCalls,
 		))
+	}
+	if len(summary.CursorExecutionSamples) > 0 {
+		recommendations = append(recommendations, "detached TSSP cursor execution samples show local batch read/filter steps")
 	}
 	return recommendations
 }
@@ -2772,6 +2823,9 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 	}
 	if len(recommendations) == 0 {
 		recommendations = append(recommendations, "query range has no detached TSSP chunk segment candidates")
+	}
+	if len(summary.CursorExecutionSamples) > 0 {
+		recommendations = append(recommendations, "detached TSSP cursor execution samples show local metadata skip/read steps")
 	}
 	return recommendations
 }
