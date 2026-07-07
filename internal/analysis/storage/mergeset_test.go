@@ -84,6 +84,9 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got, want := file.Extra["index_block_headers"], "2"; got != want {
 		t.Fatalf("index block headers extra = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["metaindex_first_item_mismatches"], "0"; got != want {
+		t.Fatalf("metaindex first-item mismatches extra = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["item_count_from_blocks"], "41"; got != want {
 		t.Fatalf("item count from blocks extra = %q, want %q", got, want)
 	}
@@ -1246,6 +1249,97 @@ func TestAnalyzeMergesetInvalidCommonPrefixHeaderNotice(t *testing.T) {
 		t.Fatalf("notices = %v, want payload decode common-prefix notice", file.Notices)
 	}
 	if got, want := file.Extra["item_payload_blocks_decoded"], "0"; got != want {
+		t.Fatalf("payload blocks decoded = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeMergesetMetaindexFirstItemMismatchNotice(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "6_3_badmetaindex")
+	metadata := mergesetPartMetadata{
+		ItemsCount:  6,
+		BlocksCount: 3,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}
+	headers, itemsData, lensData, err := testMergesetBlockHeaders(metadata, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var indexData []byte
+	indexOffsets := make([]uint64, 0, len(headers))
+	indexSizes := make([]uint32, 0, len(headers))
+	for _, header := range headers {
+		indexBlockData, err := encodeTestMergesetIndexBlock([]mergesetBlockHeader{header})
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexOffsets = append(indexOffsets, uint64(len(indexData)))
+		indexSizes = append(indexSizes, uint32(len(indexBlockData)))
+		indexData = append(indexData, indexBlockData...)
+	}
+	secondRowFirstItem := append([]byte(nil), headers[1].FirstItem...)
+	secondRowFirstItem[len(secondRowFirstItem)-1]++
+	metaindex, err := encodeTestMergesetMetaindexRows([]mergesetMetaindexRow{{
+		FirstItem:         []byte("a0"),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  indexOffsets[0],
+		IndexBlockSize:    indexSizes[0],
+	}, {
+		FirstItem:         secondRowFirstItem,
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  indexOffsets[1],
+		IndexBlockSize:    indexSizes[1],
+	}, {
+		FirstItem:         append([]byte(nil), headers[2].FirstItem...),
+		BlockHeadersCount: 1,
+		IndexBlockOffset:  indexOffsets[2],
+		IndexBlockSize:    indexSizes[2],
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(partPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadataData, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, write := range []struct {
+		name string
+		data []byte
+	}{
+		{name: mergesetMetadataFile, data: metadataData},
+		{name: mergesetMetaindexFile, data: metaindex},
+		{name: mergesetIndexFile, data: indexData},
+		{name: mergesetItemsFile, data: itemsData},
+		{name: mergesetLensFile, data: lensData},
+	} {
+		if err := os.WriteFile(filepath.Join(partPath, write.name), write.data, 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", write.name, err)
+		}
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format: FormatMergeset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["metaindex_first_item_mismatches"], "2"; got != want {
+		t.Fatalf("metaindex first-item mismatches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["index_block_count"], "3"; got != want {
+		t.Fatalf("index block count = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-first-item-mismatch"], 2; got != want {
+		t.Fatalf("metaindex first-item mismatch block type count = %d, want %d", got, want)
+	}
+	if !containsString(file.Notices, "metaindex has 2 row(s) whose first_item differs") {
+		t.Fatalf("notices = %v, want metaindex/header first-item mismatch notice", file.Notices)
+	}
+	if got, want := file.Extra["item_payload_blocks_decoded"], "3"; got != want {
 		t.Fatalf("payload blocks decoded = %q, want %q", got, want)
 	}
 }

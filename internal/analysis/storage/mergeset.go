@@ -57,10 +57,11 @@ type mergesetMetaindexRow struct {
 }
 
 type mergesetIndexSummary struct {
-	Headers          []mergesetBlockHeader
-	IndexBlocks      int
-	DecodedBlocks    int
-	UncompressedSize int
+	Headers                      []mergesetBlockHeader
+	IndexBlocks                  int
+	DecodedBlocks                int
+	UncompressedSize             int
+	MetaindexFirstItemMismatches int
 }
 
 type mergesetItemPayloadSummary struct {
@@ -471,6 +472,9 @@ func readMergesetIndexBlocks(path string, rows []mergesetMetaindexRow, component
 			notices = append(notices, fmt.Sprintf("mergeset index block decode unavailable at row=%d offset=%d size=%d: %v", i+1, row.IndexBlockOffset, row.IndexBlockSize, err))
 			continue
 		}
+		if len(headers) > 0 && !bytes.Equal(row.FirstItem, headers[0].FirstItem) {
+			summary.MetaindexFirstItemMismatches++
+		}
 		summary.DecodedBlocks++
 		summary.UncompressedSize += len(data)
 		summary.Headers = append(summary.Headers, headers...)
@@ -585,6 +589,7 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	report.Extra["index_blocks_decoded"] = fmt.Sprint(summary.DecodedBlocks)
 	report.Extra["index_block_headers"] = fmt.Sprint(len(summary.Headers))
 	report.Extra["index_uncompressed_size"] = fmt.Sprint(summary.UncompressedSize)
+	report.Extra["metaindex_first_item_mismatches"] = fmt.Sprint(summary.MetaindexFirstItemMismatches)
 	if len(summary.Headers) == 0 {
 		return
 	}
@@ -648,6 +653,10 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	if invalidCommonPrefix > 0 {
 		report.BlocksByType["mergeset-invalid-common-prefix"] = invalidCommonPrefix
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset index has %d block header(s) whose first_item does not start with common_prefix", invalidCommonPrefix))
+	}
+	if summary.MetaindexFirstItemMismatches > 0 {
+		report.BlocksByType["mergeset-metaindex-first-item-mismatch"] = summary.MetaindexFirstItemMismatches
+		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex has %d row(s) whose first_item differs from the row's first block header first_item", summary.MetaindexFirstItemMismatches))
 	}
 
 	for i, header := range summary.Headers {
