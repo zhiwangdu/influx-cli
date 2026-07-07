@@ -1326,6 +1326,50 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFileSetSummarizesPredicateOperators(t *testing.T) {
+	dir := t.TempDir()
+	var times []int64
+	for _, name := range []string{"00000001-0001-00000000.tssp", "00000002-0001-00000000.tssp"} {
+		path := filepath.Join(dir, name)
+		fileTimes, err := writeTestTSSPWithMultiColumnRecordData(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if times == nil {
+			times = fileTimes
+		}
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: ">", Value: "1.0"}},
+		QueryAnyFields:   []FieldFilter{{Key: "status", Value: "false"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level TSSP decode path summary")
+	}
+	if got, want := decode.DataBlockProbeFilterOps["="], 4; got != want {
+		t.Fatalf("file-set equality filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps[">"], 4; got != want {
+		t.Fatalf("file-set greater-than filter evaluations = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "TSSP decoded-row field predicate operators: =:4 >:4") {
+		t.Fatalf("recommendations = %v, want file-set predicate operator recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPNoneFieldFilterRejectsMatchingRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)

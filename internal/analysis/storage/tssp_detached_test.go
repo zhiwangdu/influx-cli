@@ -1927,6 +1927,54 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedFileSetSummarizesPredicateOperators(t *testing.T) {
+	dir := t.TempDir()
+	for i, name := range []string{"segment-a", "segment-b"} {
+		segmentDir := filepath.Join(dir, name)
+		if err := os.MkdirAll(segmentDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		chunks := []testTSSPChunkSpec{
+			{sid: uint64(42 + i), minTime: 333, maxTime: 333, offset: 1000, size: 13, timeSize: 13},
+		}
+		metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(segmentDir, tsspDetachedChunkMetaFileName), chunks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTestTSSPDetachedMetaIndex(filepath.Join(segmentDir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTestTSSPDetachedOneRowData(filepath.Join(segmentDir, tsspDetachedDataFileName), 1200, chunks[0], 99, 333); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queryRange, err := NewTimeRange(333, 333)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		Recursive:        true,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+		QueryAnyFields:   []FieldFilter{{Key: "value", Value: "0"}, {Key: "value", Value: "99"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level detached TSSP decode path summary")
+	}
+	if got, want := decode.DataBlockProbeFilterOps["="], 4; got != want {
+		t.Fatalf("detached file-set equality filter evaluations = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP decoded-row field predicate operators: =:4") {
+		t.Fatalf("recommendations = %v, want detached file-set predicate operator recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPDetachedNoneFieldFilterRejectsMatchingRows(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
