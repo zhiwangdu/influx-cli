@@ -438,6 +438,7 @@ func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindex
 	rangeSummary := summarizeMergesetMetaindexIndexRanges(rows, indexSizeUint)
 	report.Extra["metaindex_block_headers"] = fmt.Sprint(totalHeaders)
 	report.Extra["metaindex_index_bytes"] = fmt.Sprint(totalIndexBytes)
+	report.Extra["metaindex_index_range_out_of_bounds"] = fmt.Sprint(rangeSummary.OutOfBounds)
 	report.Extra["metaindex_index_range_order_violations"] = fmt.Sprint(rangeSummary.OrderViolations)
 	report.Extra["metaindex_index_range_overlaps"] = fmt.Sprint(rangeSummary.Overlaps)
 	report.Extra["metaindex_index_range_gaps"] = fmt.Sprint(rangeSummary.GapRanges)
@@ -446,6 +447,7 @@ func addMergesetMetaindexSummary(report *FileReport, metaindex mergesetMetaindex
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex block_headers_count total=%d differs from metadata blocks_count=%d", totalHeaders, metadataBlockCount))
 	}
 	if rangeSummary.OutOfBounds > 0 {
+		report.BlocksByType["mergeset-metaindex-index-range-out-of-bounds"] = rangeSummary.OutOfBounds
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset metaindex has %d row(s) outside index.bin bounds", rangeSummary.OutOfBounds))
 	}
 	if rangeSummary.OrderViolations > 0 {
@@ -745,10 +747,12 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 	report.Extra["plain_block_headers"] = fmt.Sprint(plainBlocks)
 	report.Extra["zstd_block_headers"] = fmt.Sprint(zstdBlocks)
 	report.Extra["invalid_common_prefix_headers"] = fmt.Sprint(invalidCommonPrefix)
+	report.Extra["items_range_out_of_bounds"] = fmt.Sprint(itemsRangeSummary.OutOfBounds)
 	report.Extra["items_range_order_violations"] = fmt.Sprint(itemsRangeSummary.OrderViolations)
 	report.Extra["items_range_overlaps"] = fmt.Sprint(itemsRangeSummary.Overlaps)
 	report.Extra["items_range_gaps"] = fmt.Sprint(itemsRangeSummary.GapRanges)
 	report.Extra["items_range_gap_bytes"] = fmt.Sprint(itemsRangeSummary.GapBytes)
+	report.Extra["lens_range_out_of_bounds"] = fmt.Sprint(lensRangeSummary.OutOfBounds)
 	report.Extra["lens_range_order_violations"] = fmt.Sprint(lensRangeSummary.OrderViolations)
 	report.Extra["lens_range_overlaps"] = fmt.Sprint(lensRangeSummary.Overlaps)
 	report.Extra["lens_range_gaps"] = fmt.Sprint(lensRangeSummary.GapRanges)
@@ -786,6 +790,7 @@ func addMergesetIndexSummary(report *FileReport, summary mergesetIndexSummary, c
 
 func addMergesetComponentRangeSummary(report *FileReport, component, fileName string, summary mergesetRangeSummary) {
 	if summary.OutOfBounds > 0 {
+		report.BlocksByType["mergeset-"+component+"-range-out-of-bounds"] = summary.OutOfBounds
 		report.Notices = append(report.Notices, fmt.Sprintf("mergeset index has %d %s block header(s) outside %s bounds", summary.OutOfBounds, component, fileName))
 	}
 	if summary.OrderViolations > 0 {

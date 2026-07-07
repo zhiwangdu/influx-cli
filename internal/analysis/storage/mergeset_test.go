@@ -1442,6 +1442,9 @@ func TestAnalyzeMergesetMetaindexIndexRangeAllOutOfBoundsNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_out_of_bounds"], "1"; got != want {
+		t.Fatalf("metaindex index range out of bounds = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["metaindex_index_range_gaps"], "0"; got != want {
 		t.Fatalf("metaindex index range gaps = %q, want %q", got, want)
 	}
@@ -1450,6 +1453,9 @@ func TestAnalyzeMergesetMetaindexIndexRangeAllOutOfBoundsNotice(t *testing.T) {
 	}
 	if got, want := file.BlocksByType["mergeset-metaindex-index-range-gap"], 0; got != want {
 		t.Fatalf("metaindex range gap block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-out-of-bounds"], 1; got != want {
+		t.Fatalf("metaindex range out-of-bounds block type count = %d, want %d", got, want)
 	}
 	if !containsString(file.Notices, "metaindex has 1 row(s) outside index.bin bounds") {
 		t.Fatalf("notices = %v, want out-of-bounds notice", file.Notices)
@@ -1678,6 +1684,9 @@ func TestAnalyzeMergesetMetaindexIndexRangeOutOfBoundsBetweenValidRows(t *testin
 		t.Fatal(err)
 	}
 	file := report.Files[0]
+	if got, want := file.Extra["metaindex_index_range_out_of_bounds"], "1"; got != want {
+		t.Fatalf("metaindex index range out of bounds = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["metaindex_index_range_order_violations"], "1"; got != want {
 		t.Fatalf("metaindex index range order violations = %q, want %q", got, want)
 	}
@@ -1689,6 +1698,9 @@ func TestAnalyzeMergesetMetaindexIndexRangeOutOfBoundsBetweenValidRows(t *testin
 	}
 	if got, want := file.BlocksByType["mergeset-metaindex-index-range-order-violation"], 1; got != want {
 		t.Fatalf("metaindex range order violation block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-metaindex-index-range-out-of-bounds"], 1; got != want {
+		t.Fatalf("metaindex range out-of-bounds block type count = %d, want %d", got, want)
 	}
 	if !containsString(file.Notices, "metaindex has 1 row(s) outside index.bin bounds") {
 		t.Fatalf("notices = %v, want out-of-bounds notice", file.Notices)
@@ -1937,6 +1949,9 @@ func TestAnalyzeMergesetItemsRangeGapAndOutOfBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := report.Files[0]
+	if got, want := file.Extra["items_range_out_of_bounds"], "1"; got != want {
+		t.Fatalf("items range out of bounds = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["items_range_gaps"], "1"; got != want {
 		t.Fatalf("items range gaps = %q, want %q", got, want)
 	}
@@ -1945,6 +1960,9 @@ func TestAnalyzeMergesetItemsRangeGapAndOutOfBounds(t *testing.T) {
 	}
 	if got, want := file.BlocksByType["mergeset-items-range-gap"], 1; got != want {
 		t.Fatalf("items range gap block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-items-range-out-of-bounds"], 1; got != want {
+		t.Fatalf("items range out-of-bounds block type count = %d, want %d", got, want)
 	}
 	if !containsString(file.Notices, "items block header(s) outside items.bin bounds") {
 		t.Fatalf("notices = %v, want items out-of-bounds notice", file.Notices)
@@ -1995,6 +2013,9 @@ func TestAnalyzeMergesetLensRangeGapAndOutOfBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := report.Files[0]
+	if got, want := file.Extra["lens_range_out_of_bounds"], "1"; got != want {
+		t.Fatalf("lens range out of bounds = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["lens_range_gaps"], "1"; got != want {
 		t.Fatalf("lens range gaps = %q, want %q", got, want)
 	}
@@ -2003,6 +2024,9 @@ func TestAnalyzeMergesetLensRangeGapAndOutOfBounds(t *testing.T) {
 	}
 	if got, want := file.BlocksByType["mergeset-lens-range-gap"], 1; got != want {
 		t.Fatalf("lens range gap block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-lens-range-out-of-bounds"], 1; got != want {
+		t.Fatalf("lens range out-of-bounds block type count = %d, want %d", got, want)
 	}
 	if !containsString(file.Notices, "lens block header(s) outside lens.bin bounds") {
 		t.Fatalf("notices = %v, want lens out-of-bounds notice", file.Notices)
