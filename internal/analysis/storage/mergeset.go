@@ -83,16 +83,19 @@ type mergesetIndexSummary struct {
 }
 
 type mergesetItemPayloadSummary struct {
-	Blocks        int
-	DecodedBlocks int
-	ItemsDecoded  uint64
-	FirstItem     []byte
-	LastItem      []byte
-	Samples       [][]byte
-	TSIIndex      mergesetTSIIndexSummary
-	FieldIndex    mergesetFieldIndexSummary
-	CLVText       mergesetCLVTextIndexSummary
-	DecodePath    *DecodePathSummary
+	Blocks             int
+	DecodedBlocks      int
+	RangeSkippedBlocks int
+	ReadFailures       int
+	DecodeFailures     int
+	ItemsDecoded       uint64
+	FirstItem          []byte
+	LastItem           []byte
+	Samples            [][]byte
+	TSIIndex           mergesetTSIIndexSummary
+	FieldIndex         mergesetFieldIndexSummary
+	CLVText            mergesetCLVTextIndexSummary
+	DecodePath         *DecodePathSummary
 }
 
 type mergesetTSIIndexSummary struct {
@@ -850,18 +853,22 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 		search.ObserveHeader(i, header)
 		scan.ObserveHeader(i, header)
 		if header.ItemsBlockOffset > itemsSize || uint64(header.ItemsBlockSize) > itemsSize-header.ItemsBlockOffset {
+			summary.RangeSkippedBlocks++
 			continue
 		}
 		if header.LensBlockOffset > lensSize || uint64(header.LensBlockSize) > lensSize-header.LensBlockOffset {
+			summary.RangeSkippedBlocks++
 			continue
 		}
 		itemsData := make([]byte, header.ItemsBlockSize)
 		if _, err := itemsFile.ReadAt(itemsData, int64(header.ItemsBlockOffset)); err != nil {
+			summary.ReadFailures++
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d items_offset=%d items_size=%d: %v", i+1, header.ItemsBlockOffset, header.ItemsBlockSize, err))
 			continue
 		}
 		lensData := make([]byte, header.LensBlockSize)
 		if _, err := lensFile.ReadAt(lensData, int64(header.LensBlockOffset)); err != nil {
+			summary.ReadFailures++
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d lens_offset=%d lens_size=%d: %v", i+1, header.LensBlockOffset, header.LensBlockSize, err))
 			continue
 		}
@@ -875,6 +882,7 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 		}
 		decoded, err := decodeMergesetBlockItems(header, itemsData, lensData, decoder, decodeSampleLimit, search.QueryKeys, options.CursorDescending)
 		if err != nil {
+			summary.DecodeFailures++
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d first_item=%s: %v", i+1, hex.EncodeToString(header.FirstItem), err))
 			continue
 		}
@@ -1535,7 +1543,19 @@ func mergesetSearchRecommendations(summary *DecodePathSummary, options Options) 
 func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPayloadSummary, metadataFirstItem, metadataLastItem []byte, metadataItemsCount uint64, options Options) {
 	report.Extra["item_payload_block_count"] = fmt.Sprint(summary.Blocks)
 	report.Extra["item_payload_blocks_decoded"] = fmt.Sprint(summary.DecodedBlocks)
+	report.Extra["item_payload_blocks_skipped_out_of_bounds"] = fmt.Sprint(summary.RangeSkippedBlocks)
+	report.Extra["item_payload_read_failures"] = fmt.Sprint(summary.ReadFailures)
+	report.Extra["item_payload_decode_failures"] = fmt.Sprint(summary.DecodeFailures)
 	report.Extra["item_payload_items_decoded"] = fmt.Sprint(summary.ItemsDecoded)
+	if summary.RangeSkippedBlocks > 0 {
+		report.BlocksByType["mergeset-item-payload-range-skip"] = summary.RangeSkippedBlocks
+	}
+	if summary.ReadFailures > 0 {
+		report.BlocksByType["mergeset-item-payload-read-failure"] = summary.ReadFailures
+	}
+	if summary.DecodeFailures > 0 {
+		report.BlocksByType["mergeset-item-payload-decode-failure"] = summary.DecodeFailures
+	}
 	if summary.DecodePath != nil {
 		report.DecodePath = summary.DecodePath
 		if len(summary.DecodePath.MatchedKeys) > 0 {

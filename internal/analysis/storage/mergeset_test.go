@@ -1257,6 +1257,12 @@ func TestAnalyzeMergesetInvalidCommonPrefixHeaderNotice(t *testing.T) {
 	if got, want := file.Extra["item_payload_blocks_decoded"], "0"; got != want {
 		t.Fatalf("payload blocks decoded = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["item_payload_decode_failures"], "1"; got != want {
+		t.Fatalf("payload decode failures = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-decode-failure"], 1; got != want {
+		t.Fatalf("payload decode failure block type count = %d, want %d", got, want)
+	}
 }
 
 func TestAnalyzeMergesetMetaindexFirstItemMismatchNotice(t *testing.T) {
@@ -1964,6 +1970,12 @@ func TestAnalyzeMergesetItemsRangeGapAndOutOfBounds(t *testing.T) {
 	if got, want := file.BlocksByType["mergeset-items-range-out-of-bounds"], 1; got != want {
 		t.Fatalf("items range out-of-bounds block type count = %d, want %d", got, want)
 	}
+	if got, want := file.Extra["item_payload_blocks_skipped_out_of_bounds"], "1"; got != want {
+		t.Fatalf("payload range skipped blocks extra = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-range-skip"], 1; got != want {
+		t.Fatalf("payload range skip block type count = %d, want %d", got, want)
+	}
 	if !containsString(file.Notices, "items block header(s) outside items.bin bounds") {
 		t.Fatalf("notices = %v, want items out-of-bounds notice", file.Notices)
 	}
@@ -2027,6 +2039,12 @@ func TestAnalyzeMergesetLensRangeGapAndOutOfBounds(t *testing.T) {
 	}
 	if got, want := file.BlocksByType["mergeset-lens-range-out-of-bounds"], 1; got != want {
 		t.Fatalf("lens range out-of-bounds block type count = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["item_payload_blocks_skipped_out_of_bounds"], "1"; got != want {
+		t.Fatalf("payload range skipped blocks extra = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-range-skip"], 1; got != want {
+		t.Fatalf("payload range skip block type count = %d, want %d", got, want)
 	}
 	if !containsString(file.Notices, "lens block header(s) outside lens.bin bounds") {
 		t.Fatalf("notices = %v, want lens out-of-bounds notice", file.Notices)
@@ -2151,6 +2169,12 @@ func TestAnalyzeMergesetZSTDItemPayloadBadCompressedBlockNotice(t *testing.T) {
 			}
 			if got, want := file.Extra["item_payload_blocks_decoded"], "0"; got != want {
 				t.Fatalf("payload blocks decoded extra = %q, want %q", got, want)
+			}
+			if got, want := file.Extra["item_payload_decode_failures"], "1"; got != want {
+				t.Fatalf("payload decode failures extra = %q, want %q", got, want)
+			}
+			if got, want := file.BlocksByType["mergeset-item-payload-decode-failure"], 1; got != want {
+				t.Fatalf("payload decode failure block type count = %d, want %d", got, want)
 			}
 			if got, want := file.Extra["item_payload_items_decoded"], "0"; got != want {
 				t.Fatalf("payload items decoded extra = %q, want %q", got, want)
@@ -3719,8 +3743,50 @@ func TestAnalyzeMergesetBadItemPayloadNotice(t *testing.T) {
 	if got, want := file.Extra["item_payload_blocks_decoded"], "0"; got != want {
 		t.Fatalf("payload blocks decoded extra = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["item_payload_decode_failures"], "1"; got != want {
+		t.Fatalf("payload decode failures extra = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-decode-failure"], 1; got != want {
+		t.Fatalf("payload decode failure block type count = %d, want %d", got, want)
+	}
 	if got, want := file.Extra["item_payload_items_decoded"], "0"; got != want {
 		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
+	}
+}
+
+func TestReadMergesetItemPayloadReadFailureCount(t *testing.T) {
+	partPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(partPath, mergesetItemsFile), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partPath, mergesetLensFile), appendTestBigEndianUint64(nil, 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	headers := []mergesetBlockHeader{{
+		MarshalType:      mergesetMarshalTypePlain,
+		ItemsCount:       2,
+		ItemsBlockOffset: 0,
+		ItemsBlockSize:   1,
+		LensBlockOffset:  0,
+		LensBlockSize:    8,
+		FirstItem:        []byte("a"),
+		CommonPrefix:     nil,
+	}}
+	summary, notices := readMergesetItemPayloads(partPath, headers, map[string]int64{
+		mergesetItemsFile: 1,
+		mergesetLensFile:  8,
+	}, Options{}, []byte("a"), []byte("b"))
+	if got, want := summary.ReadFailures, 1; got != want {
+		t.Fatalf("read failures = %d, want %d", got, want)
+	}
+	if got, want := summary.DecodeFailures, 0; got != want {
+		t.Fatalf("decode failures = %d, want %d", got, want)
+	}
+	if got, want := summary.DecodedBlocks, 0; got != want {
+		t.Fatalf("decoded blocks = %d, want %d", got, want)
+	}
+	if !containsString(notices, "items_offset=0 items_size=1") {
+		t.Fatalf("notices = %v, want items read failure notice", notices)
 	}
 }
 
