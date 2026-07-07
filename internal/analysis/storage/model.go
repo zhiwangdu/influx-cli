@@ -813,8 +813,8 @@ func decodePathText(summary *DecodePathSummary) string {
 	if decodeBlockTypes := countMapText(summary.DecodeBlocksByType); decodeBlockTypes != "" {
 		parts = append(parts, "decode_block_types "+decodeBlockTypes)
 	}
-	if summary.SavedDecodeBytes > 0 {
-		parts = append(parts, fmt.Sprintf("saved_bytes %d", summary.SavedDecodeBytes))
+	if bytes := decodeByteSummaryText(summary); bytes != "" {
+		parts = append(parts, bytes)
 	}
 	if values := decodeValueSummaryText(summary); values != "" {
 		parts = append(parts, values)
@@ -946,6 +946,20 @@ func blockFilterSummaryText(summary *DecodePathSummary) string {
 		return ""
 	}
 	return "block_filter " + strings.Join(parts, " ")
+}
+
+func decodeByteSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	if summary.BaselineDecodeBytes == 0 && summary.OptimizedDecodeBytes == 0 && summary.SavedDecodeBytes == 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("%d->%d", summary.BaselineDecodeBytes, summary.OptimizedDecodeBytes)}
+	if summary.SavedDecodeBytes > 0 {
+		parts = append(parts, fmt.Sprintf("saved=%d", summary.SavedDecodeBytes))
+	}
+	return "decode_bytes " + strings.Join(parts, " ")
 }
 
 func decodeValueSummaryText(summary *DecodePathSummary) string {
