@@ -380,51 +380,52 @@ type tsspDetachedDataValidation struct {
 }
 
 type tsspDetachedDataProbe struct {
-	Checked             bool
-	BlocksChecked       int
-	ValidBlocks         int
-	BytesRead           int64
-	CRCMismatches       int
-	ShortBlocks         int
-	UnknownBlockTypes   int
-	ReadErrors          int
-	RowCountBlocks      int
-	RowCountUnknowns    int
-	RowCountMismatches  int
-	OutputPoints        int
-	ValueBlocks         int
-	ValueUnknowns       int
-	ValueUnknownReasons map[string]int
-	NullValues          int
-	RecordSamples       int
-	RangeRows           int
-	RangeMatches        int
-	RangeRejects        int
-	FilterRows          int
-	FilterMatches       int
-	FilterRejects       int
-	FilterEvaluations   int
-	FilterRequiredEvals int
-	FilterAnyEvals      int
-	FilterNoneEvals     int
-	FilterEvalMatches   int
-	FilterEvalMisses    int
-	FilterSkippedEvals  int
-	FilterRequiredHits  int
-	FilterRequiredMiss  int
-	FilterRequiredSkips int
-	FilterAnyHits       int
-	FilterAnyMiss       int
-	FilterAnySkips      int
-	FilterNoneHits      int
-	FilterNoneMiss      int
-	FilterNoneSkips     int
-	FilterOperators     map[string]int
-	BlockTypes          map[string]int
-	chunkAvailable      map[uint64]bool
-	chunkFailureReason  map[uint64]string
-	chunkOutputPoints   map[uint64]int
-	valueSamples        []DecodePathCursorOutput
+	Checked                bool
+	BlocksChecked          int
+	ValidBlocks            int
+	BytesRead              int64
+	CRCMismatches          int
+	ShortBlocks            int
+	UnknownBlockTypes      int
+	ReadErrors             int
+	RowCountBlocks         int
+	RowCountUnknowns       int
+	RowCountMismatches     int
+	OutputPoints           int
+	ValueBlocks            int
+	ValueUnknowns          int
+	ValueUnknownReasons    map[string]int
+	NullValues             int
+	RecordSamples          int
+	RangeRows              int
+	RangeMatches           int
+	RangeRejects           int
+	FilterRows             int
+	FilterMatches          int
+	FilterRejects          int
+	FilterEvaluations      int
+	FilterRequiredEvals    int
+	FilterAnyEvals         int
+	FilterNoneEvals        int
+	FilterEvalMatches      int
+	FilterEvalMisses       int
+	FilterSkippedEvals     int
+	FilterRequiredHits     int
+	FilterRequiredMiss     int
+	FilterRequiredSkips    int
+	FilterAnyHits          int
+	FilterAnyMiss          int
+	FilterAnySkips         int
+	FilterNoneHits         int
+	FilterNoneMiss         int
+	FilterNoneSkips        int
+	FilterOperators        map[string]int
+	BlockTypes             map[string]int
+	chunkAvailable         map[uint64]bool
+	chunkFailureReason     map[uint64]string
+	chunkOutputPoints      map[uint64]int
+	valueSamples           []DecodePathCursorOutput
+	filterExecutionSamples []DecodePathCursorStep
 }
 
 func (p *tsspDetachedDataProbe) Failures() int {
@@ -633,7 +634,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				matchingRows, matchedRows, filterRows, filterStats, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange)
+				matchingRows, matchedRows, filterRows, filterStats, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange, fmt.Sprintf("meta-index-id:%d", chunk.SID), remainingTSSPFilterExecutionSampleLimit(probe.filterExecutionSamples, options.BlockSampleLimit))
 				if !ok {
 					chunkAvailable = false
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
@@ -663,6 +664,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 					probe.FilterNoneMiss += filterStats.NoneMisses
 					probe.FilterNoneSkips += filterStats.NoneSkips
 					addTSSPFilterOperatorCounts(probe.FilterOperators, filterStats.OperatorEvaluations)
+					appendTSSPFilterExecutionSamples(&probe.filterExecutionSamples, filterStats.FilterExecutionSamples, options.BlockSampleLimit)
 				}
 				chunkOutputPoints += matchedRows
 				appendTSSPDetachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, matchingRows, options.QueryRange, options.BlockSampleLimit)
@@ -2325,6 +2327,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeNoneSkips = dataProbe.FilterNoneSkips
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
+		summary.FilterExecutionSamples = append(summary.FilterExecutionSamples, dataProbe.filterExecutionSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
@@ -2826,6 +2829,9 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 	}
 	if len(summary.CursorExecutionSamples) > 0 {
 		recommendations = append(recommendations, "detached TSSP cursor execution samples show local metadata skip/read steps")
+	}
+	if len(summary.FilterExecutionSamples) > 0 {
+		recommendations = append(recommendations, "detached TSSP filter execution samples show local decoded-row predicate decisions")
 	}
 	return recommendations
 }

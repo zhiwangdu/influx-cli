@@ -1456,6 +1456,22 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	if got, want := decode.DataBlockProbeFilterOps["="], 2; got != want {
 		t.Fatalf("decode equality filter evaluations = %d, want %d", got, want)
 	}
+	if got, want := len(decode.FilterExecutionSamples), 1; got != want {
+		t.Fatalf("filter execution samples = %d, want %d", got, want)
+	}
+	wantFilterStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tssp-filter-row-step",
+		Action:            "filter_row_match",
+		Key:               "meta-index-id:42/row:0",
+		CandidateValue:    "row=0 time=333 required=0/0 any=1/2 none=0/0 skips=0/1/0 result=match",
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  1,
+		CursorAdvanced:    true,
+	}
+	if got := decode.FilterExecutionSamples[0]; got != wantFilterStep {
+		t.Fatalf("filter execution sample = %+v, want %+v", got, wantFilterStep)
+	}
 	wantAny := []FieldFilter{{Key: "value", Value: "0"}, {Key: "value", Value: "99"}, {Key: "value", Value: "x"}}
 	if got := decode.QueryAnyFields; !equalFieldFilters(got, wantAny) {
 		t.Fatalf("query any fields = %v, want %v", got, wantAny)
@@ -1486,6 +1502,9 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "required_skips=0 any_skips=1 none_skips=0") {
 		t.Fatalf("recommendations = %v, want detached predicate short-circuit breakdown", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP filter execution samples show local decoded-row predicate decisions") {
+		t.Fatalf("recommendations = %v, want detached predicate execution sample recommendation", decode.Recommendations)
 	}
 }
 
@@ -1547,6 +1566,22 @@ func TestAnalyzeTSSPDetachedNoneFieldFilterRejectsMatchingRows(t *testing.T) {
 	}
 	if got, want := len(decode.CursorOutputSamples), 0; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	wantFilterStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tssp-filter-row-step",
+		Action:            "filter_row_reject_none",
+		Key:               "meta-index-id:42/row:0",
+		CandidateValue:    "row=0 time=333 required=0/0 any=0/0 none=1/1 skips=0/0/0 result=reject_none",
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  1,
+		CursorAdvanced:    true,
+	}
+	if got, want := len(decode.FilterExecutionSamples), 1; got != want {
+		t.Fatalf("filter execution samples = %d, want %d", got, want)
+	}
+	if got := decode.FilterExecutionSamples[0]; got != wantFilterStep {
+		t.Fatalf("filter execution sample = %+v, want %+v", got, wantFilterStep)
 	}
 	if !containsString(decode.Recommendations, "applied 1 detached TSSP NOT field filter") {
 		t.Fatalf("recommendations = %v, want detached NOT field filter recommendation", decode.Recommendations)

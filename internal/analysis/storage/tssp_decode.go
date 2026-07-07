@@ -161,6 +161,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeNoneSkips = dataProbe.FilterNoneSkips
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
+		summary.FilterExecutionSamples = append(summary.FilterExecutionSamples, dataProbe.filterExecutionSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
 	summary.SavedDecodeBytes = summary.BaselineDecodeBytes - summary.OptimizedDecodeBytes
@@ -509,6 +510,23 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 		sample.CursorIndexAfter += cursorIndexBase
 		sample.CursorExhausted = false
 		dst.CursorExecutionSamples = append(dst.CursorExecutionSamples, sample)
+	}
+	filterIndexBase := 0
+	if len(dst.FilterExecutionSamples) > 0 {
+		filterIndexBase = dst.FilterExecutionSamples[len(dst.FilterExecutionSamples)-1].CursorIndexAfter
+	}
+	for _, sample := range src.FilterExecutionSamples {
+		if len(dst.FilterExecutionSamples) >= sampleLimit {
+			break
+		}
+		if sample.File == "" {
+			sample.File = path
+		}
+		sample.Step = len(dst.FilterExecutionSamples) + 1
+		sample.CursorIndexBefore += filterIndexBase
+		sample.CursorIndexAfter += filterIndexBase
+		sample.CursorExhausted = false
+		dst.FilterExecutionSamples = append(dst.FilterExecutionSamples, sample)
 	}
 }
 
@@ -1010,6 +1028,9 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(summary.CursorExecutionSamples) > 0 {
 		recommendations = append(recommendations, "TSSP location cursor execution samples show local metadata skip/read steps")
+	}
+	if len(summary.FilterExecutionSamples) > 0 {
+		recommendations = append(recommendations, "TSSP filter execution samples show local decoded-row predicate decisions")
 	}
 	return recommendations
 }

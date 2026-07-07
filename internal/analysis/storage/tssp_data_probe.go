@@ -11,50 +11,51 @@ import (
 )
 
 type tsspAttachedDataProbe struct {
-	Checked             bool
-	BlocksChecked       int
-	ValidBlocks         int
-	BytesRead           int64
-	ShortBlocks         int
-	UnknownBlockTypes   int
-	ReadErrors          int
-	RowCountBlocks      int
-	RowCountUnknowns    int
-	RowCountMismatches  int
-	OutputPoints        int
-	ValueBlocks         int
-	ValueUnknowns       int
-	ValueUnknownReasons map[string]int
-	NullValues          int
-	RecordSamples       int
-	RangeRows           int
-	RangeMatches        int
-	RangeRejects        int
-	FilterRows          int
-	FilterMatches       int
-	FilterRejects       int
-	FilterEvaluations   int
-	FilterRequiredEvals int
-	FilterAnyEvals      int
-	FilterNoneEvals     int
-	FilterEvalMatches   int
-	FilterEvalMisses    int
-	FilterSkippedEvals  int
-	FilterRequiredHits  int
-	FilterRequiredMiss  int
-	FilterRequiredSkips int
-	FilterAnyHits       int
-	FilterAnyMiss       int
-	FilterAnySkips      int
-	FilterNoneHits      int
-	FilterNoneMiss      int
-	FilterNoneSkips     int
-	FilterOperators     map[string]int
-	BlockTypes          map[string]int
-	chunkAvailable      map[uint64]bool
-	chunkFailureReason  map[uint64]string
-	chunkOutputPoints   map[uint64]int
-	valueSamples        []DecodePathCursorOutput
+	Checked                bool
+	BlocksChecked          int
+	ValidBlocks            int
+	BytesRead              int64
+	ShortBlocks            int
+	UnknownBlockTypes      int
+	ReadErrors             int
+	RowCountBlocks         int
+	RowCountUnknowns       int
+	RowCountMismatches     int
+	OutputPoints           int
+	ValueBlocks            int
+	ValueUnknowns          int
+	ValueUnknownReasons    map[string]int
+	NullValues             int
+	RecordSamples          int
+	RangeRows              int
+	RangeMatches           int
+	RangeRejects           int
+	FilterRows             int
+	FilterMatches          int
+	FilterRejects          int
+	FilterEvaluations      int
+	FilterRequiredEvals    int
+	FilterAnyEvals         int
+	FilterNoneEvals        int
+	FilterEvalMatches      int
+	FilterEvalMisses       int
+	FilterSkippedEvals     int
+	FilterRequiredHits     int
+	FilterRequiredMiss     int
+	FilterRequiredSkips    int
+	FilterAnyHits          int
+	FilterAnyMiss          int
+	FilterAnySkips         int
+	FilterNoneHits         int
+	FilterNoneMiss         int
+	FilterNoneSkips        int
+	FilterOperators        map[string]int
+	BlockTypes             map[string]int
+	chunkAvailable         map[uint64]bool
+	chunkFailureReason     map[uint64]string
+	chunkOutputPoints      map[uint64]int
+	valueSamples           []DecodePathCursorOutput
+	filterExecutionSamples []DecodePathCursorStep
 }
 
 func (p *tsspAttachedDataProbe) Failures() int {
@@ -180,7 +181,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				matchingRows, matchedRows, filterRows, filterStats, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange)
+				matchingRows, matchedRows, filterRows, filterStats, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange, fmt.Sprintf("sid:%d", chunk.SID), remainingTSSPFilterExecutionSampleLimit(probe.filterExecutionSamples, options.BlockSampleLimit))
 				if !ok {
 					chunkAvailable = false
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
@@ -210,6 +211,7 @@ func probeTSSPAttachedDataBlocks(f *os.File, fileSize int64, trailer tsspTrailer
 					probe.FilterNoneMiss += filterStats.NoneMisses
 					probe.FilterNoneSkips += filterStats.NoneSkips
 					addTSSPFilterOperatorCounts(probe.FilterOperators, filterStats.OperatorEvaluations)
+					appendTSSPFilterExecutionSamples(&probe.filterExecutionSamples, filterStats.FilterExecutionSamples, options.BlockSampleLimit)
 				}
 				chunkOutputPoints += matchedRows
 				appendTSSPAttachedDataProbeValueSamples(probe, chunk, timeRange, segmentBlocks, matchingRows, options.QueryRange, options.BlockSampleLimit)
@@ -251,6 +253,33 @@ func (p *tsspAttachedDataProbe) chunkOutputPointsFor(chunk tsspChunkMeta) int {
 		return 0
 	}
 	return p.chunkOutputPoints[chunk.SID]
+}
+
+func remainingTSSPFilterExecutionSampleLimit(samples []DecodePathCursorStep, sampleLimit int) int {
+	if sampleLimit <= 0 || len(samples) >= sampleLimit {
+		return 0
+	}
+	return sampleLimit - len(samples)
+}
+
+func appendTSSPFilterExecutionSamples(dst *[]DecodePathCursorStep, src []DecodePathCursorStep, sampleLimit int) {
+	if sampleLimit <= 0 || dst == nil {
+		return
+	}
+	cursorIndexBase := 0
+	if len(*dst) > 0 {
+		cursorIndexBase = (*dst)[len(*dst)-1].CursorIndexAfter
+	}
+	for _, sample := range src {
+		if len(*dst) >= sampleLimit {
+			return
+		}
+		sample.Step = len(*dst) + 1
+		sample.CursorIndexBefore += cursorIndexBase
+		sample.CursorIndexAfter += cursorIndexBase
+		sample.CursorExhausted = false
+		*dst = append(*dst, sample)
+	}
 }
 
 func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int) {
@@ -308,26 +337,88 @@ func sortedTSSPDataBlockColumns(blocks map[string]tsspDetachedDataBlockInfo) []s
 }
 
 type tsspDataBlockFilterStats struct {
-	RangeRows           int
-	RangeMatches        int
-	RangeRejects        int
-	Evaluations         int
+	RangeRows              int
+	RangeMatches           int
+	RangeRejects           int
+	Evaluations            int
+	RequiredEvaluations    int
+	AnyEvaluations         int
+	NoneEvaluations        int
+	MatchEvaluations       int
+	MissEvaluations        int
+	SkippedEvaluations     int
+	RequiredMatches        int
+	RequiredMisses         int
+	RequiredSkips          int
+	AnyMatches             int
+	AnyMisses              int
+	AnySkips               int
+	NoneMatches            int
+	NoneMisses             int
+	NoneSkips              int
+	OperatorEvaluations    map[string]int
+	FilterExecutionSamples []DecodePathCursorStep
+}
+
+type tsspDataBlockFilterRowStats struct {
 	RequiredEvaluations int
-	AnyEvaluations      int
-	NoneEvaluations     int
-	MatchEvaluations    int
-	MissEvaluations     int
-	SkippedEvaluations  int
 	RequiredMatches     int
-	RequiredMisses      int
 	RequiredSkips       int
+	AnyEvaluations      int
 	AnyMatches          int
-	AnyMisses           int
 	AnySkips            int
+	NoneEvaluations     int
 	NoneMatches         int
-	NoneMisses          int
 	NoneSkips           int
-	OperatorEvaluations map[string]int
+}
+
+func (s *tsspDataBlockFilterRowStats) observe(clause string, matched bool) {
+	switch clause {
+	case "required":
+		s.RequiredEvaluations++
+		if matched {
+			s.RequiredMatches++
+		}
+	case "any":
+		s.AnyEvaluations++
+		if matched {
+			s.AnyMatches++
+		}
+	case "none":
+		s.NoneEvaluations++
+		if matched {
+			s.NoneMatches++
+		}
+	}
+}
+
+func (s *tsspDataBlockFilterRowStats) skip(clause string, count int) {
+	if count <= 0 {
+		return
+	}
+	switch clause {
+	case "required":
+		s.RequiredSkips += count
+	case "any":
+		s.AnySkips += count
+	case "none":
+		s.NoneSkips += count
+	}
+}
+
+func (s tsspDataBlockFilterRowStats) candidateValue(row int, timestamp int64, timestampKnown bool, result string) string {
+	parts := []string{fmt.Sprintf("row=%d", row)}
+	if timestampKnown {
+		parts = append(parts, fmt.Sprintf("time=%d", timestamp))
+	}
+	parts = append(parts,
+		fmt.Sprintf("required=%d/%d", s.RequiredMatches, s.RequiredEvaluations),
+		fmt.Sprintf("any=%d/%d", s.AnyMatches, s.AnyEvaluations),
+		fmt.Sprintf("none=%d/%d", s.NoneMatches, s.NoneEvaluations),
+		fmt.Sprintf("skips=%d/%d/%d", s.RequiredSkips, s.AnySkips, s.NoneSkips),
+		"result="+result,
+	)
+	return strings.Join(parts, " ")
 }
 
 func (s *tsspDataBlockFilterStats) observe(filter FieldFilter, clause string, matched bool) {
@@ -382,7 +473,23 @@ func (s *tsspDataBlockFilterStats) skip(clause string, count int) {
 	}
 }
 
-func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, anyFilters []FieldFilter, noneFilters []FieldFilter, rows int, timeRange tsspTimeRange, queryRange TimeRange) ([]bool, int, int, tsspDataBlockFilterStats, bool) {
+func (s *tsspDataBlockFilterStats) appendExecutionSample(row int, timestamp int64, timestampKnown bool, key string, rowStats tsspDataBlockFilterRowStats, result string, sampleLimit int) {
+	if sampleLimit <= 0 || len(s.FilterExecutionSamples) >= sampleLimit {
+		return
+	}
+	s.FilterExecutionSamples = append(s.FilterExecutionSamples, DecodePathCursorStep{
+		Step:              len(s.FilterExecutionSamples) + 1,
+		Type:              "tssp-filter-row-step",
+		Action:            "filter_row_" + result,
+		Key:               key,
+		CandidateValue:    rowStats.candidateValue(row, timestamp, timestampKnown, result),
+		CursorIndexBefore: row,
+		CursorIndexAfter:  row + 1,
+		CursorAdvanced:    true,
+	})
+}
+
+func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, anyFilters []FieldFilter, noneFilters []FieldFilter, rows int, timeRange tsspTimeRange, queryRange TimeRange, sampleKey string, sampleLimit int) ([]bool, int, int, tsspDataBlockFilterStats, bool) {
 	var stats tsspDataBlockFilterStats
 	if rows <= 0 {
 		return nil, 0, 0, stats, true
@@ -416,44 +523,70 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 	}
 	matchingRows := make([]bool, rows)
 	matched := 0
+	var sampleTimes []int64
+	sampleTimesKnown := false
+	if sampleLimit > 0 {
+		sampleTimes, sampleTimesKnown = tsspDataBlockSampleTimes(timeRange, blocks, rows)
+	}
 	for row := 0; row < rows; row++ {
 		if len(rangeRows) > 0 && !rangeRows[row] {
 			continue
 		}
 		match := true
+		result := "match"
+		var rowStats tsspDataBlockFilterRowStats
 		for i, filterBlock := range filterBlocks {
 			predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
 			stats.observe(filterBlock.filter, "required", predicateMatch)
+			rowStats.observe("required", predicateMatch)
 			if !predicateMatch {
-				stats.skip("required", len(filterBlocks)-i-1)
-				stats.skip("any", len(anyFilterBlocks))
-				stats.skip("none", len(noneFilterBlocks))
+				requiredSkips := len(filterBlocks) - i - 1
+				anySkips := len(anyFilterBlocks)
+				noneSkips := len(noneFilterBlocks)
+				stats.skip("required", requiredSkips)
+				stats.skip("any", anySkips)
+				stats.skip("none", noneSkips)
+				rowStats.skip("required", requiredSkips)
+				rowStats.skip("any", anySkips)
+				rowStats.skip("none", noneSkips)
 				match = false
+				result = "reject_required"
 				break
 			}
 		}
 		if match && len(anyFilterBlocks) > 0 {
 			match = false
+			result = "reject_any"
 			for i, filterBlock := range anyFilterBlocks {
 				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
 				stats.observe(filterBlock.filter, "any", predicateMatch)
+				rowStats.observe("any", predicateMatch)
 				if predicateMatch {
-					stats.skip("any", len(anyFilterBlocks)-i-1)
+					anySkips := len(anyFilterBlocks) - i - 1
+					stats.skip("any", anySkips)
+					rowStats.skip("any", anySkips)
 					match = true
+					result = "match"
 					break
 				}
 			}
 			if !match {
-				stats.skip("none", len(noneFilterBlocks))
+				noneSkips := len(noneFilterBlocks)
+				stats.skip("none", noneSkips)
+				rowStats.skip("none", noneSkips)
 			}
 		}
 		if match && len(noneFilterBlocks) > 0 {
 			for i, filterBlock := range noneFilterBlocks {
 				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
 				stats.observe(filterBlock.filter, "none", predicateMatch)
+				rowStats.observe("none", predicateMatch)
 				if predicateMatch {
-					stats.skip("none", len(noneFilterBlocks)-i-1)
+					noneSkips := len(noneFilterBlocks) - i - 1
+					stats.skip("none", noneSkips)
+					rowStats.skip("none", noneSkips)
 					match = false
+					result = "reject_none"
 					break
 				}
 			}
@@ -462,6 +595,11 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 			matchingRows[row] = true
 			matched++
 		}
+		timestamp := int64(0)
+		if sampleTimesKnown {
+			timestamp = sampleTimes[row]
+		}
+		stats.appendExecutionSample(row, timestamp, sampleTimesKnown, fmt.Sprintf("%s/row:%d", sampleKey, row), rowStats, result, sampleLimit)
 	}
 	return matchingRows, matched, rangeMatched, stats, true
 }
