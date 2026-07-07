@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -111,6 +112,8 @@ func TestAnalyzeSeriesFileDirectory(t *testing.T) {
 		"live_series_count":      "2",
 		"tombstone_series_count": "1",
 		"max_series_id":          "9",
+		"partition_check":        "series-id-modulo",
+		"partition_mismatches":   "0",
 	} {
 		if got := file.Extra[key]; got != want {
 			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
@@ -144,6 +147,86 @@ func TestAnalyzeSeriesFileSeriesIDFilterWithoutRange(t *testing.T) {
 		if got := file.Extra[key]; got != want {
 			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestAnalyzeSeriesFileReportsPartitionMismatches(t *testing.T) {
+	seriesDir := filepath.Join(t.TempDir(), "_series")
+	partition1 := filepath.Join(seriesDir, "01")
+	if err := os.MkdirAll(partition1, 0o755); err != nil {
+		t.Fatalf("mkdir partition 01: %v", err)
+	}
+	writeTestSeriesSegment(t, filepath.Join(partition1, "0000"),
+		testSeriesInsert(1, "cpu", TagFilter{Key: "host", Value: "a"}),
+		testSeriesTombstone(1),
+	)
+
+	report, err := Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:           FormatSeriesFile,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["partition_check"], "series-id-modulo"; got != want {
+		t.Fatalf("partition check = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["partition_mismatches"], "2"; got != want {
+		t.Fatalf("partition mismatches = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["series-partition-mismatch"], 2; got != want {
+		t.Fatalf("partition mismatch blocks = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["partition_mismatch_samples"], "01/0000 id:1 expected:00 actual:01 flag:insert;01/0000 id:1 expected:00 actual:01 flag:tombstone"; got != want {
+		t.Fatalf("partition mismatch samples = %q, want %q", got, want)
+	}
+	if !containsString(file.Notices, "2 series file entry(s) are stored outside their expected ID partition") {
+		t.Fatalf("notices = %v, want partition mismatch notice", file.Notices)
+	}
+}
+
+func TestAnalyzeSeriesFilePartitionMismatchSampleCapKeepsFullCount(t *testing.T) {
+	seriesDir := filepath.Join(t.TempDir(), "_series")
+	partition1 := filepath.Join(seriesDir, "01")
+	if err := os.MkdirAll(partition1, 0o755); err != nil {
+		t.Fatalf("mkdir partition 01: %v", err)
+	}
+	writeTestSeriesSegment(t, filepath.Join(partition1, "0000"),
+		testSeriesInsert(1, "cpu"),
+		testSeriesInsert(9, "cpu"),
+		testSeriesInsert(17, "cpu"),
+		testSeriesInsert(25, "cpu"),
+		testSeriesInsert(33, "cpu"),
+		testSeriesInsert(41, "cpu"),
+		testSeriesInsert(49, "cpu"),
+	)
+
+	report, err := Analyze(context.Background(), []string{seriesDir}, Options{
+		Format:           FormatSeriesFile,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["partition_mismatches"], "7"; got != want {
+		t.Fatalf("partition mismatches = %q, want %q", got, want)
+	}
+	samples := strings.Split(file.Extra["partition_mismatch_samples"], ";")
+	if got, want := len(samples), 3; got != want {
+		t.Fatalf("partition mismatch samples = %v, want %d samples", samples, want)
+	}
+	if got, want := samples[0], "01/0000 id:1 expected:00 actual:01 flag:insert"; got != want {
+		t.Fatalf("first mismatch sample = %q, want %q", got, want)
+	}
+	if got, want := samples[2], "01/0000 id:17 expected:00 actual:01 flag:insert"; got != want {
+		t.Fatalf("third mismatch sample = %q, want %q", got, want)
+	}
+	if !containsString(file.Notices, "7 series file entry(s) are stored outside their expected ID partition") {
+		t.Fatalf("notices = %v, want full partition mismatch count", file.Notices)
 	}
 }
 

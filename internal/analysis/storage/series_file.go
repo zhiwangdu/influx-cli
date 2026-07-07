@@ -45,13 +45,16 @@ type seriesFileSegmentRef struct {
 }
 
 type seriesFileSegmentAnalysis struct {
-	Ref        seriesFileSegmentRef
-	Entries    []seriesFileEntry
-	Inserts    int
-	Tombstones int
-	ValidBytes int64
-	MaxID      uint64
-	Notices    []string
+	Ref                  seriesFileSegmentRef
+	Entries              []seriesFileEntry
+	Inserts              int
+	Tombstones           int
+	ValidBytes           int64
+	MaxID                uint64
+	PartitionMismatches  int
+	PartitionCheckSample []string
+	PartitionSampleLimit int
+	Notices              []string
 }
 
 type seriesFileEntry struct {
@@ -96,10 +99,12 @@ func analyzeSeriesFile(path string, info os.FileInfo, options Options) (FileRepo
 	entryCount := 0
 	insertCount := 0
 	tombstoneCount := 0
+	partitionMismatchCount := 0
+	partitionMismatchSamples := []string{}
 	validBytes := int64(0)
 	maxSeriesID := uint64(0)
 	for _, ref := range layout.Segments {
-		analysis, err := readSeriesFileSegment(ref)
+		analysis, err := readSeriesFileSegment(ref, options.KeySampleLimit)
 		if err != nil {
 			if !info.IsDir() {
 				return FileReport{}, err
@@ -112,6 +117,8 @@ func analyzeSeriesFile(path string, info os.FileInfo, options Options) (FileRepo
 		entryCount += len(analysis.Entries)
 		insertCount += analysis.Inserts
 		tombstoneCount += analysis.Tombstones
+		partitionMismatchCount += analysis.PartitionMismatches
+		partitionMismatchSamples = appendLimitedStrings(partitionMismatchSamples, analysis.PartitionCheckSample, options.KeySampleLimit)
 		validBytes += analysis.ValidBytes
 		if analysis.MaxID > maxSeriesID {
 			maxSeriesID = analysis.MaxID
@@ -143,6 +150,14 @@ func analyzeSeriesFile(path string, info os.FileInfo, options Options) (FileRepo
 		"tombstone_series_count": fmt.Sprint(tombstoneSeriesCount),
 		"valid_bytes":            fmt.Sprint(validBytes),
 		"max_series_id":          fmt.Sprint(maxSeriesID),
+		"partition_check":        "series-id-modulo",
+		"partition_mismatches":   fmt.Sprint(partitionMismatchCount),
+	}
+	if len(partitionMismatchSamples) > 0 {
+		extra["partition_mismatch_samples"] = strings.Join(partitionMismatchSamples, ";")
+	}
+	if partitionMismatchCount > 0 {
+		notices = append(notices, fmt.Sprintf("%d series file entry(s) are stored outside their expected ID partition", partitionMismatchCount))
 	}
 	addSeriesFileIDFilterExtra(extra, state, options)
 
@@ -158,6 +173,9 @@ func analyzeSeriesFile(path string, info os.FileInfo, options Options) (FileRepo
 	}
 	if tombstoneCount > 0 {
 		blocksByType["series-tombstone"] = tombstoneCount
+	}
+	if partitionMismatchCount > 0 {
+		blocksByType["series-partition-mismatch"] = partitionMismatchCount
 	}
 
 	report := FileReport{
@@ -301,10 +319,11 @@ func newSeriesFileSegmentRef(path string, info os.FileInfo) (seriesFileSegmentRe
 	}, nil
 }
 
-func readSeriesFileSegment(ref seriesFileSegmentRef) (seriesFileSegmentAnalysis, error) {
+func readSeriesFileSegment(ref seriesFileSegmentRef, partitionSampleLimit int) (seriesFileSegmentAnalysis, error) {
 	analysis := seriesFileSegmentAnalysis{
-		Ref:        ref,
-		ValidBytes: seriesSegmentHeaderSize,
+		Ref:                  ref,
+		ValidBytes:           seriesSegmentHeaderSize,
+		PartitionSampleLimit: partitionSampleLimit,
 	}
 	f, err := os.Open(ref.Path)
 	if err != nil {
@@ -378,9 +397,64 @@ func readSeriesFileSegment(ref seriesFileSegmentRef) (seriesFileSegmentAnalysis,
 		}
 
 		analysis.Entries = append(analysis.Entries, entry)
+		checkSeriesFileEntryPartition(&analysis, entry)
 		analysis.ValidBytes = offset
 	}
 	return analysis, nil
+}
+
+func checkSeriesFileEntryPartition(analysis *seriesFileSegmentAnalysis, entry seriesFileEntry) {
+	if analysis == nil || analysis.Ref.Partition == "" {
+		return
+	}
+	actual, err := strconv.ParseUint(analysis.Ref.Partition, 16, 8)
+	if err != nil {
+		return
+	}
+	expected := seriesFilePartitionIDForSeriesID(entry.ID)
+	if int(actual) == expected {
+		return
+	}
+	analysis.PartitionMismatches++
+	if analysis.PartitionSampleLimit <= 0 || len(analysis.PartitionCheckSample) >= analysis.PartitionSampleLimit {
+		return
+	}
+	analysis.PartitionCheckSample = append(analysis.PartitionCheckSample, fmt.Sprintf(
+		"%s id:%d expected:%02x actual:%s flag:%s",
+		seriesFileDisplaySegment(analysis.Ref),
+		entry.ID,
+		expected,
+		analysis.Ref.Partition,
+		seriesFileEntryFlagName(entry.Flag),
+	))
+}
+
+func seriesFilePartitionIDForSeriesID(id uint64) int {
+	return int((id - 1) % seriesFilePartitionN)
+}
+
+func seriesFileEntryFlagName(flag byte) string {
+	switch flag {
+	case seriesEntryInsertFlag:
+		return "insert"
+	case seriesEntryTombstoneFlag:
+		return "tombstone"
+	default:
+		return fmt.Sprintf("unknown(0x%02x)", flag)
+	}
+}
+
+func appendLimitedStrings(dst, src []string, limit int) []string {
+	if limit <= 0 || len(dst) >= limit {
+		return dst
+	}
+	for _, value := range src {
+		dst = append(dst, value)
+		if len(dst) >= limit {
+			break
+		}
+	}
+	return dst
 }
 
 func readSeriesFileKey(reader *bufio.Reader, remaining int64) ([]byte, int64, error) {
