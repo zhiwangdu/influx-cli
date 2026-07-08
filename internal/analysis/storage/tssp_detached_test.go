@@ -5183,6 +5183,53 @@ func TestAnalyzeTSSPDetachedMetaIndexRejectsNonMultiplePayload(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedMetaIndexRejectsSiblingSidecars(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		notice string
+	}{
+		{name: tsspDetachedChunkMetaFileName, notice: "segment.meta is detached TSSP chunk metadata"},
+		{name: tsspDetachedDataFileName, notice: "segment.bin is detached TSSP data"},
+		{name: "00000001.tssp", notice: "tssp-metaindex format requires a segment.idx file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.name)
+			if err := os.WriteFile(path, []byte(tsspMagic), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatTSSPDetachedIndex})
+			if err != nil {
+				t.Fatalf("Analyze() error = %v", err)
+			}
+			if len(report.Files) != 0 {
+				t.Fatalf("files = %d, want 0", len(report.Files))
+			}
+			if !containsString(report.Notices, tc.notice) {
+				t.Fatalf("notices = %v, want %q", report.Notices, tc.notice)
+			}
+		})
+	}
+}
+
+func TestAnalyzeTSSPDetachedMetaIndexRejectsSegmentIndexDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), tsspDetachedMetaIndexFileName)
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatTSSPDetachedIndex})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "tssp-metaindex format requires a segment.idx file, got directory segment.idx") {
+		t.Fatalf("notices = %v, want directory warning", report.Notices)
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexIDRequiresRange(t *testing.T) {
 	_, err := Analyze(context.Background(), []string{"missing"}, Options{
 		QueryMetaIndexIDs: []uint64{10},

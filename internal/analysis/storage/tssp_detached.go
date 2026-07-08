@@ -31,6 +31,20 @@ const (
 )
 
 func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options) (FileReport, error) {
+	if info.IsDir() {
+		return FileReport{}, fmt.Errorf("tssp-metaindex format requires a segment.idx file, got directory %s", filepath.Base(path))
+	}
+	base := filepath.Base(path)
+	if strings.EqualFold(base, tsspDetachedChunkMetaFileName) {
+		return FileReport{}, fmt.Errorf("segment.meta is detached TSSP chunk metadata; analyze segment.idx with tssp-metaindex")
+	}
+	if strings.EqualFold(base, tsspDetachedDataFileName) {
+		return FileReport{}, fmt.Errorf("segment.bin is detached TSSP data; analyze segment.idx with tssp-metaindex")
+	}
+	if !strings.EqualFold(base, tsspDetachedMetaIndexFileName) {
+		return FileReport{}, fmt.Errorf("tssp-metaindex format requires a segment.idx file, got %s", base)
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return FileReport{}, err
