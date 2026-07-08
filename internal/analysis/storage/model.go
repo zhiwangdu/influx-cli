@@ -762,7 +762,24 @@ func secondaryIndexDetailsText(summary *SecondaryIndexSummary) string {
 		{name: "documents", value: summary.DocumentCount},
 		{name: "terms", value: summary.TermCount},
 		{name: "dictionaries", value: summary.DictionaryCount},
+		{name: "dictionary_versions", value: summary.DictionaryVersionCount},
 		{name: "positions", value: summary.PositionCount},
+		{name: "sid_groups", value: summary.SIDGroupCount},
+		{name: "document_ids", value: summary.DocumentIDCount},
+	} {
+		if part.value > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", part.name, part.value))
+		}
+	}
+	for _, part := range []struct {
+		name  string
+		value int64
+	}{
+		{name: "payload_bytes", value: summary.PayloadSizeBytes},
+		{name: "block_bytes", value: summary.BlockSizeBytes},
+		{name: "piece_bytes", value: summary.PieceSizeBytes},
+		{name: "group_bytes", value: summary.GroupSizeBytes},
+		{name: "valid_bytes", value: summary.ValidBytes},
 	} {
 		if part.value > 0 {
 			parts = append(parts, fmt.Sprintf("%s=%d", part.name, part.value))
