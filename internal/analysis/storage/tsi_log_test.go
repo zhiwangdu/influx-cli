@@ -272,6 +272,42 @@ func TestAnalyzeTSILogTrailingCorruptEntryNotice(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSILogRejectsTSIFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSI(path); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatTSILog})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "L0-00000001.tsi uses tsi format, not tsi-log") {
+		t.Fatalf("notices = %v, want tsi format warning", report.Notices)
+	}
+}
+
+func TestAnalyzeTSILogRejectsDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsl")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatTSILog})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "tsi-log format requires a .tsl log file, got directory L0-00000001.tsl") {
+		t.Fatalf("notices = %v, want directory warning", report.Notices)
+	}
+}
+
 func appendTestTSILogEntry(buf *bytes.Buffer, entry tsiLogEntry) {
 	start := buf.Len()
 	buf.WriteByte(entry.Flag)

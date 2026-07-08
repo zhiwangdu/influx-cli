@@ -119,6 +119,44 @@ func TestAnalyzeTSINoticesCorruptSeriesIDSetCardinality(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSIRejectsTSILogFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsl")
+	var buf bytes.Buffer
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 1, Name: "cpu", Key: "host", Value: "a"})
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatTSI})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "L0-00000001.tsl uses tsi-log format, not tsi") {
+		t.Fatalf("notices = %v, want tsi-log format warning", report.Notices)
+	}
+}
+
+func TestAnalyzeTSIRejectsDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatTSI})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "tsi format requires a .tsi index file, got directory L0-00000001.tsi") {
+		t.Fatalf("notices = %v, want directory warning", report.Notices)
+	}
+}
+
 func TestTSIRoaringCardinalityRunContainer(t *testing.T) {
 	var data bytes.Buffer
 	writeTSILittleUint32(&data, uint32(tsiRoaringSerialCookie)|uint32(0)<<16)

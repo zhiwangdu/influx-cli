@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 const (
@@ -105,6 +106,13 @@ type tsiTagValueElem struct {
 }
 
 func analyzeTSI(path string, info os.FileInfo, options Options) (FileReport, error) {
+	if info.IsDir() {
+		return FileReport{}, fmt.Errorf("tsi format requires a .tsi index file, got directory %s", filepath.Base(path))
+	}
+	if isTSILogPath(path) {
+		return FileReport{}, fmt.Errorf("%s uses tsi-log format, not tsi", filepath.Base(path))
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return FileReport{}, err

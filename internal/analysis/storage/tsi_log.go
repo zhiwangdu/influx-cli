@@ -7,7 +7,9 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const (
@@ -61,6 +63,13 @@ type tsiLogTagValue struct {
 }
 
 func analyzeTSILog(path string, info os.FileInfo, options Options) (FileReport, error) {
+	if info.IsDir() {
+		return FileReport{}, fmt.Errorf("tsi-log format requires a .tsl log file, got directory %s", filepath.Base(path))
+	}
+	if strings.HasSuffix(strings.ToLower(filepath.Base(path)), ".tsi") {
+		return FileReport{}, fmt.Errorf("%s uses tsi format, not tsi-log", filepath.Base(path))
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return FileReport{}, err
