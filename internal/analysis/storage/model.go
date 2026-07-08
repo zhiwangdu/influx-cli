@@ -883,6 +883,9 @@ func decodePathText(summary *DecodePathSummary) string {
 	if readAt := countDeltaSummaryText("read_at calls", summary.BaselineReadAtCalls, summary.OptimizedReadAtCalls, summary.SavedReadAtCalls); readAt != "" {
 		parts = append(parts, readAt)
 	}
+	if ranges := readAtRangeSummaryText(summary); ranges != "" {
+		parts = append(parts, ranges)
+	}
 	if summary.IteratorCostFiles > 0 || summary.IteratorCostBlocks > 0 || summary.IteratorCostBytes > 0 {
 		parts = append(parts, fmt.Sprintf("iterator_cost files=%d blocks=%d bytes=%d", summary.IteratorCostFiles, summary.IteratorCostBlocks, summary.IteratorCostBytes))
 	}
@@ -1046,6 +1049,43 @@ func decodeValueSummaryText(summary *DecodePathSummary) string {
 		parts = append(parts, fmt.Sprintf("output=%d->%d", summary.BaselineOutputValues, summary.OptimizedOutputValues))
 	}
 	return "values " + strings.Join(parts, " ")
+}
+
+func readAtRangeSummaryText(summary *DecodePathSummary) string {
+	if summary == nil {
+		return ""
+	}
+	rangeCount := 0
+	sampledBlocks := 0
+	var bytes int64
+	columns := map[string]struct{}{}
+	for _, sample := range summary.Samples {
+		if len(sample.OptimizedReadAtRanges) == 0 {
+			continue
+		}
+		sampledBlocks++
+		for _, readRange := range sample.OptimizedReadAtRanges {
+			rangeCount++
+			bytes += int64(readRange.SizeBytes)
+			if readRange.Column != "" {
+				columns[readRange.Column] = struct{}{}
+			}
+		}
+	}
+	if rangeCount == 0 {
+		return ""
+	}
+	parts := []string{
+		fmt.Sprintf("ranges=%d", rangeCount),
+		fmt.Sprintf("sampled_blocks=%d", sampledBlocks),
+	}
+	if bytes > 0 {
+		parts = append(parts, fmt.Sprintf("bytes=%d", bytes))
+	}
+	if len(columns) > 0 {
+		parts = append(parts, fmt.Sprintf("columns=%d", len(columns)))
+	}
+	return "read_at_ranges " + strings.Join(parts, " ")
 }
 
 func valueOutputSummaryText(summary *DecodePathSummary) string {

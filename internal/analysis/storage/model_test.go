@@ -79,7 +79,15 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				SkippedAfterRangeBlocks:   1,
 				FullyTombstonedBlocks:     1,
 				Samples: []DecodePathBlockDecision{
-					{Key: "secret-series-key", Type: "float", Reason: "range-match"},
+					{
+						Key:    "secret-series-key",
+						Type:   "float",
+						Reason: "range-match",
+						OptimizedReadAtRanges: []DecodePathReadAtRange{
+							{Segment: 0, Column: "secret-column", MinTime: 100, MaxTime: 150, Offset: 1024, SizeBytes: 24},
+							{Segment: 0, Column: "time", MinTime: 100, MaxTime: 150, Offset: 1048, SizeBytes: 16},
+						},
+					},
 				},
 				CursorWindows: []DecodePathCursorWindow{
 					{Key: "secret-window-key", MinTime: 1, MaxTime: 2, LocationBlocks: 2, DecodedBlocks: 1},
@@ -162,6 +170,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"segments 3->1 saved=2",
 		"cursor_reads 3->1",
 		"read_at calls 6->2 saved=4",
+		"read_at_ranges ranges=2 sampled_blocks=1 bytes=40 columns=2",
 		"iterator_cost files=1 blocks=3 bytes=273",
 		"value_output points=6->2 compared=2 unavailable_blocks=1 mismatches=1",
 		"cursor_output points=6->2 samples=2 final_samples=1",
