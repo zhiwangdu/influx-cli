@@ -622,7 +622,7 @@ func detectFormat(path string) (Format, error) {
 	if isOpenGeminiTextIndexPath(path) {
 		return FormatOpenGeminiText, nil
 	}
-	if isSeriesFilePath(path) {
+	if isSeriesFileInputPath(path) {
 		return FormatSeriesFile, nil
 	}
 	if isFieldsIndexPath(path) {
@@ -683,7 +683,7 @@ func isStorageCandidate(path string, format Format) bool {
 	case FormatTSILog:
 		return isTSILogPath(path)
 	case FormatSeriesFile:
-		return isSeriesFilePath(path)
+		return isSeriesFileInputPath(path)
 	case FormatFieldsIndex:
 		return isFieldsIndexPath(path)
 	case FormatMergeset:
@@ -699,7 +699,7 @@ func isStorageCandidate(path string, format Format) bool {
 	case FormatOpenGeminiText:
 		return false
 	default:
-		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || isTSSPFileCandidatePath(path) || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFilePath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path) || isOpenGeminiBloomFilterPath(path) || isOpenGeminiPKIndexCandidatePath(path)
+		return strings.HasSuffix(lower, ".tsm") || isWALPath(path) || isTSSPFileCandidatePath(path) || isTSSPDetachedMetaIndexPath(path) || strings.HasSuffix(lower, ".tsi") || isTSILogPath(path) || isSeriesFileInputPath(path) || isFieldsIndexPath(path) || isMergesetPartPath(path) || isOpenGeminiMetaPath(path) || isOpenGeminiPKMetaPath(path) || isOpenGeminiBloomFilterPath(path) || isOpenGeminiPKIndexCandidatePath(path)
 	}
 }
 

@@ -779,6 +779,9 @@ func TestStorageAnalyzeAutoSeriesPartitionSeriesIDDoesNotRequireRange(t *testing
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
+	if got := stdout.String(); !strings.Contains(got, "series-partition") {
+		t.Fatalf("stdout = %q, want series-partition output", got)
+	}
 	if got := stderr.String(); strings.Contains(got, "--series-id requires --from and --to") {
 		t.Fatalf("stderr = %q, want no range requirement", got)
 	}

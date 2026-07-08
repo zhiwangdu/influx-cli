@@ -199,6 +199,15 @@ func TestAnalyzeSeriesFileAutoPartitionSeriesIDFilterWithoutRange(t *testing.T) 
 	if got, want := file.Format, FormatSeriesFile; got != want {
 		t.Fatalf("format = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["layout"], "series-partition"; got != want {
+		t.Fatalf("layout = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["partition"], 1; got != want {
+		t.Fatalf("partition blocks = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["series-segment"], 1; got != want {
+		t.Fatalf("segment blocks = %d, want %d", got, want)
+	}
 	for key, want := range map[string]string{
 		"query_series_id_filter_applied": "true",
 		"query_series_ids":               "2,9,42",
