@@ -1129,6 +1129,73 @@ func TestTSSPDataBlockFilterRowsMatchesMissingExistencePredicates(t *testing.T) 
 	}
 }
 
+func TestTSSPDataBlockFilterRowsMatchesNegatedComparisonAliases(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			RowsKnown:  true,
+			Rows:       3,
+			ValueKnown: true,
+			Values:     []string{"100", "200", "300"},
+		},
+		"value": {
+			Type:       "integer",
+			RowsKnown:  true,
+			Rows:       3,
+			ValueKnown: true,
+			Values:     []string{"1", "2", "3"},
+		},
+	}
+	queryRange, err := NewTimeRange(100, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, matches, filterRows, stats, ok := tsspDataBlockFilterRows(
+		blocks,
+		[]FieldFilter{{Key: "value", Op: "!>", Value: "2"}},
+		[]FieldFilter{{Key: "value", Op: "not <", Value: "2"}},
+		[]FieldFilter{{Key: "value", Op: "!<=", Value: "2"}},
+		3,
+		tsspTimeRange{Min: 100, Max: 300},
+		queryRange,
+		"sid:7",
+		0,
+		3,
+	)
+	if !ok {
+		t.Fatal("filter rows returned unavailable")
+	}
+	if got, want := rows, []bool{false, true, false}; !equalBools(got, want) {
+		t.Fatalf("matching rows = %v, want %v", got, want)
+	}
+	if got, want := matches, 1; got != want {
+		t.Fatalf("matches = %d, want %d", got, want)
+	}
+	if got, want := filterRows, 3; got != want {
+		t.Fatalf("filter rows = %d, want %d", got, want)
+	}
+	for op, want := range map[string]int{"<=": 3, ">=": 2, ">": 1} {
+		if got := stats.OperatorEvaluations[op]; got != want {
+			t.Fatalf("%s operator evaluations = %d, want %d", op, got, want)
+		}
+	}
+	wantSamples := []struct {
+		action string
+		value  string
+	}{
+		{"filter_row_reject_any", "row=0 time=100 required=1/1 any=0/1 none=0/0 skips=0/0/1 values=value=1 decisions=required:value:<=:2:match;any:value:>=:2:miss result=reject_any"},
+		{"filter_row_match", "row=1 time=200 required=1/1 any=1/1 none=0/1 skips=0/0/0 values=value=2 decisions=required:value:<=:2:match;any:value:>=:2:match;none:value:>:2:miss result=match"},
+		{"filter_row_reject_required", "row=2 time=300 required=0/1 any=0/0 none=0/0 skips=0/1/1 values=value=3 decisions=required:value:<=:2:miss result=reject_required"},
+	}
+	for i, want := range wantSamples {
+		got := stats.FilterExecutionSamples[i]
+		if got.Action != want.action || got.CandidateValue != want.value {
+			t.Fatalf("filter execution sample[%d] = %+v, want action=%q value=%q", i, got, want.action, want.value)
+		}
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)
@@ -6452,6 +6519,76 @@ func TestAnalyzeQueryFieldsNormalizesCaseInsensitiveStringOperators(t *testing.T
 	}
 }
 
+func TestAnalyzeQueryFieldsNormalizesNegatedComparisonOperators(t *testing.T) {
+	filters := normalizeFieldFilters([]FieldFilter{
+		{Key: "gt_bang", Op: "!>", Value: "5"},
+		{Key: "gte_bang", Op: "!>=", Value: "5"},
+		{Key: "lt_bang", Op: "!<", Value: "5"},
+		{Key: "lte_bang", Op: "!<=", Value: "5"},
+		{Key: "gt_word", Op: "not >", Value: "5"},
+		{Key: "gt_word_under", Op: "not_>", Value: "5"},
+		{Key: "gt_word_hyphen", Op: "not->", Value: "5"},
+		{Key: "gte_word", Op: "not >=", Value: "5"},
+		{Key: "gte_word_under", Op: "not_>=", Value: "5"},
+		{Key: "gte_word_hyphen", Op: "not->=", Value: "5"},
+		{Key: "lt_word", Op: "not <", Value: "5"},
+		{Key: "lt_word_under", Op: "not_<", Value: "5"},
+		{Key: "lt_word_hyphen", Op: "not-<", Value: "5"},
+		{Key: "lte_word", Op: "not <=", Value: "5"},
+		{Key: "lte_word_under", Op: "not_<=", Value: "5"},
+		{Key: "lte_word_hyphen", Op: "not-<=", Value: "5"},
+	})
+	want := []FieldFilter{
+		{Key: "gt_bang", Op: "<=", Value: "5"},
+		{Key: "gt_word", Op: "<=", Value: "5"},
+		{Key: "gt_word_hyphen", Op: "<=", Value: "5"},
+		{Key: "gt_word_under", Op: "<=", Value: "5"},
+		{Key: "gte_bang", Op: "<", Value: "5"},
+		{Key: "gte_word", Op: "<", Value: "5"},
+		{Key: "gte_word_hyphen", Op: "<", Value: "5"},
+		{Key: "gte_word_under", Op: "<", Value: "5"},
+		{Key: "lt_bang", Op: ">=", Value: "5"},
+		{Key: "lt_word", Op: ">=", Value: "5"},
+		{Key: "lt_word_hyphen", Op: ">=", Value: "5"},
+		{Key: "lt_word_under", Op: ">=", Value: "5"},
+		{Key: "lte_bang", Op: ">", Value: "5"},
+		{Key: "lte_word", Op: ">", Value: "5"},
+		{Key: "lte_word_hyphen", Op: ">", Value: "5"},
+		{Key: "lte_word_under", Op: ">", Value: "5"},
+	}
+	if !equalFieldFilters(filters, want) {
+		t.Fatalf("filters = %v, want %v", filters, want)
+	}
+	if err := validateFieldFilters(filters); err != nil {
+		t.Fatalf("validate field filters: %v", err)
+	}
+	for _, tc := range []struct {
+		filter FieldFilter
+		want   string
+	}{
+		{FieldFilter{Key: "value", Op: "!>", Value: "5"}, "<="},
+		{FieldFilter{Key: "value", Op: "!>=", Value: "5"}, "<"},
+		{FieldFilter{Key: "value", Op: "!<", Value: "5"}, ">="},
+		{FieldFilter{Key: "value", Op: "!<=", Value: "5"}, ">"},
+		{FieldFilter{Key: "value", Op: "not >", Value: "5"}, "<="},
+		{FieldFilter{Key: "value", Op: "not_>", Value: "5"}, "<="},
+		{FieldFilter{Key: "value", Op: "not->", Value: "5"}, "<="},
+		{FieldFilter{Key: "value", Op: "not >=", Value: "5"}, "<"},
+		{FieldFilter{Key: "value", Op: "not_>=", Value: "5"}, "<"},
+		{FieldFilter{Key: "value", Op: "not->=", Value: "5"}, "<"},
+		{FieldFilter{Key: "value", Op: "not <", Value: "5"}, ">="},
+		{FieldFilter{Key: "value", Op: "not_<", Value: "5"}, ">="},
+		{FieldFilter{Key: "value", Op: "not-<", Value: "5"}, ">="},
+		{FieldFilter{Key: "value", Op: "not <=", Value: "5"}, ">"},
+		{FieldFilter{Key: "value", Op: "not_<=", Value: "5"}, ">"},
+		{FieldFilter{Key: "value", Op: "not-<=", Value: "5"}, ">"},
+	} {
+		if got := fieldFilterOperator(tc.filter); got != tc.want {
+			t.Fatalf("field filter operator for %+v = %q, want %q", tc.filter, got, tc.want)
+		}
+	}
+}
+
 func TestAnalyzeQueryFieldsRejectInvalidRegex(t *testing.T) {
 	queryRange, err := NewTimeRange(1, 2)
 	if err != nil {
@@ -6544,6 +6681,18 @@ func writeTestTSSP(path string) error {
 }
 
 func equalUint64s(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalBools(a, b []bool) bool {
 	if len(a) != len(b) {
 		return false
 	}
