@@ -697,6 +697,7 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 			KeyCount:           6,
 			BlockCount:         8,
 			BlocksByType:       map[string]int{"chunk-meta": 2, "data": 6},
+			QueryOverlapFiles:  2,
 			QueryOverlapBlocks: 3,
 			TombstoneFiles:     1,
 		},
@@ -760,7 +761,7 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	if got, want := row[tableColumnIndex(t, result.Table.Columns, "tombstone")], "1 files"; got != want {
 		t.Fatalf("aggregate tombstone = %v, want %v", got, want)
 	}
-	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2; block_types chunk-meta:2 data:6"; got != want {
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2; query_files=2; tombstone_files=1; block_types chunk-meta:2 data:6"; got != want {
 		t.Fatalf("aggregate details = %v, want %v", got, want)
 	}
 	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)

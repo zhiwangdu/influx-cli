@@ -665,6 +665,12 @@ func fileDetailsText(file FileReport) string {
 
 func summaryDetailsText(summary Summary, fileCount int) string {
 	parts := []string{fmt.Sprintf("files=%d", fileCount)}
+	if summary.QueryOverlapFiles > 0 {
+		parts = append(parts, fmt.Sprintf("query_files=%d", summary.QueryOverlapFiles))
+	}
+	if summary.TombstoneFiles > 0 {
+		parts = append(parts, fmt.Sprintf("tombstone_files=%d", summary.TombstoneFiles))
+	}
 	if blocksByType := countMapText(summary.BlocksByType); blocksByType != "" {
 		parts = append(parts, "block_types "+blocksByType)
 	}
