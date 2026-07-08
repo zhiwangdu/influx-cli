@@ -1117,6 +1117,9 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 				DataBlockProbeFilterRows:          4,
 				DataBlockProbeFilterMatches:       1,
 				DataBlockProbeFilterRejects:       3,
+				DataBlockProbeRequiredHits:        1,
+				DataBlockProbeRequiredMiss:        1,
+				DataBlockProbeAnySkips:            2,
 			},
 		},
 		{
@@ -1130,6 +1133,8 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 				DataBlockProbeRecordFilterRejects: 0,
 				DataBlockProbeFilterRows:          2,
 				DataBlockProbeFilterMatches:       2,
+				DataBlockProbeAnyHits:             2,
+				DataBlockProbeNoneMiss:            1,
 			},
 		},
 	}, Options{QueryRange: queryRange})
@@ -1156,6 +1161,21 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 	}
 	if got, want := summary.FilterExecutionTotalActions["filter_row_reject"], 3; got != want {
 		t.Fatalf("total filter_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterClauseTotalActions["filter_required_match"], 1; got != want {
+		t.Fatalf("total filter_required_match action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterClauseTotalActions["filter_required_miss"], 1; got != want {
+		t.Fatalf("total filter_required_miss action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterClauseTotalActions["filter_any_match"], 2; got != want {
+		t.Fatalf("total filter_any_match action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterClauseTotalActions["filter_any_skip"], 2; got != want {
+		t.Fatalf("total filter_any_skip action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterClauseTotalActions["filter_none_miss"], 1; got != want {
+		t.Fatalf("total filter_none_miss action count = %d, want %d", got, want)
 	}
 }
 
@@ -2159,6 +2179,18 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	}
 	if got, want := decode.FilterExecutionTotalActions["filter_row_match"], 1; got != want {
 		t.Fatalf("total filter_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.FilterClauseTotalActions), 3; got != want {
+		t.Fatalf("filter clause total action count entries = %d, want %d: %+v", got, want, decode.FilterClauseTotalActions)
+	}
+	if got, want := decode.FilterClauseTotalActions["filter_any_match"], 1; got != want {
+		t.Fatalf("total filter_any_match action count = %d, want %d", got, want)
+	}
+	if got, want := decode.FilterClauseTotalActions["filter_any_miss"], 1; got != want {
+		t.Fatalf("total filter_any_miss action count = %d, want %d", got, want)
+	}
+	if got, want := decode.FilterClauseTotalActions["filter_any_skip"], 1; got != want {
+		t.Fatalf("total filter_any_skip action count = %d, want %d", got, want)
 	}
 	wantFilterStep := DecodePathCursorStep{
 		Step:              1,

@@ -157,6 +157,9 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 					"filter_row_match":  3,
 					"filter_row_reject": 2,
 				},
+				FilterClauseTotalActions: map[string]int{
+					"filter_any_skip": 4,
+				},
 				DataBlockProbeFilterSkips: 4,
 				DataBlockProbeAnySkips:    4,
 				DataBlockProbeFilterOps: map[string]int{
@@ -191,7 +194,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"iterator_cost files=1 blocks=3 bytes=273",
 		"value_output points=6->2 compared=2 unavailable_blocks=1 mismatches=1",
 		"cursor_output points=6->2 samples=2 final_samples=1",
-		"execution windows cursor=2 sampled=1 merge=1 merge_blocks=2 merge_keys=1 samples range_total_actions range_row_match:5 range_row_reject:2 record_total_actions record_row_filter_reject:2 record_row_output:2 record_row_range_reject:1 filter_total_actions filter_row_match:3 filter_row_reject:2 decisions=1 cursor_steps=1 cursor_actions push:1 filter_steps=1 filter_actions match:1 amplification=2.50x",
+		"execution windows cursor=2 sampled=1 merge=1 merge_blocks=2 merge_keys=1 samples range_total_actions range_row_match:5 range_row_reject:2 record_total_actions record_row_filter_reject:2 record_row_output:2 record_row_range_reject:1 filter_total_actions filter_row_match:3 filter_row_reject:2 filter_clause_total_actions filter_any_skip:4 decisions=1 cursor_steps=1 cursor_actions push:1 filter_steps=1 filter_actions match:1 amplification=2.50x",
 		"data_probe blocks=4 bytes=256 valid=3 failures=4 crc_mismatches=1 short=1 unknown_types=1 read_errors=1 row_blocks=3 row_unknowns=1 row_mismatches=1 output_points=2 value_blocks=2 value_unknowns=1 nulls=3 record_samples=1 record_outputs=2",
 		"data_probe_failure_reasons segment_overlap_data_crc_unavailable:1 segment_overlap_data_header_unavailable:1 segment_overlap_data_read_unavailable:1",
 		"data_probe_types float-full:2 integer-full:1",
@@ -643,12 +646,17 @@ func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
 			"filter_row_match":  3,
 			"filter_row_reject": 2,
 		},
+		FilterClauseTotalActions: map[string]int{
+			"filter_required_match": 1,
+			"filter_required_miss":  2,
+			"filter_any_skip":       4,
+		},
 		FilterExecutionActions: map[string]int{
 			"filter_row_match": 1,
 		},
 	}
 	text := decodePathText(&summary)
-	want := "execution samples range_total_actions range_row_match:5 range_row_reject:2 record_total_actions record_row_filter_reject:1 record_row_output:6 record_row_range_reject:2 filter_total_actions filter_row_match:3 filter_row_reject:2 cursor_actions read_segments:2 range_actions range_row_match:1 record_actions record_row_filter_reject:1 record_row_output:2 filter_actions filter_row_match:1"
+	want := "execution samples range_total_actions range_row_match:5 range_row_reject:2 record_total_actions record_row_filter_reject:1 record_row_output:6 record_row_range_reject:2 filter_total_actions filter_row_match:3 filter_row_reject:2 filter_clause_total_actions filter_any_skip:4 filter_required_match:1 filter_required_miss:2 cursor_actions read_segments:2 range_actions range_row_match:1 record_actions record_row_filter_reject:1 record_row_output:2 filter_actions filter_row_match:1"
 	if !strings.Contains(text, want) {
 		t.Fatalf("decode path text = %q, want %q", text, want)
 	}
@@ -665,6 +673,7 @@ func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
 		RecordExecutionTotalActions map[string]int `json:"record_execution_total_action_counts"`
 		FilterExecutionActions      map[string]int `json:"filter_execution_action_counts"`
 		FilterExecutionTotalActions map[string]int `json:"filter_execution_total_action_counts"`
+		FilterClauseTotalActions    map[string]int `json:"filter_clause_total_action_counts"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
@@ -695,6 +704,9 @@ func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
 	}
 	if got, want := decoded.FilterExecutionTotalActions["filter_row_reject"], 2; got != want {
 		t.Fatalf("total filter_row_reject count = %d, want %d", got, want)
+	}
+	if got, want := decoded.FilterClauseTotalActions["filter_required_miss"], 2; got != want {
+		t.Fatalf("total filter_required_miss count = %d, want %d", got, want)
 	}
 }
 
