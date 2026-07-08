@@ -176,6 +176,7 @@ func buildTSMFileStoreDecodePathSummary(files []FileReport, options Options) (*D
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
 	populateTSMFileStoreCursorWindows(summary, locationsByKey, options.BlockSampleLimit, options.CursorDescending)
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = tsmDecodeRecommendations(summary)
 	return summary, nil
 }

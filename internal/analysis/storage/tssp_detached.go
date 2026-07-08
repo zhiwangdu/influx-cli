@@ -2456,7 +2456,6 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 		summary.RangeExecutionSamples = append(summary.RangeExecutionSamples, dataProbe.rangeExecutionSamples...)
 		summary.RecordExecutionSamples = append(summary.RecordExecutionSamples, dataProbe.recordExecutionSamples...)
-		summary.RecordExecutionActions = cursorStepActionCounts(summary.RecordExecutionSamples)
 		summary.FilterExecutionSamples = append(summary.FilterExecutionSamples, dataProbe.filterExecutionSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -2471,6 +2470,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 	}
 	populateTSSPDetachedChunkMetaBatches(summary, selectedMetas, overlapMetas, options)
 	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = tsspDetachedChunkDecodeRecommendations(summary)
 	return summary
 }
@@ -2577,6 +2577,7 @@ func buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes []tsspMetaIndex, op
 	}
 	populateTSSPDetachedChunkMetaBatches(summary, selectedMetas, overlapMetas, options)
 	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = tsspDetachedMetaIndexRecommendations(summary)
 	return summary
 }

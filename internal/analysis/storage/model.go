@@ -444,10 +444,13 @@ type DecodePathSummary struct {
 	CursorOutputSamples               []DecodePathCursorOutput  `json:"cursor_output_samples,omitempty"`
 	CursorFinalOutputSamples          []DecodePathCursorOutput  `json:"cursor_final_output_samples,omitempty"`
 	RangeExecutionSamples             []DecodePathCursorStep    `json:"range_execution_samples,omitempty"`
+	RangeExecutionActions             map[string]int            `json:"range_execution_action_counts,omitempty"`
 	RecordExecutionSamples            []DecodePathCursorStep    `json:"record_execution_samples,omitempty"`
 	RecordExecutionActions            map[string]int            `json:"record_execution_action_counts,omitempty"`
 	FilterExecutionSamples            []DecodePathCursorStep    `json:"filter_execution_samples,omitempty"`
+	FilterExecutionActions            map[string]int            `json:"filter_execution_action_counts,omitempty"`
 	CursorExecutionSamples            []DecodePathCursorStep    `json:"cursor_execution_samples,omitempty"`
+	CursorExecutionActions            map[string]int            `json:"cursor_execution_action_counts,omitempty"`
 	Recommendations                   []string                  `json:"recommendations,omitempty"`
 	mergesetSeekResults               map[string]mergesetSeekResult
 	mergesetScanItems                 [][]byte
@@ -1235,27 +1238,53 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 	if len(windowParts) > 0 {
 		parts = append(parts, "windows "+strings.Join(windowParts, " "))
 	}
-	recordActionText := countMapText(decodePathRecordExecutionActions(summary))
+	cursorActionText := countMapText(decodePathExecutionActions(summary.CursorExecutionActions, summary.CursorExecutionSamples))
+	rangeActionText := countMapText(decodePathExecutionActions(summary.RangeExecutionActions, summary.RangeExecutionSamples))
+	recordActionText := countMapText(decodePathExecutionActions(summary.RecordExecutionActions, summary.RecordExecutionSamples))
+	filterActionText := countMapText(decodePathExecutionActions(summary.FilterExecutionActions, summary.FilterExecutionSamples))
 	hasExecutionSamples := len(summary.Samples) > 0 || len(summary.CursorExecutionSamples) > 0 || len(summary.RangeExecutionSamples) > 0 || len(summary.RecordExecutionSamples) > 0 || len(summary.FilterExecutionSamples) > 0
-	if hasExecutionSamples || recordActionText != "" {
+	hasExecutionActions := cursorActionText != "" || rangeActionText != "" || recordActionText != "" || filterActionText != ""
+	if hasExecutionSamples || hasExecutionActions {
 		sampleParts := []string{}
 		if hasExecutionSamples {
 			sampleParts = append(sampleParts,
 				fmt.Sprintf("decisions=%d", len(summary.Samples)),
 				fmt.Sprintf("cursor_steps=%d", len(summary.CursorExecutionSamples)),
 			)
+			if cursorActionText != "" {
+				sampleParts = append(sampleParts, "cursor_actions "+cursorActionText)
+			}
 			if len(summary.RangeExecutionSamples) > 0 {
 				sampleParts = append(sampleParts, fmt.Sprintf("range_steps=%d", len(summary.RangeExecutionSamples)))
+			}
+			if rangeActionText != "" {
+				sampleParts = append(sampleParts, "range_actions "+rangeActionText)
 			}
 			if len(summary.RecordExecutionSamples) > 0 {
 				sampleParts = append(sampleParts, fmt.Sprintf("record_steps=%d", len(summary.RecordExecutionSamples)))
 			}
 		}
-		if recordActionText != "" {
-			sampleParts = append(sampleParts, "record_actions "+recordActionText)
-		}
 		if hasExecutionSamples {
+			if recordActionText != "" {
+				sampleParts = append(sampleParts, "record_actions "+recordActionText)
+			}
 			sampleParts = append(sampleParts, fmt.Sprintf("filter_steps=%d", len(summary.FilterExecutionSamples)))
+			if filterActionText != "" {
+				sampleParts = append(sampleParts, "filter_actions "+filterActionText)
+			}
+		} else {
+			if cursorActionText != "" {
+				sampleParts = append(sampleParts, "cursor_actions "+cursorActionText)
+			}
+			if rangeActionText != "" {
+				sampleParts = append(sampleParts, "range_actions "+rangeActionText)
+			}
+			if recordActionText != "" {
+				sampleParts = append(sampleParts, "record_actions "+recordActionText)
+			}
+			if filterActionText != "" {
+				sampleParts = append(sampleParts, "filter_actions "+filterActionText)
+			}
 		}
 		parts = append(parts, "samples "+strings.Join(sampleParts, " "))
 	}
@@ -1270,14 +1299,21 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 	return "execution " + strings.Join(parts, " ")
 }
 
-func decodePathRecordExecutionActions(summary *DecodePathSummary) map[string]int {
+func populateDecodePathExecutionActionCounts(summary *DecodePathSummary) {
 	if summary == nil {
-		return nil
+		return
 	}
-	if len(summary.RecordExecutionActions) > 0 {
-		return summary.RecordExecutionActions
+	summary.CursorExecutionActions = cursorStepActionCounts(summary.CursorExecutionSamples)
+	summary.RangeExecutionActions = cursorStepActionCounts(summary.RangeExecutionSamples)
+	summary.RecordExecutionActions = cursorStepActionCounts(summary.RecordExecutionSamples)
+	summary.FilterExecutionActions = cursorStepActionCounts(summary.FilterExecutionSamples)
+}
+
+func decodePathExecutionActions(explicit map[string]int, samples []DecodePathCursorStep) map[string]int {
+	if len(explicit) > 0 {
+		return explicit
 	}
-	return cursorStepActionCounts(summary.RecordExecutionSamples)
+	return cursorStepActionCounts(samples)
 }
 
 func cursorStepActionCounts(samples []DecodePathCursorStep) map[string]int {

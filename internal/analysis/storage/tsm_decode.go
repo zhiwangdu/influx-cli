@@ -153,6 +153,7 @@ func buildTSMDecodePathSummary(entries []tsmIndexEntry, tombstones []tsmTombston
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
 	populateTSMCursorWindows(summary, locationsByKey, options.BlockSampleLimit, options.CursorDescending)
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = tsmDecodeRecommendations(summary)
 	return summary
 }

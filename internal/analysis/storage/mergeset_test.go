@@ -497,6 +497,12 @@ func TestAnalyzeMergesetFileSetTableScanSingleStreamHeapAccounting(t *testing.T)
 	if got, want := len(decode.CursorExecutionSamples), 2; got != want {
 		t.Fatalf("cursor execution samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorExecutionActions), 1; got != want {
+		t.Fatalf("cursor execution action count entries = %d, want %d: %+v", got, want, decode.CursorExecutionActions)
+	}
+	if got, want := decode.CursorExecutionActions["heap_pop_cursor_advance"], 2; got != want {
+		t.Fatalf("heap_pop_cursor_advance action count = %d, want %d", got, want)
+	}
 	wantFirstStep := DecodePathCursorStep{
 		Step:                1,
 		Type:                "mergeset-table-scan-heap-step",

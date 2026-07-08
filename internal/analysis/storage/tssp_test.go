@@ -162,6 +162,18 @@ func TestAnalyzeTSSPMetadata(t *testing.T) {
 	if got, want := len(decode.CursorExecutionSamples), 3; got != want {
 		t.Fatalf("cursor execution samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorExecutionActions), 3; got != want {
+		t.Fatalf("cursor execution action count entries = %d, want %d: %+v", got, want, decode.CursorExecutionActions)
+	}
+	for action, want := range map[string]int{
+		"skip_before_seek": 1,
+		"read_segments":    1,
+		"skip_after_range": 1,
+	} {
+		if got := decode.CursorExecutionActions[action]; got != want {
+			t.Fatalf("%s action count = %d, want %d", action, got, want)
+		}
+	}
 	wantFirstStep := DecodePathCursorStep{
 		Step:              1,
 		Type:              "tssp-location-cursor-step",
@@ -603,6 +615,15 @@ func TestAnalyzeTSSPDataProbeFiltersDecodedRowsByQueryRange(t *testing.T) {
 	}
 	if got, want := len(decode.RangeExecutionSamples), 3; got != want {
 		t.Fatalf("range execution samples = %d, want %d", got, want)
+	}
+	if got, want := len(decode.RangeExecutionActions), 2; got != want {
+		t.Fatalf("range execution action count entries = %d, want %d: %+v", got, want, decode.RangeExecutionActions)
+	}
+	if got, want := decode.RangeExecutionActions["range_row_reject"], 2; got != want {
+		t.Fatalf("range_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := decode.RangeExecutionActions["range_row_match"], 1; got != want {
+		t.Fatalf("range_row_match action count = %d, want %d", got, want)
 	}
 	for i, want := range []DecodePathCursorStep{
 		{
@@ -1406,6 +1427,15 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 	if got, want := len(decode.FilterExecutionSamples), 2; got != want {
 		t.Fatalf("filter execution samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.FilterExecutionActions), 2; got != want {
+		t.Fatalf("filter execution action count entries = %d, want %d: %+v", got, want, decode.FilterExecutionActions)
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_reject_required"], 1; got != want {
+		t.Fatalf("filter_row_reject_required action count = %d, want %d", got, want)
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_reject_any"], 1; got != want {
+		t.Fatalf("filter_row_reject_any action count = %d, want %d", got, want)
+	}
 	for i, want := range []DecodePathCursorStep{
 		{
 			Step:              1,
@@ -2116,6 +2146,15 @@ func TestAppendTSSPFileDecodePathSamplesRebasesRangeExecutionSamples(t *testing.
 
 	if got, want := len(dst.RangeExecutionSamples), 3; got != want {
 		t.Fatalf("range execution samples = %d, want sample limit %d", got, want)
+	}
+	if got, want := len(dst.RangeExecutionActions), 2; got != want {
+		t.Fatalf("range execution action count entries = %d, want %d: %+v", got, want, dst.RangeExecutionActions)
+	}
+	if got, want := dst.RangeExecutionActions["range_row_reject"], 2; got != want {
+		t.Fatalf("range_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := dst.RangeExecutionActions["range_row_match"], 1; got != want {
+		t.Fatalf("range_row_match action count = %d, want %d", got, want)
 	}
 	for i, want := range []struct {
 		file        string
@@ -5133,6 +5172,15 @@ func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) 
 	}
 	if got, want := len(decode.FilterExecutionSamples), 4; got != want {
 		t.Fatalf("filter execution samples = %d, want %d", got, want)
+	}
+	if got, want := len(decode.FilterExecutionActions), 2; got != want {
+		t.Fatalf("filter execution action count entries = %d, want %d: %+v", got, want, decode.FilterExecutionActions)
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_match"], 2; got != want {
+		t.Fatalf("filter_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_reject_required"], 2; got != want {
+		t.Fatalf("filter_row_reject_required action count = %d, want %d", got, want)
 	}
 	for i, want := range []struct {
 		file        string

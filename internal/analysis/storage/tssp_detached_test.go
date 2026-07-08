@@ -123,6 +123,12 @@ func TestAnalyzeTSSPDetachedMetaIndex(t *testing.T) {
 	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
 		t.Fatalf("cursor execution samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorExecutionActions), 1; got != want {
+		t.Fatalf("cursor execution action count entries = %d, want %d: %+v", got, want, decode.CursorExecutionActions)
+	}
+	if got, want := decode.CursorExecutionActions["read_batch_filtered"], 1; got != want {
+		t.Fatalf("read_batch_filtered action count = %d, want %d", got, want)
+	}
 	wantStep := DecodePathCursorStep{
 		Step:              1,
 		Type:              "tssp-detached-chunk-meta-batch-step",
@@ -1857,6 +1863,15 @@ func TestAnalyzeTSSPDetachedDataProbeFiltersDecodedRowsByQueryRange(t *testing.T
 	if got, want := len(decode.RangeExecutionSamples), 3; got != want {
 		t.Fatalf("range execution samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.RangeExecutionActions), 2; got != want {
+		t.Fatalf("range execution action count entries = %d, want %d: %+v", got, want, decode.RangeExecutionActions)
+	}
+	if got, want := decode.RangeExecutionActions["range_row_reject"], 2; got != want {
+		t.Fatalf("range_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := decode.RangeExecutionActions["range_row_match"], 1; got != want {
+		t.Fatalf("range_row_match action count = %d, want %d", got, want)
+	}
 	for i, want := range []DecodePathCursorStep{
 		{
 			Step:              1,
@@ -2049,6 +2064,12 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	}
 	if got, want := len(decode.FilterExecutionSamples), 1; got != want {
 		t.Fatalf("filter execution samples = %d, want %d", got, want)
+	}
+	if got, want := len(decode.FilterExecutionActions), 1; got != want {
+		t.Fatalf("filter execution action count entries = %d, want %d: %+v", got, want, decode.FilterExecutionActions)
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_match"], 1; got != want {
+		t.Fatalf("filter_row_match action count = %d, want %d", got, want)
 	}
 	wantFilterStep := DecodePathCursorStep{
 		Step:              1,

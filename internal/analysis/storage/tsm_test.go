@@ -485,6 +485,12 @@ func TestAnalyzeTSMFileStoreFinalOutputSamplesFollowDescendingWinner(t *testing.
 	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
 		t.Fatalf("cursor execution samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.CursorExecutionActions), 1; got != want {
+		t.Fatalf("cursor execution action count entries = %d, want %d: %+v", got, want, decode.CursorExecutionActions)
+	}
+	if got, want := decode.CursorExecutionActions["read_merge_window"], 1; got != want {
+		t.Fatalf("read_merge_window action count = %d, want %d", got, want)
+	}
 	wantStep := DecodePathCursorStep{
 		Step:              1,
 		Type:              "tsm-key-cursor-step",

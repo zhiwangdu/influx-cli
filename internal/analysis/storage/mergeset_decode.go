@@ -72,6 +72,7 @@ func buildMergesetFileSetSearchSummary(files []FileReport, options Options) *Dec
 	if summary.OptimizedDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.BaselineDecodeBlocks) / float64(summary.OptimizedDecodeBlocks)
 	}
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = mergesetFileSetSearchRecommendations(summary, options)
 	return summary
 }
@@ -202,6 +203,7 @@ func buildMergesetFileSetScanSummary(files []FileReport, options Options) *Decod
 	if summary.OptimizedDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.BaselineDecodeBlocks) / float64(summary.OptimizedDecodeBlocks)
 	}
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = mergesetFileSetScanRecommendations(summary)
 	return summary
 }
