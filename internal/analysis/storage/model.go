@@ -584,17 +584,6 @@ func (r Report) Result() result.Result {
 		"advice",
 	})
 	for _, file := range r.Files {
-		tombstone := ""
-		if file.Tombstones.Exists {
-			tombstone = fmt.Sprintf("yes (%d bytes)", file.Tombstones.SizeBytes)
-			if file.Tombstones.RangeCount > 0 {
-				tombstone = fmt.Sprintf("yes (%d bytes, %d ranges", file.Tombstones.SizeBytes, file.Tombstones.RangeCount)
-				if file.Tombstones.AffectedBlocks > 0 {
-					tombstone += fmt.Sprintf(", %d blocks", file.Tombstones.AffectedBlocks)
-				}
-				tombstone += ")"
-			}
-		}
 		table.AddRow(
 			file.Path,
 			string(file.Format),
@@ -604,7 +593,7 @@ func (r Report) Result() result.Result {
 			file.KeyCount,
 			file.BlockCount,
 			file.QueryOverlapBlocks,
-			tombstone,
+			tombstoneText(file.Tombstones),
 			fileDetailsText(file),
 			joinSamples(file.KeySamples),
 			decodePathText(file.DecodePath),
@@ -641,6 +630,26 @@ func (r Report) Result() result.Result {
 			Source:   "storage-analyzer",
 		},
 	}
+}
+
+func tombstoneText(summary TombstoneSummary) string {
+	if !summary.Exists {
+		return ""
+	}
+	if summary.RangeCount == 0 {
+		return fmt.Sprintf("yes (%d bytes)", summary.SizeBytes)
+	}
+	parts := []string{
+		fmt.Sprintf("%d bytes", summary.SizeBytes),
+		fmt.Sprintf("%d ranges", summary.RangeCount),
+	}
+	if summary.QueryOverlapRanges > 0 {
+		parts = append(parts, fmt.Sprintf("query_ranges=%d", summary.QueryOverlapRanges))
+	}
+	if summary.AffectedBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("%d blocks", summary.AffectedBlocks))
+	}
+	return "yes (" + strings.Join(parts, ", ") + ")"
 }
 
 func fileDetailsText(file FileReport) string {

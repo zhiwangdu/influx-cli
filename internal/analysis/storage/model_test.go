@@ -681,6 +681,49 @@ func TestDecodePathTextOmitsEmptyDataProbeCountMaps(t *testing.T) {
 	}
 }
 
+func TestTombstoneTextIncludesQueryOverlapRanges(t *testing.T) {
+	text := tombstoneText(TombstoneSummary{
+		Exists:             true,
+		SizeBytes:          128,
+		RangeCount:         3,
+		QueryOverlapRanges: 1,
+		AffectedBlocks:     2,
+	})
+	want := "yes (128 bytes, 3 ranges, query_ranges=1, 2 blocks)"
+	if text != want {
+		t.Fatalf("tombstone text = %q, want %q", text, want)
+	}
+}
+
+func TestTombstoneTextOmitsZeroQueryOverlapRanges(t *testing.T) {
+	text := tombstoneText(TombstoneSummary{
+		Exists:     true,
+		SizeBytes:  64,
+		RangeCount: 2,
+	})
+	want := "yes (64 bytes, 2 ranges)"
+	if text != want {
+		t.Fatalf("tombstone text = %q, want %q", text, want)
+	}
+	if strings.Contains(text, "query_ranges=0") {
+		t.Fatalf("tombstone text = %q, want no zero query range count", text)
+	}
+}
+
+func TestTombstoneTextEmptyAndBytesOnly(t *testing.T) {
+	if got := tombstoneText(TombstoneSummary{}); got != "" {
+		t.Fatalf("absent tombstone text = %q, want empty", got)
+	}
+	got := tombstoneText(TombstoneSummary{
+		Exists:    true,
+		SizeBytes: 32,
+	})
+	want := "yes (32 bytes)"
+	if got != want {
+		t.Fatalf("bytes-only tombstone text = %q, want %q", got, want)
+	}
+}
+
 func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	report := Report{
 		Files: []FileReport{
