@@ -5441,6 +5441,12 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 	if got, want := fieldFilterOperator(FieldFilter{Key: "suffix", Op: "not_ends_with", Value: "tmp"}), "not-ends-with"; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "prefix", Op: "!starts_with", Value: "tmp"}), "not-starts-with"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "suffix", Op: "!ends_with", Value: "tmp"}), "not-ends-with"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "state", Op: "is_not", Value: "null"}), "!="; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}

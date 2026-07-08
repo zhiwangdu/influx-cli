@@ -371,8 +371,10 @@ func TestParseStorageFieldFiltersParsesUnderscoreOperatorAliases(t *testing.T) {
 		"message not_like tmp%",
 		"host starts_with edge",
 		"path not_starts_with tmp",
+		"path !starts_with var",
 		"region ends_with east",
 		"device not_ends_with old",
+		"device !ends_with stale",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -389,8 +391,10 @@ func TestParseStorageFieldFiltersParsesUnderscoreOperatorAliases(t *testing.T) {
 		{"message", "not-like", "tmp%"},
 		{"host", "starts-with", "edge"},
 		{"path", "not-starts-with", "tmp"},
+		{"path", "not-starts-with", "var"},
 		{"region", "ends-with", "east"},
 		{"device", "not-ends-with", "old"},
+		{"device", "not-ends-with", "stale"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("field filters = %d, want %d", len(got), len(want))
