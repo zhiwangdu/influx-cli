@@ -2147,7 +2147,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 				Type:              "tssp-record-row-step",
 				Action:            "record_row_output",
 				Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
-				CandidateValue:    tsspRecordExecutionCandidateValue(row, timestamp, len(columnNames), values, queryRange),
+				CandidateValue:    tsspRecordExecutionCandidateValue(row, recordSamples, timestamp, len(columnNames), values, queryRange),
 				CursorIndexBefore: row,
 				CursorIndexAfter:  row + 1,
 				CursorAdvanced:    true,
@@ -2161,9 +2161,10 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 	return samples, recordSteps, recordSamples
 }
 
-func tsspRecordExecutionCandidateValue(row int, timestamp int64, columnCount int, values string, queryRange TimeRange) string {
+func tsspRecordExecutionCandidateValue(row int, localOutput int, timestamp int64, columnCount int, values string, queryRange TimeRange) string {
 	parts := []string{
 		fmt.Sprintf("row=%d", row),
+		fmt.Sprintf("local_output=%d", localOutput),
 		fmt.Sprintf("time=%d", timestamp),
 	}
 	if queryRange.Set {
