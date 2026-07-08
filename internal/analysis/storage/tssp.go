@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
@@ -85,6 +87,20 @@ type tsspSegment struct {
 }
 
 func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, error) {
+	if info.IsDir() {
+		return FileReport{}, fmt.Errorf("tssp format requires an attached TSSP file, got directory %s", filepath.Base(path))
+	}
+	base := filepath.Base(path)
+	if strings.EqualFold(base, tsspDetachedMetaIndexFileName) {
+		return FileReport{}, fmt.Errorf("segment.idx uses tssp-metaindex format, not tssp")
+	}
+	if strings.EqualFold(base, tsspDetachedChunkMetaFileName) {
+		return FileReport{}, fmt.Errorf("segment.meta is detached TSSP chunk metadata; analyze segment.idx with tssp-metaindex")
+	}
+	if strings.EqualFold(base, tsspDetachedDataFileName) {
+		return FileReport{}, fmt.Errorf("segment.bin is detached TSSP data; analyze segment.idx with tssp-metaindex")
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return FileReport{}, err
