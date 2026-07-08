@@ -1326,6 +1326,69 @@ func TestAnalyzeTSSPDetachedFileSetOutputSamplesIncludeFilesAndFinalDedup(t *tes
 	}
 }
 
+func TestAnalyzeTSSPDetachedFileSetFinalRecordSamplesOmitLocalOutputOrdinal(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "segment-a", tsspDetachedMetaIndexFileName)
+	path2 := filepath.Join(dir, "segment-b", tsspDetachedMetaIndexFileName)
+	times, err := writeTestTSSPDetachedMultiColumnRecordData(filepath.Dir(path1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTestTSSPDetachedMultiColumnRecordData(filepath.Dir(path2)); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		Recursive:        true,
+		QueryRange:       queryRange,
+		BlockSampleLimit: 12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level detached TSSP decode path summary")
+	}
+	var localSecondRecord *DecodePathCursorOutput
+	for i := range decode.CursorOutputSamples {
+		sample := &decode.CursorOutputSamples[i]
+		if sample.Type == "record" && sample.Time == times[1] {
+			localSecondRecord = sample
+			break
+		}
+	}
+	if localSecondRecord == nil {
+		t.Fatalf("cursor output samples = %+v, want local second record sample", decode.CursorOutputSamples)
+	}
+	if got, want := localSecondRecord.OutputOrdinal, 1; got != want {
+		t.Fatalf("local record output ordinal = %d, want %d", got, want)
+	}
+
+	var finalSecondRecord *DecodePathCursorOutput
+	for i := range decode.CursorFinalOutputSamples {
+		sample := &decode.CursorFinalOutputSamples[i]
+		if sample.Type == "record" && sample.Time == times[1] {
+			finalSecondRecord = sample
+			break
+		}
+	}
+	if finalSecondRecord == nil {
+		t.Fatalf("cursor final output samples = %+v, want final second record sample", decode.CursorFinalOutputSamples)
+	}
+	if got, want := finalSecondRecord.OutputOrdinal, 0; got != want {
+		t.Fatalf("final record output ordinal = %d, want cleared local ordinal %d", got, want)
+	}
+	if !finalSecondRecord.RequiresDedup || !finalSecondRecord.RequiresMerge {
+		t.Fatalf("final second record sample = %+v, want dedup and merge", *finalSecondRecord)
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexSamplesOneRowValueBlocks(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
