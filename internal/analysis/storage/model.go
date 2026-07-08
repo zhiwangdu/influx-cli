@@ -694,7 +694,39 @@ func indexDetailsText(summary *IndexSummary) string {
 	if summary.DeletedMeasurementCount > 0 || summary.DeletedTagKeyCount > 0 || summary.DeletedTagValueCount > 0 || summary.TombstoneSeriesIDSetCardinality > 0 {
 		parts = append(parts, fmt.Sprintf("deleted measurements=%d tag_keys=%d tag_values=%d series_ids=%d", summary.DeletedMeasurementCount, summary.DeletedTagKeyCount, summary.DeletedTagValueCount, summary.TombstoneSeriesIDSetCardinality))
 	}
+	if query := indexQueryDetailsText(summary.Query); query != "" {
+		parts = append(parts, query)
+	}
 	return "index " + strings.Join(parts, " ")
+}
+
+func indexQueryDetailsText(summary *IndexQuerySummary) string {
+	if summary == nil {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	if summary.MeasurementFilterApplied {
+		parts = append(parts, "measurement_filter=true")
+	}
+	if summary.TagFilterApplied {
+		parts = append(parts, "tag_filter=true")
+	}
+	if text := queryMatchCountText("measurements", len(summary.QueryMeasurements), len(summary.MatchedMeasurements), len(summary.MissingMeasurements)); text != "" {
+		parts = append(parts, text)
+	}
+	if text := queryMatchCountText("tags", len(summary.QueryTags), len(summary.MatchedTags), len(summary.MissingTags)); text != "" {
+		parts = append(parts, text)
+	}
+	if summary.CandidateMeasurements > 0 {
+		parts = append(parts, fmt.Sprintf("candidates=%d", summary.CandidateMeasurements))
+	}
+	if summary.SeriesRefs > 0 {
+		parts = append(parts, fmt.Sprintf("query_series_refs=%d", summary.SeriesRefs))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "query " + strings.Join(parts, " ")
 }
 
 func fieldIndexDetailsText(summary *FieldIndexSummary) string {

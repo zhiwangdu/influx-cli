@@ -911,6 +911,18 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 					TagValueCount:                   4,
 					SeriesIDSetCardinality:          7,
 					TombstoneSeriesIDSetCardinality: 2,
+					Query: &IndexQuerySummary{
+						MeasurementFilterApplied: true,
+						TagFilterApplied:         true,
+						QueryMeasurements:        []string{"cpu", "mem"},
+						MatchedMeasurements:      []string{"cpu"},
+						MissingMeasurements:      []string{"mem"},
+						QueryTags:                []TagFilter{{Key: "host", Value: "a"}, {Key: "region", Value: "missing"}},
+						MatchedTags:              []TagFilter{{Key: "host", Value: "a"}},
+						MissingTags:              []TagFilter{{Key: "region", Value: "missing"}},
+						CandidateMeasurements:    1,
+						SeriesRefs:               2,
+					},
 				},
 			},
 			{
@@ -1002,7 +1014,7 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 	result := report.Result()
 	detailsColumn := tableColumnIndex(t, result.Table.Columns, "details")
 	wants := [][]string{
-		{"block_types measurement:2 tag-key:3", "index measurements=2", "series_refs=10", "series_ids=7", "tags=3 values=4", "deleted measurements=1 tag_keys=0 tag_values=0 series_ids=2"},
+		{"block_types measurement:2 tag-key:3", "index measurements=2", "series_refs=10", "series_ids=7", "tags=3 values=4", "deleted measurements=1 tag_keys=0 tag_values=0 series_ids=2", "query measurement_filter=true tag_filter=true measurements=2/1/1 tags=2/1/1 candidates=1 query_series_refs=2"},
 		{"block_types field:4 measurement-fields:2", "fields measurements=2 fields=4", "types=float:1 integer:1 string:1 unsigned:1", "changes=3 adds=2 deletes=1"},
 		{"block_types primary-key-meta-block:2 primary-key-schema-column:3", "primary_key type=opengemini-detached-primary-meta", "columns=3", "rows=4", "block_ids=10..13", "data=120 valid=112", "crc=1 data_oob=2 column_oob=3 column_unordered=1"},
 		{"block_types bloom-filter-crc-mismatch:1 bloom-filter-line-block:2", "secondary_index type=opengemini-bloom-filter", "layout=attached-line-filter", "field=content", "blocks=2", "groups=3", "pieces=6", "payload_bytes=64", "block_bytes=96", "piece_bytes=16", "group_bytes=32", "valid_bytes=128", "crc=1 trailing=3 data_oob=1"},
@@ -1015,6 +1027,17 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 				t.Fatalf("row %d details = %q, want %q", rowIndex, details, want)
 			}
 		}
+	}
+}
+
+func TestIndexQueryDetailsTextIncludesAppliedFiltersWithoutTerms(t *testing.T) {
+	details := indexQueryDetailsText(&IndexQuerySummary{
+		MeasurementFilterApplied: true,
+		TagFilterApplied:         true,
+	})
+	want := "query measurement_filter=true tag_filter=true"
+	if details != want {
+		t.Fatalf("details = %q, want %q", details, want)
 	}
 }
 
