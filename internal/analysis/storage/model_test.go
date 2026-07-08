@@ -587,13 +587,14 @@ func TestDecodePathTextIncludesExecutionDiagnosticsCountsOnly(t *testing.T) {
 			{Step: 2, Type: "cursor", Action: "advance", Key: "another-secret-cursor-key"},
 		},
 		RecordExecutionSamples: []DecodePathCursorStep{
-			{Step: 3, Type: "record", Action: "output", Key: "secret-record-key", CandidateValue: "secret-record"},
+			{Step: 3, Type: "record", Action: "record_row_output", Key: "secret-record-key", CandidateValue: "secret-record"},
+			{Step: 4, Type: "record", Action: "record_row_filter_reject", Key: "another-secret-record-key", CandidateValue: "another-secret-record"},
 		},
 		FilterExecutionSamples: []DecodePathCursorStep{
-			{Step: 4, Type: "filter", Action: "match", Key: "secret-filter-key"},
+			{Step: 5, Type: "filter", Action: "match", Key: "secret-filter-key"},
 		},
 	})
-	want := "execution windows cursor=3 sampled=2 merge=2 merge_blocks=5 merge_keys=4 samples decisions=1 cursor_steps=2 record_steps=1 filter_steps=1 amplification=1.75x"
+	want := "execution windows cursor=3 sampled=2 merge=2 merge_blocks=5 merge_keys=4 samples decisions=1 cursor_steps=2 record_steps=2 record_actions record_row_filter_reject:1 record_row_output:1 filter_steps=1 amplification=1.75x"
 	if !strings.Contains(text, want) {
 		t.Fatalf("decode path text = %q, want %q", text, want)
 	}

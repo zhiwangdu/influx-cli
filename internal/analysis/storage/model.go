@@ -1244,6 +1244,9 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 		}
 		if len(summary.RecordExecutionSamples) > 0 {
 			sampleParts = append(sampleParts, fmt.Sprintf("record_steps=%d", len(summary.RecordExecutionSamples)))
+			if actions := cursorStepActionSummaryText(summary.RecordExecutionSamples); actions != "" {
+				sampleParts = append(sampleParts, "record_actions "+actions)
+			}
 		}
 		sampleParts = append(sampleParts, fmt.Sprintf("filter_steps=%d", len(summary.FilterExecutionSamples)))
 		parts = append(parts, "samples "+strings.Join(sampleParts, " "))
@@ -1257,6 +1260,20 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 		return ""
 	}
 	return "execution " + strings.Join(parts, " ")
+}
+
+func cursorStepActionSummaryText(samples []DecodePathCursorStep) string {
+	if len(samples) == 0 {
+		return ""
+	}
+	counts := make(map[string]int, len(samples))
+	for _, sample := range samples {
+		if sample.Action == "" {
+			continue
+		}
+		counts[sample.Action]++
+	}
+	return countMapText(counts)
 }
 
 func queryTargetSummaryText(summary *DecodePathSummary) string {
