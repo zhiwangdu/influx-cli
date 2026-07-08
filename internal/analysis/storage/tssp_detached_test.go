@@ -2634,6 +2634,122 @@ func TestAnalyzeTSSPDetachedNoneFieldFilterRejectsMatchingRows(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedNoneFieldFilterCombinesWithRequiredAndAnyFilters(t *testing.T) {
+	dir := t.TempDir()
+	times, err := writeTestTSSPDetachedMultiColumnRecordData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: ">", Value: "1.0"}},
+		QueryAnyFields:   []FieldFilter{{Key: "status", Value: "false"}},
+		QueryNoneFields:  []FieldFilter{{Key: "value", Value: "2.5"}},
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "0"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "2"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_evaluations"], "5"; got != want {
+		t.Fatalf("data block probe filter evaluations = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "=:3,>:2"; got != want {
+		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: ">", Value: "1.0"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.QueryAnyFields, []FieldFilter{{Key: "status", Value: "false"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query any fields = %v, want %v", got, want)
+	}
+	if got, want := decode.QueryNoneFields, []FieldFilter{{Key: "value", Value: "2.5"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query none fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 0; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 0; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRequiredEvals, 2; got != want {
+		t.Fatalf("decode required filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeAnyEvals, 2; got != want {
+		t.Fatalf("decode any filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeNoneEvals, 1; got != want {
+		t.Fatalf("decode none filter evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeNoneSkips, 1; got != want {
+		t.Fatalf("decode none filter short-circuit skips = %d, want %d", got, want)
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_reject_any"], 1; got != want {
+		t.Fatalf("filter_row_reject_any action count = %d, want %d", got, want)
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_reject_none"], 1; got != want {
+		t.Fatalf("filter_row_reject_none action count = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorStep{
+		{
+			Step:              1,
+			Type:              "tssp-filter-row-step",
+			Action:            "filter_row_reject_any",
+			Key:               "meta-index-id:42/row:0",
+			CandidateValue:    fmt.Sprintf("row=0 time=%d required=1/1 any=0/1 none=0/0 skips=0/0/1 values=status=true,value=1.25 decisions=required:value:>:1.0:match;any:status:=:false:miss result=reject_any", times[0]),
+			CursorIndexBefore: 0,
+			CursorIndexAfter:  1,
+			CursorAdvanced:    true,
+		},
+		{
+			Step:              2,
+			Type:              "tssp-filter-row-step",
+			Action:            "filter_row_reject_none",
+			Key:               "meta-index-id:42/row:1",
+			CandidateValue:    fmt.Sprintf("row=1 time=%d required=1/1 any=1/1 none=1/1 skips=0/0/0 values=status=false,value=2.5 decisions=required:value:>:1.0:match;any:status:=:false:match;none:value:=:2.5:match result=reject_none", times[1]),
+			CursorIndexBefore: 1,
+			CursorIndexAfter:  2,
+			CursorAdvanced:    true,
+		},
+	} {
+		if got := decode.FilterExecutionSamples[i]; got != want {
+			t.Fatalf("filter execution sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+	for _, prefix := range []string{
+		"applied 1 detached TSSP field filter",
+		"applied 1 detached TSSP OR field filter",
+		"applied 1 detached TSSP NOT field filter",
+		"detached TSSP field filters matched 0 of 2 decoded record row",
+	} {
+		if !containsStringWithPrefix(decode.Recommendations, prefix) {
+			t.Fatalf("recommendations = %v, want prefix %q", decode.Recommendations, prefix)
+		}
+	}
+	if !containsString(decode.Recommendations, "short-circuited 1 detached TSSP decoded-row field predicate evaluation") {
+		t.Fatalf("recommendations = %v, want detached predicate short-circuit recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPDetachedFieldFilterMatchesIntegerComparison(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
