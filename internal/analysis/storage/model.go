@@ -439,6 +439,7 @@ type DecodePathSummary struct {
 	CursorWindows                []DecodePathCursorWindow  `json:"cursor_windows,omitempty"`
 	CursorOutputSamples          []DecodePathCursorOutput  `json:"cursor_output_samples,omitempty"`
 	CursorFinalOutputSamples     []DecodePathCursorOutput  `json:"cursor_final_output_samples,omitempty"`
+	RangeExecutionSamples        []DecodePathCursorStep    `json:"range_execution_samples,omitempty"`
 	FilterExecutionSamples       []DecodePathCursorStep    `json:"filter_execution_samples,omitempty"`
 	CursorExecutionSamples       []DecodePathCursorStep    `json:"cursor_execution_samples,omitempty"`
 	Recommendations              []string                  `json:"recommendations,omitempty"`
@@ -1224,8 +1225,16 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 	if len(windowParts) > 0 {
 		parts = append(parts, "windows "+strings.Join(windowParts, " "))
 	}
-	if len(summary.Samples) > 0 || len(summary.CursorExecutionSamples) > 0 || len(summary.FilterExecutionSamples) > 0 {
-		parts = append(parts, fmt.Sprintf("samples decisions=%d cursor_steps=%d filter_steps=%d", len(summary.Samples), len(summary.CursorExecutionSamples), len(summary.FilterExecutionSamples)))
+	if len(summary.Samples) > 0 || len(summary.CursorExecutionSamples) > 0 || len(summary.RangeExecutionSamples) > 0 || len(summary.FilterExecutionSamples) > 0 {
+		sampleParts := []string{
+			fmt.Sprintf("decisions=%d", len(summary.Samples)),
+			fmt.Sprintf("cursor_steps=%d", len(summary.CursorExecutionSamples)),
+		}
+		if len(summary.RangeExecutionSamples) > 0 {
+			sampleParts = append(sampleParts, fmt.Sprintf("range_steps=%d", len(summary.RangeExecutionSamples)))
+		}
+		sampleParts = append(sampleParts, fmt.Sprintf("filter_steps=%d", len(summary.FilterExecutionSamples)))
+		parts = append(parts, "samples "+strings.Join(sampleParts, " "))
 	}
 	if summary.Amplification > 0 {
 		if formatted := fmt.Sprintf("%.2f", summary.Amplification); formatted != "0.00" {

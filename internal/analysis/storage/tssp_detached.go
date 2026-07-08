@@ -438,6 +438,7 @@ type tsspDetachedDataProbe struct {
 	chunkFailureReason     map[uint64]string
 	chunkOutputPoints      map[uint64]int
 	valueSamples           []DecodePathCursorOutput
+	rangeExecutionSamples  []DecodePathCursorStep
 	filterExecutionSamples []DecodePathCursorStep
 }
 
@@ -653,7 +654,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				}
 			}
 			if segmentChecked && segmentAvailable && segmentRowsKnown {
-				matchingRows, matchedRows, filterRows, filterStats, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange, fmt.Sprintf("meta-index-id:%d", chunk.SID), remainingTSSPFilterExecutionSampleLimit(probe.filterExecutionSamples, options.BlockSampleLimit))
+				matchingRows, matchedRows, filterRows, filterStats, ok := tsspDataBlockFilterRows(segmentBlocks, options.QueryFields, options.QueryAnyFields, options.QueryNoneFields, segmentRows, timeRange, options.QueryRange, fmt.Sprintf("meta-index-id:%d", chunk.SID), remainingTSSPExecutionSampleLimit(probe.rangeExecutionSamples, options.BlockSampleLimit), remainingTSSPExecutionSampleLimit(probe.filterExecutionSamples, options.BlockSampleLimit))
 				if !ok {
 					chunkAvailable = false
 					chunkFailureReason = "segment_overlap_data_filter_unavailable"
@@ -662,6 +663,7 @@ func probeTSSPDetachedDataFile(dir string, chunks []tsspChunkMeta, options Optio
 				probe.RangeRows += filterStats.RangeRows
 				probe.RangeMatches += filterStats.RangeMatches
 				probe.RangeRejects += filterStats.RangeRejects
+				appendTSSPRangeExecutionSamples(&probe.rangeExecutionSamples, filterStats.RangeExecutionSamples, options.BlockSampleLimit)
 				if len(options.QueryFields) > 0 || len(options.QueryAnyFields) > 0 || len(options.QueryNoneFields) > 0 {
 					probe.FilterRows += filterRows
 					probe.FilterMatches += matchedRows
@@ -2360,6 +2362,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		summary.DataBlockProbeNoneSkips = dataProbe.FilterNoneSkips
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
+		summary.RangeExecutionSamples = append(summary.RangeExecutionSamples, dataProbe.rangeExecutionSamples...)
 		summary.FilterExecutionSamples = append(summary.FilterExecutionSamples, dataProbe.filterExecutionSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks

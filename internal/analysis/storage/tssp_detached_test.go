@@ -1813,6 +1813,45 @@ func TestAnalyzeTSSPDetachedDataProbeFiltersDecodedRowsByQueryRange(t *testing.T
 	if got, want := decode.DataBlockProbeRangeRejects, 2; got != want {
 		t.Fatalf("data block probe range rejects = %d, want %d", got, want)
 	}
+	if got, want := len(decode.RangeExecutionSamples), 3; got != want {
+		t.Fatalf("range execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorStep{
+		{
+			Step:              1,
+			Type:              "tssp-range-row-step",
+			Action:            "range_row_reject",
+			Key:               "meta-index-id:42/row:0",
+			CandidateValue:    "row=0 time=333 range=444:444 result=reject_range",
+			CursorIndexBefore: 0,
+			CursorIndexAfter:  1,
+			CursorAdvanced:    true,
+		},
+		{
+			Step:              2,
+			Type:              "tssp-range-row-step",
+			Action:            "range_row_match",
+			Key:               "meta-index-id:42/row:1",
+			CandidateValue:    "row=1 time=444 range=444:444 result=match",
+			CursorIndexBefore: 1,
+			CursorIndexAfter:  2,
+			CursorAdvanced:    true,
+		},
+		{
+			Step:              3,
+			Type:              "tssp-range-row-step",
+			Action:            "range_row_reject",
+			Key:               "meta-index-id:42/row:2",
+			CandidateValue:    "row=2 time=555 range=444:444 result=reject_range",
+			CursorIndexBefore: 2,
+			CursorIndexAfter:  3,
+			CursorAdvanced:    true,
+		},
+	} {
+		if got := decode.RangeExecutionSamples[i]; got != want {
+			t.Fatalf("range execution sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
 	if got, want := decode.DataBlockProbeFilterRows, 1; got != want {
 		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
 	}

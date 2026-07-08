@@ -601,6 +601,45 @@ func TestAnalyzeTSSPDataProbeFiltersDecodedRowsByQueryRange(t *testing.T) {
 	if got, want := decode.DataBlockProbeRangeRejects, 2; got != want {
 		t.Fatalf("data block probe range rejects = %d, want %d", got, want)
 	}
+	if got, want := len(decode.RangeExecutionSamples), 3; got != want {
+		t.Fatalf("range execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorStep{
+		{
+			Step:              1,
+			Type:              "tssp-range-row-step",
+			Action:            "range_row_reject",
+			Key:               "sid:7/row:0",
+			CandidateValue:    fmt.Sprintf("row=0 time=%d range=%d:%d result=reject_range", times[0], times[1], times[1]),
+			CursorIndexBefore: 0,
+			CursorIndexAfter:  1,
+			CursorAdvanced:    true,
+		},
+		{
+			Step:              2,
+			Type:              "tssp-range-row-step",
+			Action:            "range_row_match",
+			Key:               "sid:7/row:1",
+			CandidateValue:    fmt.Sprintf("row=1 time=%d range=%d:%d result=match", times[1], times[1], times[1]),
+			CursorIndexBefore: 1,
+			CursorIndexAfter:  2,
+			CursorAdvanced:    true,
+		},
+		{
+			Step:              3,
+			Type:              "tssp-range-row-step",
+			Action:            "range_row_reject",
+			Key:               "sid:7/row:2",
+			CandidateValue:    fmt.Sprintf("row=2 time=%d range=%d:%d result=reject_range", times[2], times[1], times[1]),
+			CursorIndexBefore: 2,
+			CursorIndexAfter:  3,
+			CursorAdvanced:    true,
+		},
+	} {
+		if got := decode.RangeExecutionSamples[i]; got != want {
+			t.Fatalf("range execution sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
 	if got, want := len(decode.CursorOutputSamples), 1; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
 	}
@@ -1538,7 +1577,7 @@ func TestTSSPFilterExecutionSamplesLimitAndRebase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, matchedRows, filterRows, stats, ok := tsspDataBlockFilterRows(blocks, []FieldFilter{{Key: "value", Op: ">", Value: "0"}}, nil, nil, 3, tsspTimeRange{Min: 100, Max: 300}, queryRange, "sid:7", 2)
+	_, matchedRows, filterRows, stats, ok := tsspDataBlockFilterRows(blocks, []FieldFilter{{Key: "value", Op: ">", Value: "0"}}, nil, nil, 3, tsspTimeRange{Min: 100, Max: 300}, queryRange, "sid:7", 0, 2)
 	if !ok {
 		t.Fatal("filter rows should be available")
 	}
@@ -1554,10 +1593,10 @@ func TestTSSPFilterExecutionSamplesLimitAndRebase(t *testing.T) {
 
 	var merged []DecodePathCursorStep
 	appendTSSPFilterExecutionSamples(&merged, stats.FilterExecutionSamples, 4)
-	if got, want := remainingTSSPFilterExecutionSampleLimit(merged, 4), 2; got != want {
+	if got, want := remainingTSSPExecutionSampleLimit(merged, 4), 2; got != want {
 		t.Fatalf("remaining sample limit = %d, want %d", got, want)
 	}
-	_, _, _, secondStats, ok := tsspDataBlockFilterRows(blocks, []FieldFilter{{Key: "value", Op: ">", Value: "0"}}, nil, nil, 3, tsspTimeRange{Min: 100, Max: 300}, queryRange, "sid:8", remainingTSSPFilterExecutionSampleLimit(merged, 4))
+	_, _, _, secondStats, ok := tsspDataBlockFilterRows(blocks, []FieldFilter{{Key: "value", Op: ">", Value: "0"}}, nil, nil, 3, tsspTimeRange{Min: 100, Max: 300}, queryRange, "sid:8", 0, remainingTSSPExecutionSampleLimit(merged, 4))
 	if !ok {
 		t.Fatal("second filter rows should be available")
 	}
@@ -1579,6 +1618,149 @@ func TestTSSPFilterExecutionSamplesLimitAndRebase(t *testing.T) {
 		got := merged[i]
 		if got.Step != i+1 || got.Key != want.key || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
 			t.Fatalf("merged filter execution sample[%d] = %+v, want key=%q indexes=%d->%d advanced", i, got, want.key, want.indexBefore, want.indexAfter)
+		}
+	}
+}
+
+func TestTSSPRangeExecutionSamplesLimitAndRebase(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			Rows:       3,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"100", "200", "300"},
+		},
+		"value": {
+			Type:       "integer",
+			Rows:       3,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"1", "2", "3"},
+		},
+	}
+	queryRange, err := NewTimeRange(200, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, matchedRows, filterRows, stats, ok := tsspDataBlockFilterRows(blocks, nil, nil, nil, 3, tsspTimeRange{Min: 100, Max: 300}, queryRange, "sid:7", 2, 0)
+	if !ok {
+		t.Fatal("range rows should be available")
+	}
+	if got, want := matchedRows, 1; got != want {
+		t.Fatalf("matched rows = %d, want %d", got, want)
+	}
+	if got, want := filterRows, 1; got != want {
+		t.Fatalf("filter rows = %d, want %d", got, want)
+	}
+	if got, want := len(stats.RangeExecutionSamples), 2; got != want {
+		t.Fatalf("range execution samples = %d, want per-call cap %d", got, want)
+	}
+
+	var merged []DecodePathCursorStep
+	appendTSSPRangeExecutionSamples(&merged, stats.RangeExecutionSamples, 4)
+	if got, want := remainingTSSPExecutionSampleLimit(merged, 4), 2; got != want {
+		t.Fatalf("remaining sample limit = %d, want %d", got, want)
+	}
+	_, _, _, secondStats, ok := tsspDataBlockFilterRows(blocks, nil, nil, nil, 3, tsspTimeRange{Min: 100, Max: 300}, queryRange, "sid:8", remainingTSSPExecutionSampleLimit(merged, 4), 0)
+	if !ok {
+		t.Fatal("second range rows should be available")
+	}
+	appendTSSPRangeExecutionSamples(&merged, secondStats.RangeExecutionSamples, 4)
+
+	if got, want := len(merged), 4; got != want {
+		t.Fatalf("merged range execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		key         string
+		action      string
+		value       string
+		indexBefore int
+		indexAfter  int
+	}{
+		{"sid:7/row:0", "range_row_reject", "row=0 time=100 range=200:200 result=reject_range", 0, 1},
+		{"sid:7/row:1", "range_row_match", "row=1 time=200 range=200:200 result=match", 1, 2},
+		{"sid:8/row:0", "range_row_reject", "row=0 time=100 range=200:200 result=reject_range", 2, 3},
+		{"sid:8/row:1", "range_row_match", "row=1 time=200 range=200:200 result=match", 3, 4},
+	} {
+		got := merged[i]
+		if got.Step != i+1 || got.Type != "tssp-range-row-step" || got.Action != want.action || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
+			t.Fatalf("merged range execution sample[%d] = %+v, want key=%q action=%q value=%q indexes=%d->%d advanced", i, got, want.key, want.action, want.value, want.indexBefore, want.indexAfter)
+		}
+	}
+}
+
+func TestAppendTSSPFileDecodePathSamplesRebasesRangeExecutionSamples(t *testing.T) {
+	dst := &DecodePathSummary{}
+	src1 := &DecodePathSummary{
+		RangeExecutionSamples: []DecodePathCursorStep{
+			{
+				Step:              1,
+				Type:              "tssp-range-row-step",
+				Action:            "range_row_reject",
+				Key:               "sid:7/row:0",
+				CandidateValue:    "row=0 time=100 range=200:200 result=reject_range",
+				CursorIndexBefore: 0,
+				CursorIndexAfter:  1,
+				CursorAdvanced:    true,
+			},
+			{
+				Step:              2,
+				Type:              "tssp-range-row-step",
+				Action:            "range_row_match",
+				Key:               "sid:7/row:1",
+				CandidateValue:    "row=1 time=200 range=200:200 result=match",
+				CursorIndexBefore: 1,
+				CursorIndexAfter:  2,
+				CursorAdvanced:    true,
+			},
+		},
+	}
+	src2 := &DecodePathSummary{
+		RangeExecutionSamples: []DecodePathCursorStep{
+			{
+				Step:              1,
+				Type:              "tssp-range-row-step",
+				Action:            "range_row_reject",
+				Key:               "sid:8/row:0",
+				CandidateValue:    "row=0 time=100 range=200:200 result=reject_range",
+				CursorIndexBefore: 0,
+				CursorIndexAfter:  1,
+				CursorAdvanced:    true,
+			},
+			{
+				Step:              2,
+				Type:              "tssp-range-row-step",
+				Action:            "range_row_match",
+				Key:               "sid:8/row:1",
+				CandidateValue:    "row=1 time=200 range=200:200 result=match",
+				CursorIndexBefore: 1,
+				CursorIndexAfter:  2,
+				CursorAdvanced:    true,
+			},
+		},
+	}
+
+	appendTSSPFileDecodePathSamples(dst, src1, "a.tssp", 3, nil)
+	appendTSSPFileDecodePathSamples(dst, src2, "b.tssp", 3, nil)
+
+	if got, want := len(dst.RangeExecutionSamples), 3; got != want {
+		t.Fatalf("range execution samples = %d, want sample limit %d", got, want)
+	}
+	for i, want := range []struct {
+		file        string
+		key         string
+		indexBefore int
+		indexAfter  int
+	}{
+		{"a.tssp", "sid:7/row:0", 0, 1},
+		{"a.tssp", "sid:7/row:1", 1, 2},
+		{"b.tssp", "sid:8/row:0", 2, 3},
+	} {
+		got := dst.RangeExecutionSamples[i]
+		if got.Step != i+1 || got.File != want.file || got.Key != want.key || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
+			t.Fatalf("range execution sample[%d] = %+v, want file=%q key=%q indexes=%d->%d advanced", i, got, want.file, want.key, want.indexBefore, want.indexAfter)
 		}
 	}
 }

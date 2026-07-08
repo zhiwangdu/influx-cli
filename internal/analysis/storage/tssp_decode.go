@@ -175,6 +175,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.DataBlockProbeNoneSkips = dataProbe.FilterNoneSkips
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
+		summary.RangeExecutionSamples = append(summary.RangeExecutionSamples, dataProbe.rangeExecutionSamples...)
 		summary.FilterExecutionSamples = append(summary.FilterExecutionSamples, dataProbe.filterExecutionSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -541,6 +542,23 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 		sample.CursorIndexAfter += cursorIndexBase
 		sample.CursorExhausted = false
 		dst.CursorExecutionSamples = append(dst.CursorExecutionSamples, sample)
+	}
+	rangeIndexBase := 0
+	if len(dst.RangeExecutionSamples) > 0 {
+		rangeIndexBase = dst.RangeExecutionSamples[len(dst.RangeExecutionSamples)-1].CursorIndexAfter
+	}
+	for _, sample := range src.RangeExecutionSamples {
+		if len(dst.RangeExecutionSamples) >= sampleLimit {
+			break
+		}
+		if sample.File == "" {
+			sample.File = path
+		}
+		sample.Step = len(dst.RangeExecutionSamples) + 1
+		sample.CursorIndexBefore += rangeIndexBase
+		sample.CursorIndexAfter += rangeIndexBase
+		sample.CursorExhausted = false
+		dst.RangeExecutionSamples = append(dst.RangeExecutionSamples, sample)
 	}
 	filterIndexBase := 0
 	if len(dst.FilterExecutionSamples) > 0 {
