@@ -545,7 +545,7 @@ TSSP `--field`、`--field-any` 和 `--field-none` 只在本地已解码 data blo
 
 TSSP 多词 field predicate operator alias 会把 hyphen、space 和 underscore 分隔符归一到同一个本地 operator，例如 `not-like`、`not like` 和 `not_like` 等价；bang-negated prefix/suffix alias 也接受 underscore 形式，例如 `!starts_with` 和 `!ends_with`。归一化只影响本地 decoded-row predicate 解释，不调用外部 parser 或查询执行器。
 
-TSSP record execution diagnostics 会区分本地 materialized record candidate row、output row、query-range reject row、field-filter reject row 与受 sample limit 限制的 execution row samples；sample 会记录每个本地 materialized record row 的 query range context、decoded value-column count 和 local output ordinal，便于区分单列 value sample、跨列 record materialization、查询窗口、filter 决策与本地输出顺序。
+TSSP record execution diagnostics 会区分本地 materialized record candidate row、output row、query-range reject row、field-filter reject row 与受 sample limit 限制的 execution row samples；execution sample 会记录每个本地 materialized record row 的 query range context 和 decoded value-column count，record output sample 与 execution sample 都会记录 local output ordinal，便于区分单列 value sample、跨列 record materialization、查询窗口、filter 决策与本地输出顺序。
 
 openGemini detached primary key meta analyzer 覆盖本地 `primary.meta` sidecar：解析 `COLX` public header、主键 schema、time-cluster location、meta block 的 block-id 范围、`primary.idx` offset/length、列 offset 和 IEEE CRC；若同目录存在 `primary.idx`，只做本地文件大小和 range 边界校验，不解码主键 record，不调用 `DetachedPKMetaReader`、OBS/fileops runtime、shard engine、HTTP API 或数据库服务。
 

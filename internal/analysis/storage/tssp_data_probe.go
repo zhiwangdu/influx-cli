@@ -322,7 +322,7 @@ func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk
 	}
 	var recordExecutionSamples []DecodePathCursorStep
 	var recordStats tsspRecordMaterializationStats
-	probe.valueSamples, recordExecutionSamples, recordStats = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit))
+	probe.valueSamples, recordExecutionSamples, recordStats = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit), probe.RecordOutputs)
 	appendTSSPRecordExecutionSamples(&probe.recordExecutionSamples, recordExecutionSamples, sampleLimit)
 	probe.RecordRows += recordStats.Rows
 	probe.RecordSamples += recordStats.Samples

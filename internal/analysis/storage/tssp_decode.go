@@ -647,6 +647,7 @@ func (g *tsspFileSetOutputSampleGroups) add(output DecodePathCursorOutput) {
 		output.RequiresDedup = false
 		output.RequiresMerge = false
 		output.MergeFiles = ""
+		output.OutputOrdinal = 0
 		group = &tsspFileSetOutputSampleGroup{output: output}
 		g.groups[key] = group
 		g.order = append(g.order, key)

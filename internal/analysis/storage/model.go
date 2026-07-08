@@ -509,6 +509,7 @@ type DecodePathCursorOutput struct {
 	BaselineValue     string               `json:"baseline_value,omitempty"`
 	OptimizedValue    string               `json:"optimized_value,omitempty"`
 	OptimizedValueHex string               `json:"optimized_value_hex,omitempty"`
+	OutputOrdinal     int                  `json:"output_ordinal,omitempty"`
 	Matches           bool                 `json:"matches"`
 	RequiresDedup     bool                 `json:"requires_dedup,omitempty"`
 	RequiresMerge     bool                 `json:"requires_merge,omitempty"`

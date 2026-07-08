@@ -777,7 +777,7 @@ func TestAnalyzeTSSPMaterializesAttachedRecordSamples(t *testing.T) {
 	}
 	for i, want := range []DecodePathCursorOutput{
 		{Key: "sid:7/record", Time: times[0], Type: "record", OptimizedValue: "status=true,value=1.25", Matches: true},
-		{Key: "sid:7/record", Time: times[1], Type: "record", OptimizedValue: "status=false,value=2.5", Matches: true},
+		{Key: "sid:7/record", Time: times[1], Type: "record", OptimizedValue: "status=false,value=2.5", OutputOrdinal: 1, Matches: true},
 	} {
 		got := decode.CursorOutputSamples[i]
 		if got != want {
@@ -786,6 +786,46 @@ func TestAnalyzeTSSPMaterializesAttachedRecordSamples(t *testing.T) {
 	}
 	if !containsStringWithPrefix(decode.Recommendations, "materialized 2 TSSP record output row(s) from decoded column blocks with 2 sampled") {
 		t.Fatalf("recommendations = %v, want record materialization recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPRecordOutputOrdinalsContinueAcrossChunks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	times, err := writeTestTSSPWithTwoChunkRecordData(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		KeySampleLimit:   3,
+		BlockSampleLimit: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.Files[0].DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	recordSamples := make([]DecodePathCursorOutput, 0, 4)
+	for _, sample := range decode.CursorOutputSamples {
+		if sample.Type == "record" {
+			recordSamples = append(recordSamples, sample)
+		}
+	}
+	if got, want := len(recordSamples), 4; got != want {
+		t.Fatalf("record output samples = %d, want %d: %+v", got, want, recordSamples)
+	}
+	for i, sample := range recordSamples {
+		if got, want := sample.OutputOrdinal, i; got != want {
+			t.Fatalf("record output sample %d ordinal = %d, want %d: %+v", i, got, want, sample)
+		}
 	}
 }
 
@@ -1805,7 +1845,7 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 
 	var outputs []DecodePathCursorOutput
 	var merged []DecodePathCursorStep
-	outputs, firstSteps, firstStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5))
+	outputs, firstSteps, firstStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5), 0)
 	appendTSSPRecordExecutionSamples(&merged, firstSteps, 5)
 	if got, want := firstStats.Rows, 3; got != want {
 		t.Fatalf("first record rows = %d, want %d", got, want)
@@ -1823,7 +1863,7 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 		t.Fatalf("remaining record execution sample limit = %d, want %d", got, want)
 	}
 
-	outputs, secondSteps, secondStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 8, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5))
+	outputs, secondSteps, secondStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 8, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5), 0)
 	appendTSSPRecordExecutionSamples(&merged, secondSteps, 5)
 	if got, want := secondStats.Samples, 2; got != want {
 		t.Fatalf("second record samples = %d, want remaining output cap %d", got, want)
@@ -1884,7 +1924,7 @@ func TestTSSPRecordMaterializationStatsCountRangeAndFilterRejects(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	outputs, steps, stats := appendTSSPDataProbeRecordSamples(nil, "sid", 7, tsspTimeRange{Min: 100, Max: 400}, blocks, []bool{false, true, false, true}, queryRange, 4, 4)
+	outputs, steps, stats := appendTSSPDataProbeRecordSamples(nil, "sid", 7, tsspTimeRange{Min: 100, Max: 400}, blocks, []bool{false, true, false, true}, queryRange, 4, 4, 0)
 	if got, want := stats.Rows, 4; got != want {
 		t.Fatalf("record rows = %d, want %d", got, want)
 	}
@@ -1902,6 +1942,9 @@ func TestTSSPRecordMaterializationStatsCountRangeAndFilterRejects(t *testing.T) 
 	}
 	if got, want := len(outputs), 1; got != want {
 		t.Fatalf("record output samples = %d, want %d", got, want)
+	}
+	if got, want := outputs[0].OutputOrdinal, 0; got != want {
+		t.Fatalf("record output ordinal = %d, want %d", got, want)
 	}
 	if got, want := len(steps), 1; got != want {
 		t.Fatalf("record execution samples = %d, want %d", got, want)
@@ -5045,6 +5088,70 @@ func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) 
 	}
 }
 
+func TestAnalyzeTSSPFileSetFinalRecordSamplesOmitLocalOutputOrdinal(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "00000001-0001-00000000.tssp")
+	path2 := filepath.Join(dir, "00000002-0001-00000000.tssp")
+	times, err := writeTestTSSPWithMultiColumnRecordData(path1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTestTSSPWithMultiColumnRecordData(path2); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QuerySeriesIDs:   []uint64{7},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level TSSP decode path summary")
+	}
+	var localSecondRecord *DecodePathCursorOutput
+	for i := range decode.CursorOutputSamples {
+		sample := &decode.CursorOutputSamples[i]
+		if sample.Type == "record" && sample.Time == times[1] {
+			localSecondRecord = sample
+			break
+		}
+	}
+	if localSecondRecord == nil {
+		t.Fatalf("cursor output samples = %+v, want local second record sample", decode.CursorOutputSamples)
+	}
+	if got, want := localSecondRecord.OutputOrdinal, 1; got != want {
+		t.Fatalf("local record output ordinal = %d, want %d", got, want)
+	}
+
+	var finalSecondRecord *DecodePathCursorOutput
+	for i := range decode.CursorFinalOutputSamples {
+		sample := &decode.CursorFinalOutputSamples[i]
+		if sample.Type == "record" && sample.Time == times[1] {
+			finalSecondRecord = sample
+			break
+		}
+	}
+	if finalSecondRecord == nil {
+		t.Fatalf("cursor final output samples = %+v, want final second record sample", decode.CursorFinalOutputSamples)
+	}
+	if got, want := finalSecondRecord.OutputOrdinal, 0; got != want {
+		t.Fatalf("final record output ordinal = %d, want cleared local ordinal %d", got, want)
+	}
+	if !finalSecondRecord.RequiresDedup || !finalSecondRecord.RequiresMerge {
+		t.Fatalf("final second record sample = %+v, want dedup and merge", *finalSecondRecord)
+	}
+}
+
 func TestAnalyzeTSSPFileSetFinalOutputSamplesUseUntruncatedFileSamples(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "00000001-0001-00000000.tssp")
@@ -6225,6 +6332,74 @@ func writeTestTSSPWithMultiColumnRecordData(path string) ([]int64, error) {
 	return times, os.WriteFile(path, buf.Bytes(), 0o600)
 }
 
+func writeTestTSSPWithTwoChunkRecordData(path string) ([]int64, error) {
+	times := []int64{333, 444, 555, 666}
+
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+
+	dataOffset := int64(buf.Len())
+	chunks := make([]testTSSPMultiColumnChunkSpec, 0, 2)
+	for i := 0; i < 2; i++ {
+		chunkTimes := times[i*2 : i*2+2]
+		valueOffset := int64(buf.Len())
+		valueSize, err := writeTestTSSPAttachedFloatFullBlock(&buf, []float64{float64(i*2) + 1.25, float64(i*2) + 2.5}, 0)
+		if err != nil {
+			return nil, err
+		}
+		statusOffset := int64(buf.Len())
+		statusSize := writeTestTSSPAttachedBooleanFullBlock(&buf, []bool{i == 0, i != 0})
+		timeOffset := int64(buf.Len())
+		timeSize := writeTestTSSPAttachedIntegerFullBlock(&buf, chunkTimes)
+		chunks = append(chunks, testTSSPMultiColumnChunkSpec{
+			sid:     7,
+			minTime: chunkTimes[0],
+			maxTime: chunkTimes[len(chunkTimes)-1],
+			columns: []testTSSPColumnSpec{
+				{name: "value", typ: 1, offset: valueOffset, size: valueSize},
+				{name: "status", typ: 5, offset: statusOffset, size: statusSize},
+				{name: "time", typ: 0, offset: timeOffset, size: timeSize},
+			},
+		})
+	}
+	dataSize := int64(buf.Len()) - dataOffset
+
+	payload := testTSSPMultiColumnChunkMetaPayloads(chunks...)
+	payloadOffset := int64(buf.Len())
+	buf.Write(payload)
+
+	metaOffset := int64(buf.Len())
+	writeTestTSSPMetaIndex(&buf, tsspMetaIndex{
+		ID:      7,
+		MinTime: times[0],
+		MaxTime: times[len(times)-1],
+		Offset:  payloadOffset,
+		Count:   uint32(len(chunks)),
+		Size:    uint32(len(payload)),
+	})
+
+	trailerOffset := int64(buf.Len())
+	writeTestTSSPTrailer(&buf, tsspTrailer{
+		DataOffset:         dataOffset,
+		DataSize:           dataSize,
+		IndexSize:          metaOffset - dataOffset - dataSize,
+		MetaIndexSize:      int64(buf.Len()) - metaOffset,
+		BloomSize:          0,
+		IDTimeSize:         0,
+		IDCount:            1,
+		MinID:              7,
+		MaxID:              7,
+		MinTime:            times[0],
+		MaxTime:            times[len(times)-1],
+		MetaIndexItemCount: 1,
+		ChunkMetaCompress:  tsspChunkMetaCompressNone,
+		MeasurementName:    "cpu",
+	})
+	writeGeminiInt64(&buf, trailerOffset)
+	return times, os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
 func writeTestTSSPWithIntegerConstDeltaData(path string) error {
 	var buf bytes.Buffer
 	buf.WriteString(tsspMagic)
@@ -7139,6 +7314,13 @@ type testTSSPColumnSpec struct {
 	size   uint32
 }
 
+type testTSSPMultiColumnChunkSpec struct {
+	sid     uint64
+	minTime int64
+	maxTime int64
+	columns []testTSSPColumnSpec
+}
+
 func testTSSPChunkMetaPayload(chunks ...testTSSPChunkSpec) []byte {
 	var data bytes.Buffer
 	var offsets bytes.Buffer
@@ -7151,26 +7333,37 @@ func testTSSPChunkMetaPayload(chunks ...testTSSPChunkSpec) []byte {
 }
 
 func testTSSPMultiColumnChunkMetaPayload(sid uint64, minTime, maxTime int64, columns []testTSSPColumnSpec) []byte {
+	return testTSSPMultiColumnChunkMetaPayloads(testTSSPMultiColumnChunkSpec{
+		sid:     sid,
+		minTime: minTime,
+		maxTime: maxTime,
+		columns: columns,
+	})
+}
+
+func testTSSPMultiColumnChunkMetaPayloads(chunks ...testTSSPMultiColumnChunkSpec) []byte {
 	var data bytes.Buffer
 	var offsets bytes.Buffer
-	writeUint32(&offsets, 0)
-	writeUint64(&data, sid)
-	chunkOffset := int64(0)
-	chunkSize := uint32(0)
-	if len(columns) > 0 {
-		chunkOffset = columns[0].offset
-	}
-	for _, column := range columns {
-		chunkSize += column.size
-	}
-	writeGeminiInt64(&data, chunkOffset)
-	writeUint32(&data, chunkSize)
-	writeUint32(&data, uint32(len(columns)))
-	writeUint32(&data, 1)
-	writeGeminiInt64(&data, minTime)
-	writeGeminiInt64(&data, maxTime)
-	for _, column := range columns {
-		writeTestTSSPColumnMeta(&data, column.name, column.typ, column.offset, column.size)
+	for _, chunk := range chunks {
+		writeUint32(&offsets, uint32(data.Len()))
+		writeUint64(&data, chunk.sid)
+		chunkOffset := int64(0)
+		chunkSize := uint32(0)
+		if len(chunk.columns) > 0 {
+			chunkOffset = chunk.columns[0].offset
+		}
+		for _, column := range chunk.columns {
+			chunkSize += column.size
+		}
+		writeGeminiInt64(&data, chunkOffset)
+		writeUint32(&data, chunkSize)
+		writeUint32(&data, uint32(len(chunk.columns)))
+		writeUint32(&data, 1)
+		writeGeminiInt64(&data, chunk.minTime)
+		writeGeminiInt64(&data, chunk.maxTime)
+		for _, column := range chunk.columns {
+			writeTestTSSPColumnMeta(&data, column.name, column.typ, column.offset, column.size)
+		}
 	}
 	data.Write(offsets.Bytes())
 	return data.Bytes()
