@@ -2137,7 +2137,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 		if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
 			stats.RangeRejects++
 			if recordStepLimit > 0 && len(recordSteps) < recordStepLimit {
-				values := tsspDataProbeRecordValues(blocks, columnNames, row)
+				values := tsspDataProbeEscapedValueList(blocks, columnNames, row)
 				recordSteps = append(recordSteps, DecodePathCursorStep{
 					Step:              len(recordSteps) + 1,
 					Type:              "tssp-record-row-step",
@@ -2154,7 +2154,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 		if !tsspDataBlockRowMatches(matchingRows, row) {
 			stats.FilterRejects++
 			if recordStepLimit > 0 && len(recordSteps) < recordStepLimit {
-				values := tsspDataProbeRecordValues(blocks, columnNames, row)
+				values := tsspDataProbeEscapedValueList(blocks, columnNames, row)
 				recordSteps = append(recordSteps, DecodePathCursorStep{
 					Step:              len(recordSteps) + 1,
 					Type:              "tssp-record-row-step",
@@ -2172,6 +2172,10 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 		sampleStep := recordStepLimit > 0 && len(recordSteps) < recordStepLimit
 		if sampleOutput || sampleStep {
 			values := tsspDataProbeRecordValues(blocks, columnNames, row)
+			executionValues := values
+			if sampleStep {
+				executionValues = tsspDataProbeEscapedValueList(blocks, columnNames, row)
+			}
 			outputOrdinal := outputOrdinalBase + stats.Outputs
 			if sampleOutput {
 				samples = append(samples, DecodePathCursorOutput{
@@ -2190,7 +2194,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 					Type:              "tssp-record-row-step",
 					Action:            "record_row_output",
 					Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
-					CandidateValue:    tsspRecordExecutionCandidateValue(row, inputOrdinal, outputOrdinal, timestamp, len(columnNames), values, queryRange, "output"),
+					CandidateValue:    tsspRecordExecutionCandidateValue(row, inputOrdinal, outputOrdinal, timestamp, len(columnNames), executionValues, queryRange, "output"),
 					CursorIndexBefore: row,
 					CursorIndexAfter:  row + 1,
 					CursorAdvanced:    true,

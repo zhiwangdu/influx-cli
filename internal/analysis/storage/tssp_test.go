@@ -1969,12 +1969,12 @@ func TestTSSPFilterExecutionSamplesEscapeDecisionSeparators(t *testing.T) {
 			ValueKnown: true,
 			Values:     []string{"100"},
 		},
-		"value:field": {
+		"value=field,name": {
 			Type:       "string",
 			Rows:       1,
 			RowsKnown:  true,
 			ValueKnown: true,
-			Values:     []string{"a:b;c"},
+			Values:     []string{`a:b;c d=e,f\g`},
 		},
 	}
 	queryRange, err := NewTimeRange(100, 100)
@@ -1984,8 +1984,8 @@ func TestTSSPFilterExecutionSamplesEscapeDecisionSeparators(t *testing.T) {
 
 	_, matchedRows, filterRows, stats, ok := tsspDataBlockFilterRows(
 		blocks,
-		[]FieldFilter{{Key: "value:field", Op: "=", Value: "a:b;c"}},
-		[]FieldFilter{{Key: "value:field", Op: "=", Value: `a:\b`}},
+		[]FieldFilter{{Key: "value=field,name", Op: "=", Value: `a:b;c d=e,f\g`}},
+		[]FieldFilter{{Key: "value=field,name", Op: "=", Value: `a:\b d`}},
 		nil,
 		1,
 		tsspTimeRange{Min: 100, Max: 100},
@@ -2006,7 +2006,7 @@ func TestTSSPFilterExecutionSamplesEscapeDecisionSeparators(t *testing.T) {
 	if got, want := len(stats.FilterExecutionSamples), 1; got != want {
 		t.Fatalf("filter execution samples = %d, want %d", got, want)
 	}
-	want := `row=0 time=100 required=1/1 any=0/1 none=0/0 skips=0/0/0 values=value:field=a:b;c decisions=required:value\:field:=:a\:b\;c:match;any:value\:field:=:a\:\\b:miss result=reject_any`
+	want := `row=0 time=100 required=1/1 any=0/1 none=0/0 skips=0/0/0 values=value\=field\,name=a:b;c\sd\=e\,f\\g decisions=required:value=field,name:=:a\:b\;c\sd=e,f\\g:match;any:value=field,name:=:a\:\\b\sd:miss result=reject_any`
 	if got := stats.FilterExecutionSamples[0]; got.Step != 1 || got.Type != "tssp-filter-row-step" || got.Action != "filter_row_reject_any" || got.CandidateValue != want || got.CursorIndexBefore != 0 || got.CursorIndexAfter != 1 || !got.CursorAdvanced {
 		t.Fatalf("filter execution sample = %+v, want value=%q indexes=0->1 advanced", got, want)
 	}
@@ -2301,6 +2301,69 @@ func TestTSSPRecordExecutionCandidateValueIncludesOptionalQueryRange(t *testing.
 	}
 	if got, want := tsspRecordExecutionCandidateValue(2, 13, -1, 175, 2, "status=false,value=2", queryRange, "filter_reject"), "row=2 local_input=13 local_output=none time=175 range=100:200 columns=2 values=status=false,value=2 result=filter_reject"; got != want {
 		t.Fatalf("record execution reject candidate = %q, want %q", got, want)
+	}
+}
+
+func TestTSSPRecordExecutionSampleValuesEscapeListSeparators(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			Rows:       3,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"50", "100", "150"},
+		},
+		"host=name": {
+			Type:       "string",
+			Rows:       3,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"edge,old", "edge,blocked", "edge,one"},
+		},
+		"message": {
+			Type:       "string",
+			Rows:       3,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{`disk \ early`, `disk \ filtered`, `disk \ full`},
+		},
+	}
+	queryRange, err := NewTimeRange(100, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outputs, steps, stats := appendTSSPDataProbeRecordSamples(nil, "sid", 7, tsspTimeRange{Min: 50, Max: 150}, blocks, []bool{true, false, true}, queryRange, 1, 3, 0, 0)
+	if got, want := stats.Outputs, 1; got != want {
+		t.Fatalf("record outputs = %d, want %d", got, want)
+	}
+	if got, want := stats.RangeRejects, 1; got != want {
+		t.Fatalf("record range rejects = %d, want %d", got, want)
+	}
+	if got, want := stats.FilterRejects, 1; got != want {
+		t.Fatalf("record filter rejects = %d, want %d", got, want)
+	}
+	if got, want := len(outputs), 1; got != want {
+		t.Fatalf("record output samples = %d, want %d", got, want)
+	}
+	if got, want := outputs[0].OptimizedValue, `host=name=edge,one,message=disk \ full`; got != want {
+		t.Fatalf("record output value = %q, want raw value %q", got, want)
+	}
+	if got, want := len(steps), 3; got != want {
+		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		action string
+		value  string
+	}{
+		{"record_row_range_reject", `row=0 local_input=0 local_output=none time=50 range=100:150 columns=2 values=host\=name=edge\,old,message=disk\s\\\searly result=range_reject`},
+		{"record_row_filter_reject", `row=1 local_input=1 local_output=none time=100 range=100:150 columns=2 values=host\=name=edge\,blocked,message=disk\s\\\sfiltered result=filter_reject`},
+		{"record_row_output", `row=2 local_input=2 local_output=0 time=150 range=100:150 columns=2 values=host\=name=edge\,one,message=disk\s\\\sfull result=output`},
+	} {
+		got := steps[i]
+		if got.Step != i+1 || got.Type != "tssp-record-row-step" || got.Action != want.action || got.CandidateValue != want.value || got.CursorIndexBefore != i || got.CursorIndexAfter != i+1 || !got.CursorAdvanced {
+			t.Fatalf("record execution sample[%d] = %+v, want action=%q value=%q indexes=%d->%d advanced", i, got, want.action, want.value, i, i+1)
+		}
 	}
 }
 

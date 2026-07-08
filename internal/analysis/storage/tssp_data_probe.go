@@ -555,7 +555,15 @@ func tsspDataBlockFilterDecisionList(decisions []string) string {
 }
 
 func tsspDataBlockFilterDecisionField(value string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `:`, `\:`, `;`, `\;`)
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+		" ", `\s`,
+		`:`, `\:`,
+		`;`, `\;`,
+	)
 	return replacer.Replace(value)
 }
 
@@ -742,11 +750,28 @@ func tsspDataBlockFilterSampleValues(blocks map[string]tsspDetachedDataBlockInfo
 	if len(columns) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, len(columns))
-	for _, column := range columns {
-		parts = append(parts, column+"="+tsspDataProbeRecordValue(blocks[column], row))
+	return tsspDataProbeEscapedValueList(blocks, columns, row)
+}
+
+func tsspDataProbeEscapedValueList(blocks map[string]tsspDetachedDataBlockInfo, columnNames []string, row int) string {
+	parts := make([]string, 0, len(columnNames))
+	for _, columnName := range columnNames {
+		parts = append(parts, tsspDataProbeValueListField(columnName)+"="+tsspDataProbeValueListField(tsspDataProbeRecordValue(blocks[columnName], row)))
 	}
 	return strings.Join(parts, ",")
+}
+
+func tsspDataProbeValueListField(value string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+		" ", `\s`,
+		`=`, `\=`,
+		`,`, `\,`,
+	)
+	return replacer.Replace(value)
 }
 
 func addTSSPFilterOperatorCounts(dst, src map[string]int) {
