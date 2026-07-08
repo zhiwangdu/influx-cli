@@ -431,7 +431,7 @@ func (s *tsspDataBlockFilterRowStats) skip(clause string, count int) {
 	}
 }
 
-func (s tsspDataBlockFilterRowStats) candidateValue(row int, timestamp int64, timestampKnown bool, values, result string) string {
+func (s tsspDataBlockFilterRowStats) candidateValue(row int, timestamp int64, timestampKnown bool, values, decision, result string) string {
 	parts := []string{fmt.Sprintf("row=%d", row)}
 	if timestampKnown {
 		parts = append(parts, fmt.Sprintf("time=%d", timestamp))
@@ -444,6 +444,9 @@ func (s tsspDataBlockFilterRowStats) candidateValue(row int, timestamp int64, ti
 	)
 	if values != "" {
 		parts = append(parts, "values="+values)
+	}
+	if decision != "" {
+		parts = append(parts, "decision="+decision)
 	}
 	parts = append(parts, "result="+result)
 	return strings.Join(parts, " ")
@@ -501,7 +504,7 @@ func (s *tsspDataBlockFilterStats) skip(clause string, count int) {
 	}
 }
 
-func (s *tsspDataBlockFilterStats) appendExecutionSample(row int, timestamp int64, timestampKnown bool, key string, rowStats tsspDataBlockFilterRowStats, values, result string, sampleLimit int) {
+func (s *tsspDataBlockFilterStats) appendExecutionSample(row int, timestamp int64, timestampKnown bool, key string, rowStats tsspDataBlockFilterRowStats, values, decision, result string, sampleLimit int) {
 	if sampleLimit <= 0 || len(s.FilterExecutionSamples) >= sampleLimit {
 		return
 	}
@@ -510,11 +513,19 @@ func (s *tsspDataBlockFilterStats) appendExecutionSample(row int, timestamp int6
 		Type:              "tssp-filter-row-step",
 		Action:            "filter_row_" + result,
 		Key:               key,
-		CandidateValue:    rowStats.candidateValue(row, timestamp, timestampKnown, values, result),
+		CandidateValue:    rowStats.candidateValue(row, timestamp, timestampKnown, values, decision, result),
 		CursorIndexBefore: row,
 		CursorIndexAfter:  row + 1,
 		CursorAdvanced:    true,
 	})
+}
+
+func tsspDataBlockFilterDecision(filter FieldFilter, clause string, matched bool) string {
+	result := "miss"
+	if matched {
+		result = "match"
+	}
+	return fmt.Sprintf("%s:%s:%s:%s:%s", clause, filter.Key, fieldFilterOperator(filter), strings.TrimSpace(filter.Value), result)
 }
 
 func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, anyFilters []FieldFilter, noneFilters []FieldFilter, rows int, timeRange tsspTimeRange, queryRange TimeRange, sampleKey string, rangeSampleLimit int, filterSampleLimit int) ([]bool, int, int, tsspDataBlockFilterStats, bool) {
@@ -567,9 +578,11 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		}
 		match := true
 		result := "match"
+		decision := ""
 		var rowStats tsspDataBlockFilterRowStats
 		for i, filterBlock := range filterBlocks {
 			predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+			decision = tsspDataBlockFilterDecision(filterBlock.filter, "required", predicateMatch)
 			stats.observe(filterBlock.filter, "required", predicateMatch)
 			rowStats.observe("required", predicateMatch)
 			if !predicateMatch {
@@ -592,6 +605,7 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 			result = "reject_any"
 			for i, filterBlock := range anyFilterBlocks {
 				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+				decision = tsspDataBlockFilterDecision(filterBlock.filter, "any", predicateMatch)
 				stats.observe(filterBlock.filter, "any", predicateMatch)
 				rowStats.observe("any", predicateMatch)
 				if predicateMatch {
@@ -612,6 +626,7 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		if match && len(noneFilterBlocks) > 0 {
 			for i, filterBlock := range noneFilterBlocks {
 				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+				decision = tsspDataBlockFilterDecision(filterBlock.filter, "none", predicateMatch)
 				stats.observe(filterBlock.filter, "none", predicateMatch)
 				rowStats.observe("none", predicateMatch)
 				if predicateMatch {
@@ -632,7 +647,7 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		if sampleTimesKnown {
 			timestamp = sampleTimes[row]
 		}
-		stats.appendExecutionSample(row, timestamp, sampleTimesKnown, fmt.Sprintf("%s/row:%d", sampleKey, row), rowStats, tsspDataBlockFilterSampleValues(blocks, sampleColumns, row), result, filterSampleLimit)
+		stats.appendExecutionSample(row, timestamp, sampleTimesKnown, fmt.Sprintf("%s/row:%d", sampleKey, row), rowStats, tsspDataBlockFilterSampleValues(blocks, sampleColumns, row), decision, result, filterSampleLimit)
 	}
 	return matchingRows, matched, rangeMatched, stats, true
 }
