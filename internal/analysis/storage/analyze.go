@@ -119,11 +119,15 @@ func SeriesIDFilterRequiresQueryRange(paths []string, format Format) bool {
 			continue
 		}
 		checked = true
-		if !isSeriesFilePath(filepath.Clean(path)) {
+		if !isSeriesFileInputPath(filepath.Clean(path)) {
 			return true
 		}
 	}
 	return !checked
+}
+
+func isSeriesFileInputPath(path string) bool {
+	return isSeriesFilePath(path) || isSeriesPartitionPath(path)
 }
 
 func normalizeQueryKeys(values []string) []string {

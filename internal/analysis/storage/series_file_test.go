@@ -179,6 +179,39 @@ func TestAnalyzeSeriesFileAutoSeriesIDFilterWithoutRange(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSeriesFileAutoPartitionSeriesIDFilterWithoutRange(t *testing.T) {
+	seriesDir := writeTestSeriesFile(t)
+	partitionDir := filepath.Join(seriesDir, "00")
+
+	report, err := Analyze(context.Background(), []string{partitionDir}, Options{
+		Format:           FormatAuto,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+		QuerySeriesIDs:   []uint64{42, 2, 9, 2},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if got, want := len(report.Files), 1; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	file := report.Files[0]
+	if got, want := file.Format, FormatSeriesFile; got != want {
+		t.Fatalf("format = %q, want %q", got, want)
+	}
+	for key, want := range map[string]string{
+		"query_series_id_filter_applied": "true",
+		"query_series_ids":               "2,9,42",
+		"query_matched_series_ids":       "",
+		"query_tombstone_series_ids":     "9",
+		"query_missing_series_ids":       "2,42",
+	} {
+		if got := file.Extra[key]; got != want {
+			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestSeriesIDFilterRequiresQueryRange(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -189,6 +222,7 @@ func TestSeriesIDFilterRequiresQueryRange(t *testing.T) {
 		{name: "explicit series file", paths: []string{"missing"}, format: FormatSeriesFile, want: false},
 		{name: "explicit tssp", paths: []string{"_series"}, format: FormatTSSP, want: true},
 		{name: "auto series dir", paths: []string{filepath.Join("shard", "_series")}, format: FormatAuto, want: false},
+		{name: "auto series partition", paths: []string{filepath.Join("shard", "_series", "00")}, format: FormatAuto, want: false},
 		{name: "auto series segment", paths: []string{filepath.Join("shard", "_series", "00", "0000")}, format: FormatAuto, want: false},
 		{name: "auto mixed", paths: []string{filepath.Join("shard", "_series"), "00000001-0001-00000000.tssp"}, format: FormatAuto, want: true},
 		{name: "auto unknown", paths: []string{"missing.tssp"}, format: FormatAuto, want: true},

@@ -765,6 +765,25 @@ func TestStorageAnalyzeAutoSeriesFileSeriesIDDoesNotRequireRange(t *testing.T) {
 	}
 }
 
+func TestStorageAnalyzeAutoSeriesPartitionSeriesIDDoesNotRequireRange(t *testing.T) {
+	partitionDir := filepath.Join(t.TempDir(), "_series", "00")
+	if err := os.MkdirAll(partitionDir, 0o700); err != nil {
+		t.Fatalf("mkdir series partition: %v", err)
+	}
+
+	cmd := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--format", "json", "storage", "analyze", "--series-id", "9", partitionDir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := stderr.String(); strings.Contains(got, "--series-id requires --from and --to") {
+		t.Fatalf("stderr = %q, want no range requirement", got)
+	}
+}
+
 func TestStorageAnalyzeMetaIndexIDRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--meta-index-id", "9", "missing.tssp"})
