@@ -236,21 +236,21 @@ func normalizeFieldFilterOperator(op string) string {
 		return ""
 	case "<>":
 		return "!="
-	case "not between", "not-between":
+	case "!between", "not between", "not-between":
 		return "not-between"
-	case "not in", "not-in":
+	case "!in", "not in", "not-in":
 		return "not-in"
-	case "not contains", "not-contains":
+	case "!contains", "not contains", "not-contains":
 		return "not-contains"
-	case "not like", "not-like":
+	case "!like", "not like", "not-like":
 		return "not-like"
 	case "starts with", "starts-with":
 		return "starts-with"
-	case "not starts with", "not-starts-with":
+	case "!starts-with", "not starts with", "not-starts-with":
 		return "not-starts-with"
 	case "ends with", "ends-with":
 		return "ends-with"
-	case "not ends with", "not-ends-with":
+	case "!ends-with", "not ends with", "not-ends-with":
 		return "not-ends-with"
 	case "is not", "is-not":
 		return "!="

@@ -5251,21 +5251,33 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 		{Key: "value", Op: "=", Value: "99"},
 		{Key: "status", Op: "<>", Value: "true"},
 		{Key: "status", Op: "!=", Value: "true"},
+		{Key: "device", Op: "!in", Value: "(cpu,mem)"},
+		{Key: "rack", Op: "not in", Value: "(r1,r2)"},
+		{Key: "range", Op: "!between", Value: "(1,3)"},
+		{Key: "range", Op: "not between", Value: "(1,3)"},
+		{Key: "message", Op: "!contains", Value: "debug"},
 		{Key: "message", Op: "not contains", Value: "debug"},
 		{Key: "message", Op: "not-contains", Value: "debug"},
+		{Key: "pattern", Op: "!like", Value: "tmp%"},
 		{Key: "pattern", Op: "not like", Value: "tmp%"},
 		{Key: "pattern", Op: "not-like", Value: "tmp%"},
+		{Key: "prefix", Op: "!starts-with", Value: "edge"},
 		{Key: "prefix", Op: "starts with", Value: "edge"},
 		{Key: "prefix", Op: "starts-with", Value: "edge"},
+		{Key: "suffix", Op: "!ends-with", Value: "tmp"},
 		{Key: "suffix", Op: "not ends with", Value: "tmp"},
 		{Key: "suffix", Op: "not-ends-with", Value: "tmp"},
 		{Key: "missing", Op: "==", Value: "null"},
 	})
 	want := []FieldFilter{
+		{Key: "device", Op: "not-in", Value: "(cpu,mem)"},
 		{Key: "message", Op: "not-contains", Value: "debug"},
 		{Key: "missing", Value: "null"},
 		{Key: "pattern", Op: "not-like", Value: "tmp%"},
+		{Key: "prefix", Op: "not-starts-with", Value: "edge"},
 		{Key: "prefix", Op: "starts-with", Value: "edge"},
+		{Key: "rack", Op: "not-in", Value: "(r1,r2)"},
+		{Key: "range", Op: "not-between", Value: "(1,3)"},
 		{Key: "status", Op: "!=", Value: "true"},
 		{Key: "suffix", Op: "not-ends-with", Value: "tmp"},
 		{Key: "value", Value: "99"},
@@ -5285,7 +5297,19 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 	if got, want := fieldFilterOperator(FieldFilter{Key: "message", Op: "not contains", Value: "debug"}), "not-contains"; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "message", Op: "!contains", Value: "debug"}), "not-contains"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "device", Op: "!in", Value: "(cpu,mem)"}), "not-in"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "range", Op: "!between", Value: "(1,3)"}), "not-between"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "pattern", Op: "not like", Value: "tmp%"}), "not-like"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "pattern", Op: "!like", Value: "tmp%"}), "not-like"; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "prefix", Op: "starts with", Value: "edge"}), "starts-with"; got != want {
@@ -5294,10 +5318,16 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 	if got, want := fieldFilterOperator(FieldFilter{Key: "prefix", Op: "not starts with", Value: "edge"}), "not-starts-with"; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "prefix", Op: "!starts-with", Value: "edge"}), "not-starts-with"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "suffix", Op: "ends with", Value: "tmp"}), "ends-with"; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "suffix", Op: "not ends with", Value: "tmp"}), "not-ends-with"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "suffix", Op: "!ends-with", Value: "tmp"}), "not-ends-with"; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 }

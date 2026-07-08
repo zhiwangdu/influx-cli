@@ -90,69 +90,67 @@ func TestParseStorageTagFiltersRejectsMalformedValues(t *testing.T) {
 }
 
 func TestParseStorageFieldFilters(t *testing.T) {
-	got, err := parseStorageFieldFilters([]string{" value = 99 ", "", "status!=true", "temperature>=1.5", "usage<10", "load<=2", "label!=a=b", "message=~^err", "message!~ok$", "status in (true,false)", "message in (\"error, transit\",\"ok)\")", "value in(1.25,2.5)", "value not in (1.25,2.5)", "region not-in(us,eu)", "value is null", "status is-not true", "region is not us", "notes in review is null", "message=error in transit", "notes in review>5"})
+	got, err := parseStorageFieldFilters([]string{
+		" value = 99 ",
+		"",
+		"status!=true",
+		"temperature>=1.5",
+		"usage<10",
+		"load<=2",
+		"label!=a=b",
+		"message=~^err",
+		"message!~ok$",
+		"status in (true,false)",
+		"message in (\"error, transit\",\"ok)\")",
+		"value in(1.25,2.5)",
+		"value not in (1.25,2.5)",
+		"region not-in(us,eu)",
+		"device !in (cpu,mem)",
+		"rack !in(us-east,us-west)",
+		"value is null",
+		"status is-not true",
+		"region is not us",
+		"notes in review is null",
+		"message=error in transit",
+		"notes in review>5",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 19 {
-		t.Fatalf("field filters = %d, want 19", len(got))
+	want := []struct {
+		key   string
+		op    string
+		value string
+	}{
+		{"value", "", "99"},
+		{"status", "!=", "true"},
+		{"temperature", ">=", "1.5"},
+		{"usage", "<", "10"},
+		{"load", "<=", "2"},
+		{"label", "!=", "a=b"},
+		{"message", "=~", "^err"},
+		{"message", "!~", "ok$"},
+		{"status", "in", "(true,false)"},
+		{"message", "in", "(\"error, transit\",\"ok)\")"},
+		{"value", "in", "(1.25,2.5)"},
+		{"value", "not-in", "(1.25,2.5)"},
+		{"region", "not-in", "(us,eu)"},
+		{"device", "not-in", "(cpu,mem)"},
+		{"rack", "not-in", "(us-east,us-west)"},
+		{"value", "", "null"},
+		{"status", "!=", "true"},
+		{"region", "!=", "us"},
+		{"notes in review", "", "null"},
+		{"message", "", "error in transit"},
+		{"notes in review", ">", "5"},
 	}
-	if got[0].Key != "value" || got[0].Op != "" || got[0].Value != "99" {
-		t.Fatalf("first field filter = %+v, want value=99", got[0])
+	if len(got) != len(want) {
+		t.Fatalf("field filters = %d, want %d", len(got), len(want))
 	}
-	if got[1].Key != "status" || got[1].Op != "!=" || got[1].Value != "true" {
-		t.Fatalf("second field filter = %+v, want status!=true", got[1])
-	}
-	if got[2].Key != "temperature" || got[2].Op != ">=" || got[2].Value != "1.5" {
-		t.Fatalf("third field filter = %+v, want temperature>=1.5", got[2])
-	}
-	if got[3].Key != "usage" || got[3].Op != "<" || got[3].Value != "10" {
-		t.Fatalf("fourth field filter = %+v, want usage<10", got[3])
-	}
-	if got[4].Key != "load" || got[4].Op != "<=" || got[4].Value != "2" {
-		t.Fatalf("fifth field filter = %+v, want load<=2", got[4])
-	}
-	if got[5].Key != "label" || got[5].Op != "!=" || got[5].Value != "a=b" {
-		t.Fatalf("sixth field filter = %+v, want label!=a=b", got[5])
-	}
-	if got[6].Key != "message" || got[6].Op != "=~" || got[6].Value != "^err" {
-		t.Fatalf("seventh field filter = %+v, want message=~^err", got[6])
-	}
-	if got[7].Key != "message" || got[7].Op != "!~" || got[7].Value != "ok$" {
-		t.Fatalf("eighth field filter = %+v, want message!~ok$", got[7])
-	}
-	if got[8].Key != "status" || got[8].Op != "in" || got[8].Value != "(true,false)" {
-		t.Fatalf("ninth field filter = %+v, want status in (true,false)", got[8])
-	}
-	if got[9].Key != "message" || got[9].Op != "in" || got[9].Value != "(\"error, transit\",\"ok)\")" {
-		t.Fatalf("tenth field filter = %+v, want quoted message set", got[9])
-	}
-	if got[10].Key != "value" || got[10].Op != "in" || got[10].Value != "(1.25,2.5)" {
-		t.Fatalf("eleventh field filter = %+v, want value in(1.25,2.5)", got[10])
-	}
-	if got[11].Key != "value" || got[11].Op != "not-in" || got[11].Value != "(1.25,2.5)" {
-		t.Fatalf("twelfth field filter = %+v, want value not-in (1.25,2.5)", got[11])
-	}
-	if got[12].Key != "region" || got[12].Op != "not-in" || got[12].Value != "(us,eu)" {
-		t.Fatalf("thirteenth field filter = %+v, want region not-in(us,eu)", got[12])
-	}
-	if got[13].Key != "value" || got[13].Op != "" || got[13].Value != "null" {
-		t.Fatalf("fourteenth field filter = %+v, want value is null", got[13])
-	}
-	if got[14].Key != "status" || got[14].Op != "!=" || got[14].Value != "true" {
-		t.Fatalf("fifteenth field filter = %+v, want status is-not true", got[14])
-	}
-	if got[15].Key != "region" || got[15].Op != "!=" || got[15].Value != "us" {
-		t.Fatalf("sixteenth field filter = %+v, want region is not us", got[15])
-	}
-	if got[16].Key != "notes in review" || got[16].Op != "" || got[16].Value != "null" {
-		t.Fatalf("seventeenth field filter = %+v, want notes in review is null", got[16])
-	}
-	if got[17].Key != "message" || got[17].Op != "" || got[17].Value != "error in transit" {
-		t.Fatalf("eighteenth field filter = %+v, want message=error in transit", got[17])
-	}
-	if got[18].Key != "notes in review" || got[18].Op != ">" || got[18].Value != "5" {
-		t.Fatalf("nineteenth field filter = %+v, want notes in review>5", got[18])
+	for i := range want {
+		if got[i].Key != want[i].key || got[i].Op != want[i].op || got[i].Value != want[i].value {
+			t.Fatalf("field filter %d = %+v, want key=%q op=%q value=%q", i, got[i], want[i].key, want[i].op, want[i].value)
+		}
 	}
 }
 
@@ -222,11 +220,13 @@ func TestParseStorageFieldFiltersParsesBetweenOperators(t *testing.T) {
 		"plain between(1,3)",
 		"value not-between(1,3)",
 		"region not between (a,z)",
+		"zone !between (a,z)",
 		"name between (\"a=b\",\"z\")",
 		"status in (\"a<>b\",\"c\")",
 		"name is between (1,3)",
 		"raw between 1,3",
 		"raw not between 1,3",
+		"disk !between 1,3",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -240,11 +240,13 @@ func TestParseStorageFieldFiltersParsesBetweenOperators(t *testing.T) {
 		{"plain", "between", "(1,3)"},
 		{"value", "not-between", "(1,3)"},
 		{"region", "not-between", "(a,z)"},
+		{"zone", "not-between", "(a,z)"},
 		{"name", "between", "(\"a=b\",\"z\")"},
 		{"status", "in", "(\"a<>b\",\"c\")"},
 		{"name", "", "between (1,3)"},
 		{"raw", "between", "1,3"},
 		{"raw", "not-between", "1,3"},
+		{"disk", "not-between", "1,3"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("field filters = %d, want %d", len(got), len(want))
@@ -266,14 +268,17 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	if _, err := parseStorageFieldFilters([]string{"value>"}); err == nil || !strings.Contains(err.Error(), "value cannot be empty") {
 		t.Fatalf("error = %v, want empty comparison value guidance", err)
 	}
-	if _, err := parseStorageFieldFilters([]string{"value !in (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
-		t.Fatalf("error = %v, want unsupported !in guidance", err)
-	}
 	if _, err := parseStorageFieldFilters([]string{"not in (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing key guidance", err)
 	}
+	if _, err := parseStorageFieldFilters([]string{"!in (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing bang-in key guidance", err)
+	}
 	if _, err := parseStorageFieldFilters([]string{"not between (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing between key guidance", err)
+	}
+	if _, err := parseStorageFieldFilters([]string{"!between (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing bang-between key guidance", err)
 	}
 	if _, err := parseStorageFieldFilters([]string{"not contains value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing contains key guidance", err)
@@ -302,17 +307,21 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 		"message like bl%",
 		"message not like r_d",
 		"message not-like tmp%",
+		"message !like _tmp%",
 		"message not contains ok",
+		"message !contains retry",
 		"notify starts with edge",
 		"region not-contains us",
 		"host starts-with edge",
 		"host starts with edge",
 		"path not-starts-with tmp",
 		"path not starts with tmp",
+		"path !starts-with var",
 		"region ends-with east",
 		"region ends with west",
 		"device not-ends-with old",
 		"device not ends with old",
+		"device !ends-with stale",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -327,17 +336,21 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 		{"message", "like", "bl%"},
 		{"message", "not-like", "r_d"},
 		{"message", "not-like", "tmp%"},
+		{"message", "not-like", "_tmp%"},
 		{"message", "not-contains", "ok"},
+		{"message", "not-contains", "retry"},
 		{"notify", "starts-with", "edge"},
 		{"region", "not-contains", "us"},
 		{"host", "starts-with", "edge"},
 		{"host", "starts-with", "edge"},
 		{"path", "not-starts-with", "tmp"},
 		{"path", "not-starts-with", "tmp"},
+		{"path", "not-starts-with", "var"},
 		{"region", "ends-with", "east"},
 		{"region", "ends-with", "west"},
 		{"device", "not-ends-with", "old"},
 		{"device", "not-ends-with", "old"},
+		{"device", "not-ends-with", "stale"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("field filters = %d, want %d", len(got), len(want))

@@ -472,7 +472,7 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), key not-between (lower,upper), key contains value, key not-contains value, key like pattern, key not-like pattern, key starts-with value, key not-starts-with value, key ends-with value, or key not-ends-with value; range parentheses are optional", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key !in (value1,value2), key between (lower,upper), key not-between (lower,upper), key !between (lower,upper), key contains value, key not-contains value, key !contains value, key like pattern, key not-like pattern, key !like pattern, key starts-with value, key not-starts-with value, key !starts-with value, key ends-with value, key not-ends-with value, or key !ends-with value; range parentheses are optional", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -526,16 +526,22 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 	}{
 		{text: "not-between", op: "not-between"},
 		{text: "not between", op: "not-between"},
+		{text: "!between", op: "not-between"},
 		{text: "not-starts-with", op: "not-starts-with"},
 		{text: "not starts with", op: "not-starts-with"},
+		{text: "!starts-with", op: "not-starts-with"},
 		{text: "not-ends-with", op: "not-ends-with"},
 		{text: "not ends with", op: "not-ends-with"},
+		{text: "!ends-with", op: "not-ends-with"},
 		{text: "not-contains", op: "not-contains"},
 		{text: "not contains", op: "not-contains"},
+		{text: "!contains", op: "not-contains"},
 		{text: "not-like", op: "not-like"},
 		{text: "not like", op: "not-like"},
+		{text: "!like", op: "not-like"},
 		{text: "not-in", op: "not-in"},
 		{text: "not in", op: "not-in"},
+		{text: "!in", op: "not-in"},
 		{text: "is-not", op: "!="},
 		{text: "is not", op: "!="},
 		{text: "is", op: "="},
