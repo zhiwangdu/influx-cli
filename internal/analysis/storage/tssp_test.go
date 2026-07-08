@@ -1604,7 +1604,7 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 			Type:              "tssp-filter-row-step",
 			Action:            "filter_row_reject_required",
 			Key:               "sid:7/row:0",
-			CandidateValue:    fmt.Sprintf("row=0 time=%d required=0/1 any=0/0 none=0/0 skips=0/1/0 values=status=true,value=1.25 decision=required:value:>:2.0:miss result=reject_required", times[0]),
+			CandidateValue:    fmt.Sprintf("row=0 time=%d required=0/1 any=0/0 none=0/0 skips=0/1/0 values=status=true,value=1.25 decisions=required:value:>:2.0:miss result=reject_required", times[0]),
 			CursorIndexBefore: 0,
 			CursorIndexAfter:  1,
 			CursorAdvanced:    true,
@@ -1614,7 +1614,7 @@ func TestAnalyzeTSSPAnyFieldFilterCombinesWithRequiredFilters(t *testing.T) {
 			Type:              "tssp-filter-row-step",
 			Action:            "filter_row_reject_any",
 			Key:               "sid:7/row:1",
-			CandidateValue:    fmt.Sprintf("row=1 time=%d required=1/1 any=0/1 none=0/0 skips=0/0/0 values=status=false,value=2.5 decision=any:status:=:true:miss result=reject_any", times[1]),
+			CandidateValue:    fmt.Sprintf("row=1 time=%d required=1/1 any=0/1 none=0/0 skips=0/0/0 values=status=false,value=2.5 decisions=required:value:>:2.0:match;any:status:=:true:miss result=reject_any", times[1]),
 			CursorIndexBefore: 1,
 			CursorIndexAfter:  2,
 			CursorAdvanced:    true,
@@ -1795,7 +1795,7 @@ func TestAnalyzeTSSPNoneFieldFilterRejectsMatchingRows(t *testing.T) {
 			Type:              "tssp-filter-row-step",
 			Action:            "filter_row_match",
 			Key:               "sid:7/row:0",
-			CandidateValue:    fmt.Sprintf("row=0 time=%d required=0/0 any=0/0 none=0/1 skips=0/0/0 values=status=true decision=none:status:=:false:miss result=match", times[0]),
+			CandidateValue:    fmt.Sprintf("row=0 time=%d required=0/0 any=0/0 none=0/1 skips=0/0/0 values=status=true decisions=none:status:=:false:miss result=match", times[0]),
 			CursorIndexBefore: 0,
 			CursorIndexAfter:  1,
 			CursorAdvanced:    true,
@@ -1805,7 +1805,7 @@ func TestAnalyzeTSSPNoneFieldFilterRejectsMatchingRows(t *testing.T) {
 			Type:              "tssp-filter-row-step",
 			Action:            "filter_row_reject_none",
 			Key:               "sid:7/row:1",
-			CandidateValue:    fmt.Sprintf("row=1 time=%d required=0/0 any=0/0 none=1/1 skips=0/0/0 values=status=false decision=none:status:=:false:match result=reject_none", times[1]),
+			CandidateValue:    fmt.Sprintf("row=1 time=%d required=0/0 any=0/0 none=1/1 skips=0/0/0 values=status=false decisions=none:status:=:false:match result=reject_none", times[1]),
 			CursorIndexBefore: 1,
 			CursorIndexAfter:  2,
 			CursorAdvanced:    true,
@@ -1902,10 +1902,10 @@ func TestTSSPFilterExecutionSamplesLimitAndRebase(t *testing.T) {
 		indexBefore int
 		indexAfter  int
 	}{
-		{"sid:7/row:0", "row=0 time=100 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=1 decision=required:value:>:0:match result=match", 0, 1},
-		{"sid:7/row:1", "row=1 time=200 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=2 decision=required:value:>:0:match result=match", 1, 2},
-		{"sid:8/row:0", "row=0 time=100 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=1 decision=required:value:>:0:match result=match", 2, 3},
-		{"sid:8/row:1", "row=1 time=200 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=2 decision=required:value:>:0:match result=match", 3, 4},
+		{"sid:7/row:0", "row=0 time=100 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=1 decisions=required:value:>:0:match result=match", 0, 1},
+		{"sid:7/row:1", "row=1 time=200 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=2 decisions=required:value:>:0:match result=match", 1, 2},
+		{"sid:8/row:0", "row=0 time=100 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=1 decisions=required:value:>:0:match result=match", 2, 3},
+		{"sid:8/row:1", "row=1 time=200 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=2 decisions=required:value:>:0:match result=match", 3, 4},
 	} {
 		got := merged[i]
 		if got.Step != i+1 || got.Type != "tssp-filter-row-step" || got.Action != "filter_row_match" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
@@ -1950,13 +1950,65 @@ func TestTSSPFilterExecutionSamplesIncludeSetPredicateDecision(t *testing.T) {
 		action string
 		value  string
 	}{
-		{"filter_row_match", "row=0 time=100 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=1 decision=required:value:in:(1,3):match result=match"},
-		{"filter_row_reject_required", "row=1 time=200 required=0/1 any=0/0 none=0/0 skips=0/0/0 values=value=2 decision=required:value:in:(1,3):miss result=reject_required"},
+		{"filter_row_match", "row=0 time=100 required=1/1 any=0/0 none=0/0 skips=0/0/0 values=value=1 decisions=required:value:in:(1,3):match result=match"},
+		{"filter_row_reject_required", "row=1 time=200 required=0/1 any=0/0 none=0/0 skips=0/0/0 values=value=2 decisions=required:value:in:(1,3):miss result=reject_required"},
 	} {
 		got := stats.FilterExecutionSamples[i]
 		if got.Step != i+1 || got.Type != "tssp-filter-row-step" || got.Action != want.action || got.CandidateValue != want.value || got.CursorIndexBefore != i || got.CursorIndexAfter != i+1 || !got.CursorAdvanced {
 			t.Fatalf("filter execution sample[%d] = %+v, want action=%q value=%q indexes=%d->%d advanced", i, got, want.action, want.value, i, i+1)
 		}
+	}
+}
+
+func TestTSSPFilterExecutionSamplesEscapeDecisionSeparators(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			Rows:       1,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"100"},
+		},
+		"value": {
+			Type:       "string",
+			Rows:       1,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"a;b"},
+		},
+	}
+	queryRange, err := NewTimeRange(100, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, matchedRows, filterRows, stats, ok := tsspDataBlockFilterRows(
+		blocks,
+		[]FieldFilter{{Key: "value", Op: "=", Value: "a;b"}},
+		[]FieldFilter{{Key: "value", Op: "=", Value: `a\b`}},
+		nil,
+		1,
+		tsspTimeRange{Min: 100, Max: 100},
+		queryRange,
+		"sid:7",
+		0,
+		1,
+	)
+	if !ok {
+		t.Fatal("filter rows should be available")
+	}
+	if got, want := matchedRows, 0; got != want {
+		t.Fatalf("matched rows = %d, want %d", got, want)
+	}
+	if got, want := filterRows, 1; got != want {
+		t.Fatalf("filter rows = %d, want %d", got, want)
+	}
+	if got, want := len(stats.FilterExecutionSamples), 1; got != want {
+		t.Fatalf("filter execution samples = %d, want %d", got, want)
+	}
+	want := `row=0 time=100 required=1/1 any=0/1 none=0/0 skips=0/0/0 values=value=a;b decisions=required:value:=:a\;b:match;any:value:=:a\\b:miss result=reject_any`
+	if got := stats.FilterExecutionSamples[0]; got.Step != 1 || got.Type != "tssp-filter-row-step" || got.Action != "filter_row_reject_any" || got.CandidateValue != want || got.CursorIndexBefore != 0 || got.CursorIndexAfter != 1 || !got.CursorAdvanced {
+		t.Fatalf("filter execution sample = %+v, want value=%q indexes=0->1 advanced", got, want)
 	}
 }
 
