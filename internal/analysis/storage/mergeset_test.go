@@ -1317,6 +1317,102 @@ func TestAnalyzeMergesetZSTDItemPayload(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMergesetMixedPlainAndZSTDItemPayload(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "6_2_0000000000000001")
+	if err := writeTestMergesetPartWithMarshalTypes(partPath, mergesetPartMetadata{
+		ItemsCount:  6,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "617a",
+	}, []byte{mergesetMarshalTypePlain, mergesetMarshalTypeZSTD}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:         FormatMergeset,
+		KeySampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if len(file.Notices) != 0 {
+		t.Fatalf("notices = %v, want none", file.Notices)
+	}
+	if got, want := file.Extra["plain_block_headers"], "1"; got != want {
+		t.Fatalf("plain block headers extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["zstd_block_headers"], "1"; got != want {
+		t.Fatalf("zstd block headers extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_block_count"], "2"; got != want {
+		t.Fatalf("payload block count extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_blocks_decoded"], "2"; got != want {
+		t.Fatalf("payload blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_plain_blocks_decoded"], "1"; got != want {
+		t.Fatalf("payload plain blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_zstd_blocks_decoded"], "1"; got != want {
+		t.Fatalf("payload zstd blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_items_decoded"], "6"; got != want {
+		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
+	}
+	plainReadBytes := file.Extra["item_payload_plain_read_bytes"]
+	if plainReadBytes == "" || plainReadBytes == "0" {
+		t.Fatalf("payload plain read bytes extra = %q, want non-zero", plainReadBytes)
+	}
+	if got, want := file.Extra["item_payload_plain_decoded_read_bytes"], plainReadBytes; got != want {
+		t.Fatalf("payload plain decoded read bytes extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_plain_uncompressed_bytes"], plainReadBytes; got != want {
+		t.Fatalf("payload plain uncompressed bytes extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_plain_uncompressed_minus_decoded_read_bytes"], "0"; got != want {
+		t.Fatalf("payload plain uncompressed minus decoded read bytes extra = %q, want %q", got, want)
+	}
+	zstdReadBytes := file.Extra["item_payload_zstd_read_bytes"]
+	if zstdReadBytes == "" || zstdReadBytes == "0" {
+		t.Fatalf("payload zstd read bytes extra = %q, want non-zero", zstdReadBytes)
+	}
+	if got, want := file.Extra["item_payload_zstd_decoded_read_bytes"], zstdReadBytes; got != want {
+		t.Fatalf("payload zstd decoded read bytes extra = %q, want %q", got, want)
+	}
+	zstdUncompressedBytes := file.Extra["item_payload_zstd_uncompressed_bytes"]
+	if zstdUncompressedBytes == "" || zstdUncompressedBytes == "0" {
+		t.Fatalf("payload zstd uncompressed bytes extra = %q, want non-zero", zstdUncompressedBytes)
+	}
+	zstdRead, err := strconv.ParseInt(zstdReadBytes, 10, 64)
+	if err != nil {
+		t.Fatalf("parse zstd read bytes %q: %v", zstdReadBytes, err)
+	}
+	zstdUncompressed, err := strconv.ParseInt(zstdUncompressedBytes, 10, 64)
+	if err != nil {
+		t.Fatalf("parse zstd uncompressed bytes %q: %v", zstdUncompressedBytes, err)
+	}
+	wantZSTDDelta := strconv.FormatInt(zstdUncompressed-zstdRead, 10)
+	if got := file.Extra["item_payload_zstd_uncompressed_minus_decoded_read_bytes"]; got != wantZSTDDelta {
+		t.Fatalf("payload zstd uncompressed minus decoded read bytes extra = %q, want %q", got, wantZSTDDelta)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-plain-decoded"], 1; got != want {
+		t.Fatalf("payload plain decoded block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-zstd-decoded"], 1; got != want {
+		t.Fatalf("payload zstd decoded block type count = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["item_payload_first_item_hex"], "6161"; got != want {
+		t.Fatalf("payload first item extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_last_item_hex"], "617a"; got != want {
+		t.Fatalf("payload last item extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_samples_hex"], "6161,61610000000000000001,61610000000000000002,61610000000000000003"; got != want {
+		t.Fatalf("payload samples extra = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeMergesetInvalidCommonPrefixHeaderNotice(t *testing.T) {
 	partPath := filepath.Join(t.TempDir(), "4_1_badprefix")
 	metadata := mergesetPartMetadata{
