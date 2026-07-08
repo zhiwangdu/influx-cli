@@ -813,6 +813,12 @@ func tsspDataBlockSupportsRange(block tsspDetachedDataBlockInfo) bool {
 
 func tsspDataBlockLiteralMatches(block tsspDetachedDataBlockInfo, row int, op, want string) bool {
 	got := tsspDataProbeRecordValue(block, row)
+	if op == "contains" || op == "not-contains" {
+		if !strings.HasPrefix(block.Type, "string") || got == "null" || want == "null" {
+			return false
+		}
+		return compareTSSPStringValues(got, want, op)
+	}
 	if op == "=~" || op == "!~" {
 		matches, err := regexp.MatchString(want, got)
 		if err != nil {
@@ -922,6 +928,10 @@ func compareTSSPStringValues(got, want, op string) bool {
 		return got == want
 	case "!=":
 		return got != want
+	case "contains":
+		return strings.Contains(got, want)
+	case "not-contains":
+		return !strings.Contains(got, want)
 	case ">":
 		return got > want
 	case ">=":

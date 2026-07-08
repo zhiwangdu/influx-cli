@@ -347,7 +347,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
-	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), or key not-between (lower,upper) for local record filtering, including decoded time when present; range parentheses are optional; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), key not-between (lower,upper), key contains value, or key not-contains value for local record filtering, including decoded time when present; range parentheses are optional; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.anyFields, "field-any", nil, "TSSP decoded field predicate using the same syntax as --field; at least one repeated --field-any predicate must match; combines with --field as required AND predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.noneFields, "field-none", nil, "TSSP decoded field predicate using the same syntax as --field; no repeated --field-none predicate may match; combines after required AND and OR predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
@@ -472,7 +472,7 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), or key not-between (lower,upper); range parentheses are optional", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), key not-between (lower,upper), key contains value, or key not-contains value; range parentheses are optional", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -526,12 +526,15 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 	}{
 		{text: "not-between", op: "not-between"},
 		{text: "not between", op: "not-between"},
+		{text: "not-contains", op: "not-contains"},
+		{text: "not contains", op: "not-contains"},
 		{text: "not-in", op: "not-in"},
 		{text: "not in", op: "not-in"},
 		{text: "is-not", op: "!="},
 		{text: "is not", op: "!="},
 		{text: "is", op: "="},
 		{text: "between", op: "between"},
+		{text: "contains", op: "contains"},
 		{text: "in", op: "in"},
 	} {
 		key, filterValue, ok := splitStorageFieldWordOperator(value, operator.text)

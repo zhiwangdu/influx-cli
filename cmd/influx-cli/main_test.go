@@ -277,6 +277,34 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	}
 }
 
+func TestParseStorageFieldFiltersParsesContainsOperators(t *testing.T) {
+	got, err := parseStorageFieldFilters([]string{
+		"message contains error",
+		"message not contains ok",
+		"region not-contains us",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		key   string
+		op    string
+		value string
+	}{
+		{"message", "contains", "error"},
+		{"message", "not-contains", "ok"},
+		{"region", "not-contains", "us"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("field filters = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Key != want[i].key || got[i].Op != want[i].op || got[i].Value != want[i].value {
+			t.Fatalf("field filter %d = %+v, want key=%q op=%q value=%q", i, got[i], want[i].key, want[i].op, want[i].value)
+		}
+	}
+}
+
 func TestParseStorageFieldFiltersIgnoresWordOperatorsInsideSets(t *testing.T) {
 	got, err := parseStorageFieldFilters([]string{"status in (this is true,not in service)"})
 	if err != nil {

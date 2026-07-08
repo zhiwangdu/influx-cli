@@ -2846,6 +2846,167 @@ func TestAnalyzeTSSPFieldFilterMatchesStringRegex(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterMatchesStringContains(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithStringFullData(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "contains", Value: "e"}, {Key: "value", Op: "not contains", Value: "r"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	wantFields := []FieldFilter{{Key: "value", Op: "contains", Value: "e"}, {Key: "value", Op: "not-contains", Value: "r"}}
+	if got := decode.QueryFields; !equalFieldFilters(got, wantFields) {
+		t.Fatalf("query fields = %v, want %v", got, wantFields)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["contains"], 2; got != want {
+		t.Fatalf("contains operator evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["not-contains"], 2; got != want {
+		t.Fatalf("not-contains operator evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "sid:7/value",
+		Time:           444,
+		Type:           "string-full",
+		OptimizedValue: "blue",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
+	}
+	if !containsString(decode.Recommendations, "TSSP decoded-row field predicate operators: contains:2 not-contains:2") {
+		t.Fatalf("recommendations = %v, want contains operator recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeTSSPFieldNoneFilterMatchesStringNotContains(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithStringFullData(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "contains", Value: "e"}},
+		QueryNoneFields:  []FieldFilter{{Key: "value", Op: "not-contains", Value: "r"}},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: "contains", Value: "e"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.QueryNoneFields, []FieldFilter{{Key: "value", Op: "not-contains", Value: "r"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query none fields = %v, want %v", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["contains"], 2; got != want {
+		t.Fatalf("contains operator evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["not-contains"], 2; got != want {
+		t.Fatalf("not-contains operator evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "sid:7/value",
+		Time:           333,
+		Type:           "string-full",
+		OptimizedValue: "red",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
+	}
+}
+
+func TestTSSPDataBlockLiteralContainsOnlyMatchesNonNullStringBlocks(t *testing.T) {
+	stringBlock := tsspDetachedDataBlockInfo{
+		Type:         "string-full",
+		Rows:         2,
+		RowsKnown:    true,
+		Values:       []string{"blue", ""},
+		ValuePresent: []bool{true, false},
+		ValueKnown:   true,
+	}
+	if !tsspDataBlockLiteralMatches(stringBlock, 0, "contains", "lu") {
+		t.Fatal("string contains did not match decoded string value")
+	}
+	if !tsspDataBlockLiteralMatches(stringBlock, 0, "not-contains", "zz") {
+		t.Fatal("string not-contains did not match decoded string value")
+	}
+	if tsspDataBlockLiteralMatches(stringBlock, 1, "contains", "u") {
+		t.Fatal("contains matched decoded null sentinel")
+	}
+	if tsspDataBlockLiteralMatches(stringBlock, 1, "not-contains", "zz") {
+		t.Fatal("not-contains matched decoded null sentinel")
+	}
+
+	integerBlock := tsspDetachedDataBlockInfo{
+		Type:       "integer-full",
+		Rows:       1,
+		RowsKnown:  true,
+		Values:     []string{"123"},
+		ValueKnown: true,
+	}
+	if tsspDataBlockLiteralMatches(integerBlock, 0, "contains", "2") {
+		t.Fatal("contains matched non-string block")
+	}
+	if tsspDataBlockLiteralMatches(integerBlock, 0, "not-contains", "9") {
+		t.Fatal("not-contains matched non-string block")
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterOrderedBooleanDoesNotMatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)
@@ -4883,9 +5044,12 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 		{Key: "value", Op: "=", Value: "99"},
 		{Key: "status", Op: "<>", Value: "true"},
 		{Key: "status", Op: "!=", Value: "true"},
+		{Key: "message", Op: "not contains", Value: "debug"},
+		{Key: "message", Op: "not-contains", Value: "debug"},
 		{Key: "missing", Op: "==", Value: "null"},
 	})
 	want := []FieldFilter{
+		{Key: "message", Op: "not-contains", Value: "debug"},
 		{Key: "missing", Value: "null"},
 		{Key: "status", Op: "!=", Value: "true"},
 		{Key: "value", Value: "99"},
@@ -4900,6 +5064,9 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "status", Op: "<>", Value: "true"}), "!="; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "message", Op: "not contains", Value: "debug"}), "not-contains"; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 }
