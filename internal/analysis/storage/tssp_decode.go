@@ -151,6 +151,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		addTSSPDecodePathCounts(summary.DataBlockProbeValueReasons, dataProbe.ValueUnknownReasons)
 		summary.DataBlockProbeNullValues = dataProbe.NullValues
 		summary.DataBlockProbeRecordSamples = dataProbe.RecordSamples
+		summary.DataBlockProbeRecordOutputs = dataProbe.RecordOutputs
 		summary.DataBlockProbeRangeRows = dataProbe.RangeRows
 		summary.DataBlockProbeRangeMatches = dataProbe.RangeMatches
 		summary.DataBlockProbeRangeRejects = dataProbe.RangeRejects
@@ -449,6 +450,7 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	addTSSPDecodePathCounts(dst.DataBlockProbeValueReasons, src.DataBlockProbeValueReasons)
 	dst.DataBlockProbeNullValues += src.DataBlockProbeNullValues
 	dst.DataBlockProbeRecordSamples += src.DataBlockProbeRecordSamples
+	dst.DataBlockProbeRecordOutputs += src.DataBlockProbeRecordOutputs
 	dst.DataBlockProbeRangeRows += src.DataBlockProbeRangeRows
 	dst.DataBlockProbeRangeMatches += src.DataBlockProbeRangeMatches
 	dst.DataBlockProbeRangeRejects += src.DataBlockProbeRangeRejects
@@ -1064,9 +1066,10 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			summary.OptimizedValueOutputPoints,
 		))
 	}
-	if summary.DataBlockProbeRecordSamples > 0 {
+	if summary.DataBlockProbeRecordOutputs > 0 {
 		recommendations = append(recommendations, fmt.Sprintf(
-			"materialized %d TSSP record sample(s) from decoded column blocks",
+			"materialized %d TSSP record output row(s) from decoded column blocks with %d sampled",
+			summary.DataBlockProbeRecordOutputs,
 			summary.DataBlockProbeRecordSamples,
 		))
 	}

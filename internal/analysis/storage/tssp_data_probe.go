@@ -28,6 +28,7 @@ type tsspAttachedDataProbe struct {
 	ValueUnknownReasons    map[string]int
 	NullValues             int
 	RecordSamples          int
+	RecordOutputs          int
 	RangeRows              int
 	RangeMatches           int
 	RangeRejects           int
@@ -305,15 +306,16 @@ func appendTSSPCursorStepSamples(dst *[]DecodePathCursorStep, src []DecodePathCu
 }
 
 func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk tsspChunkMeta, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int) {
-	if probe == nil || sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
+	if probe == nil {
 		return
 	}
-	var recordSamples int
+	var recordSamples, recordOutputs int
 	var recordExecutionSamples []DecodePathCursorStep
-	probe.valueSamples, recordExecutionSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit))
+	probe.valueSamples, recordExecutionSamples, recordSamples, recordOutputs = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit))
 	appendTSSPRecordExecutionSamples(&probe.recordExecutionSamples, recordExecutionSamples, sampleLimit)
 	probe.RecordSamples += recordSamples
-	if len(probe.valueSamples) >= sampleLimit {
+	probe.RecordOutputs += recordOutputs
+	if sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
 		return
 	}
 	columnNames := sortedTSSPDataBlockColumns(blocks)

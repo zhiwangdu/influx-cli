@@ -230,6 +230,7 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			report.Extra["data_block_probe_value_unknowns"] = fmt.Sprint(dataProbe.ValueUnknowns)
 			report.Extra["data_block_probe_null_values"] = fmt.Sprint(dataProbe.NullValues)
 			report.Extra["data_block_probe_record_samples"] = fmt.Sprint(dataProbe.RecordSamples)
+			report.Extra["data_block_probe_record_outputs"] = fmt.Sprint(dataProbe.RecordOutputs)
 			report.Extra["data_block_probe_range_rows"] = fmt.Sprint(dataProbe.RangeRows)
 			report.Extra["data_block_probe_range_matches"] = fmt.Sprint(dataProbe.RangeMatches)
 			report.Extra["data_block_probe_range_rejects"] = fmt.Sprint(dataProbe.RangeRejects)
