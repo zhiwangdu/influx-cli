@@ -1389,6 +1389,58 @@ func TestAnalyzeTSSPDetachedFileSetFinalRecordSamplesOmitLocalOutputOrdinal(t *t
 	}
 }
 
+func TestAnalyzeTSSPDetachedFileSetFinalOutputSamplesUseUntruncatedFileSamples(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "segment-a", tsspDetachedMetaIndexFileName)
+	path2 := filepath.Join(dir, "segment-b", tsspDetachedMetaIndexFileName)
+	times, err := writeTestTSSPDetachedMultiColumnRecordData(filepath.Dir(path1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTestTSSPDetachedMultiColumnRecordData(filepath.Dir(path2)); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		Recursive:        true,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "status", Value: "true"}},
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level detached TSSP decode path summary")
+	}
+	if got, want := len(decode.CursorOutputSamples), 2; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i := range decode.CursorOutputSamples {
+		if got := decode.CursorOutputSamples[i].File; got != path1 {
+			t.Fatalf("cursor output sample[%d] file = %q, want %q from display cap", i, got, path1)
+		}
+	}
+	if got, want := len(decode.CursorFinalOutputSamples), 2; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	wantMergeFiles := newDecodePathStringList([]string{path1, path2})
+	for i, got := range decode.CursorFinalOutputSamples {
+		if got.MergeFiles != wantMergeFiles {
+			t.Fatalf("cursor final output sample[%d] merge files = %q, want %q", i, got.MergeFiles, wantMergeFiles)
+		}
+		if !got.RequiresDedup || !got.RequiresMerge {
+			t.Fatalf("cursor final output sample[%d] = %+v, want dedup and merge despite display cap", i, got)
+		}
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexSamplesOneRowValueBlocks(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
