@@ -698,6 +698,9 @@ func isOpenGeminiPKMetaPath(path string) bool {
 }
 
 func isOpenGeminiPKIndexCandidatePath(path string) bool {
+	if isOpenGeminiBloomFilterPath(path) {
+		return false
+	}
 	lower := strings.ToLower(filepath.Base(path))
 	switch lower {
 	case opengeminiPKMetaFileName, opengeminiPKDataFileName, tsspDetachedMetaIndexFileName, fieldsIndexFileName:

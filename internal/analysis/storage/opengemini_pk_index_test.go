@@ -147,6 +147,44 @@ func TestAnalyzeOpenGeminiPKIndexDirectoryExpansionIgnoresDetachedDataFile(t *te
 	}
 }
 
+func TestAnalyzeOpenGeminiPKIndexDirectoryExpansionIgnoresBloomFilterSidecar(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "0000-0000-0001.idx"), encodeTestOpenGeminiPKIndex(
+		[]testOpenGeminiPKColumn{{Name: "time", Type: 1}},
+		1,
+		-1,
+		nil,
+		[]int{8},
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bloomfilter_content.idx"), []byte("not a primary key index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatOpenGeminiPKIndex,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if got, want := len(report.Files), 1; got != want {
+		t.Fatalf("file count = %d, want %d; files=%v notices=%v", got, want, report.Files, report.Notices)
+	}
+	file := report.Files[0]
+	if got, want := fileBase(file.Path), "0000-0000-0001.idx"; got != want {
+		t.Fatalf("file path = %q, want %q", got, want)
+	}
+	if got, want := file.Format, FormatOpenGeminiPKIndex; got != want {
+		t.Fatalf("format = %q, want %q", got, want)
+	}
+	if len(report.Notices) != 0 {
+		t.Fatalf("report notices = %v, want none from ignored bloom filter sidecar", report.Notices)
+	}
+}
+
 func TestAnalyzeOpenGeminiPKIndexReportsOffsetIssues(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "0000-0000-0002.idx")
