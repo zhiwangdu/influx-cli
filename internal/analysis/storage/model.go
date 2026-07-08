@@ -445,12 +445,15 @@ type DecodePathSummary struct {
 	CursorFinalOutputSamples          []DecodePathCursorOutput  `json:"cursor_final_output_samples,omitempty"`
 	RangeExecutionSamples             []DecodePathCursorStep    `json:"range_execution_samples,omitempty"`
 	RangeExecutionTotalActions        map[string]int            `json:"range_execution_total_action_counts,omitempty"`
+	RangeExecutionOmittedActions      map[string]int            `json:"range_execution_omitted_action_counts,omitempty"`
 	RangeExecutionActions             map[string]int            `json:"range_execution_action_counts,omitempty"`
 	RecordExecutionSamples            []DecodePathCursorStep    `json:"record_execution_samples,omitempty"`
 	RecordExecutionTotalActions       map[string]int            `json:"record_execution_total_action_counts,omitempty"`
+	RecordExecutionOmittedActions     map[string]int            `json:"record_execution_omitted_action_counts,omitempty"`
 	RecordExecutionActions            map[string]int            `json:"record_execution_action_counts,omitempty"`
 	FilterExecutionSamples            []DecodePathCursorStep    `json:"filter_execution_samples,omitempty"`
 	FilterExecutionTotalActions       map[string]int            `json:"filter_execution_total_action_counts,omitempty"`
+	FilterExecutionOmittedActions     map[string]int            `json:"filter_execution_omitted_action_counts,omitempty"`
 	FilterClauseTotalActions          map[string]int            `json:"filter_clause_total_action_counts,omitempty"`
 	FilterExecutionActions            map[string]int            `json:"filter_execution_action_counts,omitempty"`
 	CursorExecutionSamples            []DecodePathCursorStep    `json:"cursor_execution_samples,omitempty"`
@@ -1250,19 +1253,32 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 	recordTotalActionText := countMapText(summary.RecordExecutionTotalActions)
 	filterTotalActionText := countMapText(summary.FilterExecutionTotalActions)
 	filterClauseTotalActionText := countMapText(summary.FilterClauseTotalActions)
+	rangeOmittedActionText := countMapText(summary.RangeExecutionOmittedActions)
+	recordOmittedActionText := countMapText(summary.RecordExecutionOmittedActions)
+	filterOmittedActionText := countMapText(summary.FilterExecutionOmittedActions)
 	hasExecutionSamples := len(summary.Samples) > 0 || len(summary.CursorExecutionSamples) > 0 || len(summary.RangeExecutionSamples) > 0 || len(summary.RecordExecutionSamples) > 0 || len(summary.FilterExecutionSamples) > 0
 	hasExecutionActions := cursorActionText != "" || rangeActionText != "" || recordActionText != "" || filterActionText != ""
 	hasExecutionTotalActions := rangeTotalActionText != "" || recordTotalActionText != "" || filterTotalActionText != "" || filterClauseTotalActionText != ""
-	if hasExecutionSamples || hasExecutionActions || hasExecutionTotalActions {
+	hasOmittedExecutionActions := rangeOmittedActionText != "" || recordOmittedActionText != "" || filterOmittedActionText != ""
+	if hasExecutionSamples || hasExecutionActions || hasExecutionTotalActions || hasOmittedExecutionActions {
 		sampleParts := []string{}
 		if rangeTotalActionText != "" {
 			sampleParts = append(sampleParts, "range_total_actions "+rangeTotalActionText)
 		}
+		if rangeOmittedActionText != "" {
+			sampleParts = append(sampleParts, "range_omitted_actions "+rangeOmittedActionText)
+		}
 		if recordTotalActionText != "" {
 			sampleParts = append(sampleParts, "record_total_actions "+recordTotalActionText)
 		}
+		if recordOmittedActionText != "" {
+			sampleParts = append(sampleParts, "record_omitted_actions "+recordOmittedActionText)
+		}
 		if filterTotalActionText != "" {
 			sampleParts = append(sampleParts, "filter_total_actions "+filterTotalActionText)
+		}
+		if filterOmittedActionText != "" {
+			sampleParts = append(sampleParts, "filter_omitted_actions "+filterOmittedActionText)
 		}
 		if filterClauseTotalActionText != "" {
 			sampleParts = append(sampleParts, "filter_clause_total_actions "+filterClauseTotalActionText)
@@ -1358,6 +1374,9 @@ func populateDecodePathTotalExecutionActionCounts(summary *DecodePathSummary) {
 		"filter_none_miss":      summary.DataBlockProbeNoneMiss,
 		"filter_none_skip":      summary.DataBlockProbeNoneSkips,
 	})
+	summary.RangeExecutionOmittedActions = omittedCountMap(summary.RangeExecutionTotalActions, cursorStepActionCounts(summary.RangeExecutionSamples))
+	summary.RecordExecutionOmittedActions = omittedCountMap(summary.RecordExecutionTotalActions, cursorStepActionCounts(summary.RecordExecutionSamples))
+	summary.FilterExecutionOmittedActions = omittedCountMap(summary.FilterExecutionTotalActions, filterRowExecutionSampleCounts(summary.FilterExecutionSamples))
 }
 
 func positiveCountMap(counts map[string]int) map[string]int {
@@ -1371,6 +1390,39 @@ func positiveCountMap(counts map[string]int) map[string]int {
 		return nil
 	}
 	return filtered
+}
+
+func omittedCountMap(total, sampled map[string]int) map[string]int {
+	if len(total) == 0 {
+		return nil
+	}
+	omitted := make(map[string]int, len(total))
+	for key, count := range total {
+		if missing := count - sampled[key]; missing > 0 {
+			omitted[key] = missing
+		}
+	}
+	if len(omitted) == 0 {
+		return nil
+	}
+	return omitted
+}
+
+func filterRowExecutionSampleCounts(samples []DecodePathCursorStep) map[string]int {
+	counts := make(map[string]int, len(samples))
+	for _, sample := range samples {
+		if sample.Action == "filter_row_match" {
+			counts["filter_row_match"]++
+			continue
+		}
+		if strings.HasPrefix(sample.Action, "filter_row_reject") {
+			counts["filter_row_reject"]++
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 func decodePathExecutionActions(explicit map[string]int, samples []DecodePathCursorStep) map[string]int {

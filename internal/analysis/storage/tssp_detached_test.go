@@ -1120,6 +1120,15 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 				DataBlockProbeRequiredHits:        1,
 				DataBlockProbeRequiredMiss:        1,
 				DataBlockProbeAnySkips:            2,
+				RangeExecutionSamples: []DecodePathCursorStep{
+					{Action: "range_row_match"},
+				},
+				RecordExecutionSamples: []DecodePathCursorStep{
+					{Action: "record_row_output"},
+				},
+				FilterExecutionSamples: []DecodePathCursorStep{
+					{Action: "filter_row_reject_required"},
+				},
 			},
 		},
 		{
@@ -1137,7 +1146,7 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 				DataBlockProbeNoneMiss:            1,
 			},
 		},
-	}, Options{QueryRange: queryRange})
+	}, Options{QueryRange: queryRange, BlockSampleLimit: 4})
 	if summary == nil {
 		t.Fatal("detached file-set decode path is nil")
 	}
@@ -1176,6 +1185,27 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 	}
 	if got, want := summary.FilterClauseTotalActions["filter_none_miss"], 1; got != want {
 		t.Fatalf("total filter_none_miss action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RangeExecutionOmittedActions["range_row_match"], 3; got != want {
+		t.Fatalf("omitted range_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RangeExecutionOmittedActions["range_row_reject"], 2; got != want {
+		t.Fatalf("omitted range_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionOmittedActions["record_row_output"], 2; got != want {
+		t.Fatalf("omitted record_row_output action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionOmittedActions["record_row_range_reject"], 2; got != want {
+		t.Fatalf("omitted record_row_range_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionOmittedActions["record_row_filter_reject"], 1; got != want {
+		t.Fatalf("omitted record_row_filter_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterExecutionOmittedActions["filter_row_match"], 3; got != want {
+		t.Fatalf("omitted filter_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterExecutionOmittedActions["filter_row_reject"], 2; got != want {
+		t.Fatalf("omitted filter_row_reject action count = %d, want %d", got, want)
 	}
 }
 
