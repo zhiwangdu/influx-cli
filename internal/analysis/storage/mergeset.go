@@ -86,23 +86,27 @@ type mergesetIndexSummary struct {
 }
 
 type mergesetItemPayloadSummary struct {
-	Blocks             int
-	DecodedBlocks      int
-	RangeSkippedBlocks int
-	ReadFailures       int
-	DecodeFailures     int
-	ItemsDecoded       uint64
-	RangeBeforeBlocks  int
-	RangeAfterBlocks   int
-	RangeBeforeItems   uint64
-	RangeAfterItems    uint64
-	FirstItem          []byte
-	LastItem           []byte
-	Samples            [][]byte
-	TSIIndex           mergesetTSIIndexSummary
-	FieldIndex         mergesetFieldIndexSummary
-	CLVText            mergesetCLVTextIndexSummary
-	DecodePath         *DecodePathSummary
+	Blocks              int
+	DecodedBlocks       int
+	DecodedPlainBlocks  int
+	DecodedZSTDBlocks   int
+	RangeSkippedBlocks  int
+	ReadFailures        int
+	DecodeFailures      int
+	DecodePlainFailures int
+	DecodeZSTDFailures  int
+	ItemsDecoded        uint64
+	RangeBeforeBlocks   int
+	RangeAfterBlocks    int
+	RangeBeforeItems    uint64
+	RangeAfterItems     uint64
+	FirstItem           []byte
+	LastItem            []byte
+	Samples             [][]byte
+	TSIIndex            mergesetTSIIndexSummary
+	FieldIndex          mergesetFieldIndexSummary
+	CLVText             mergesetCLVTextIndexSummary
+	DecodePath          *DecodePathSummary
 }
 
 type mergesetTSIIndexSummary struct {
@@ -941,8 +945,20 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 		decoded, err := decodeMergesetBlockItems(header, itemsData, lensData, decoder, decodeSampleLimit, search.QueryKeys, options.CursorDescending)
 		if err != nil {
 			summary.DecodeFailures++
+			switch header.MarshalType {
+			case mergesetMarshalTypePlain:
+				summary.DecodePlainFailures++
+			case mergesetMarshalTypeZSTD:
+				summary.DecodeZSTDFailures++
+			}
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d first_item=%s: %v", i+1, hex.EncodeToString(header.FirstItem), err))
 			continue
+		}
+		switch header.MarshalType {
+		case mergesetMarshalTypePlain:
+			summary.DecodedPlainBlocks++
+		case mergesetMarshalTypeZSTD:
+			summary.DecodedZSTDBlocks++
 		}
 		beforeItems, afterItems := countMergesetItemsOutsideMetadataRange(decoded.Items, firstItem, lastItem)
 		if beforeItems > 0 {
@@ -1626,9 +1642,13 @@ func mergesetSearchRecommendations(summary *DecodePathSummary, options Options) 
 func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPayloadSummary, metadataFirstItem, metadataLastItem []byte, metadataItemsCount uint64, options Options) {
 	report.Extra["item_payload_block_count"] = fmt.Sprint(summary.Blocks)
 	report.Extra["item_payload_blocks_decoded"] = fmt.Sprint(summary.DecodedBlocks)
+	report.Extra["item_payload_plain_blocks_decoded"] = fmt.Sprint(summary.DecodedPlainBlocks)
+	report.Extra["item_payload_zstd_blocks_decoded"] = fmt.Sprint(summary.DecodedZSTDBlocks)
 	report.Extra["item_payload_blocks_skipped_out_of_bounds"] = fmt.Sprint(summary.RangeSkippedBlocks)
 	report.Extra["item_payload_read_failures"] = fmt.Sprint(summary.ReadFailures)
 	report.Extra["item_payload_decode_failures"] = fmt.Sprint(summary.DecodeFailures)
+	report.Extra["item_payload_plain_decode_failures"] = fmt.Sprint(summary.DecodePlainFailures)
+	report.Extra["item_payload_zstd_decode_failures"] = fmt.Sprint(summary.DecodeZSTDFailures)
 	report.Extra["item_payload_items_decoded"] = fmt.Sprint(summary.ItemsDecoded)
 	report.Extra["item_payload_blocks_before_metadata_range"] = fmt.Sprint(summary.RangeBeforeBlocks)
 	report.Extra["item_payload_blocks_after_metadata_range"] = fmt.Sprint(summary.RangeAfterBlocks)
@@ -1642,6 +1662,18 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 	}
 	if summary.DecodeFailures > 0 {
 		report.BlocksByType["mergeset-item-payload-decode-failure"] = summary.DecodeFailures
+	}
+	if summary.DecodedPlainBlocks > 0 {
+		report.BlocksByType["mergeset-item-payload-plain-decoded"] = summary.DecodedPlainBlocks
+	}
+	if summary.DecodedZSTDBlocks > 0 {
+		report.BlocksByType["mergeset-item-payload-zstd-decoded"] = summary.DecodedZSTDBlocks
+	}
+	if summary.DecodePlainFailures > 0 {
+		report.BlocksByType["mergeset-item-payload-plain-decode-failure"] = summary.DecodePlainFailures
+	}
+	if summary.DecodeZSTDFailures > 0 {
+		report.BlocksByType["mergeset-item-payload-zstd-decode-failure"] = summary.DecodeZSTDFailures
 	}
 	if summary.RangeBeforeBlocks > 0 {
 		report.BlocksByType["mergeset-item-payload-before-metadata-range"] = summary.RangeBeforeBlocks

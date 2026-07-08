@@ -149,6 +149,15 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got, want := file.Extra["item_payload_blocks_decoded"], "2"; got != want {
 		t.Fatalf("payload blocks decoded extra = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["item_payload_plain_blocks_decoded"], "2"; got != want {
+		t.Fatalf("payload plain blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_zstd_blocks_decoded"], "0"; got != want {
+		t.Fatalf("payload zstd blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-plain-decoded"], 2; got != want {
+		t.Fatalf("payload plain decoded block type count = %d, want %d", got, want)
+	}
 	if got, want := file.Extra["item_payload_items_decoded"], "41"; got != want {
 		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
 	}
@@ -1196,6 +1205,15 @@ func TestAnalyzeMergesetZSTDItemPayload(t *testing.T) {
 	if got, want := file.Extra["item_payload_items_decoded"], "4"; got != want {
 		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["item_payload_plain_blocks_decoded"], "0"; got != want {
+		t.Fatalf("payload plain blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["item_payload_zstd_blocks_decoded"], "1"; got != want {
+		t.Fatalf("payload zstd blocks decoded extra = %q, want %q", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-zstd-decoded"], 1; got != want {
+		t.Fatalf("payload zstd decoded block type count = %d, want %d", got, want)
+	}
 	if got, want := file.Extra["item_payload_first_item_hex"], "6161"; got != want {
 		t.Fatalf("payload first item extra = %q, want %q", got, want)
 	}
@@ -1260,8 +1278,14 @@ func TestAnalyzeMergesetInvalidCommonPrefixHeaderNotice(t *testing.T) {
 	if got, want := file.Extra["item_payload_decode_failures"], "1"; got != want {
 		t.Fatalf("payload decode failures = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["item_payload_zstd_decode_failures"], "1"; got != want {
+		t.Fatalf("payload zstd decode failures = %q, want %q", got, want)
+	}
 	if got, want := file.BlocksByType["mergeset-item-payload-decode-failure"], 1; got != want {
 		t.Fatalf("payload decode failure block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-zstd-decode-failure"], 1; got != want {
+		t.Fatalf("payload zstd decode failure block type count = %d, want %d", got, want)
 	}
 }
 
@@ -2243,8 +2267,14 @@ func TestAnalyzeMergesetZSTDItemPayloadBadCompressedBlockNotice(t *testing.T) {
 			if got, want := file.Extra["item_payload_decode_failures"], "1"; got != want {
 				t.Fatalf("payload decode failures extra = %q, want %q", got, want)
 			}
+			if got, want := file.Extra["item_payload_zstd_decode_failures"], "1"; got != want {
+				t.Fatalf("payload zstd decode failures extra = %q, want %q", got, want)
+			}
 			if got, want := file.BlocksByType["mergeset-item-payload-decode-failure"], 1; got != want {
 				t.Fatalf("payload decode failure block type count = %d, want %d", got, want)
+			}
+			if got, want := file.BlocksByType["mergeset-item-payload-zstd-decode-failure"], 1; got != want {
+				t.Fatalf("payload zstd decode failure block type count = %d, want %d", got, want)
 			}
 			if got, want := file.Extra["item_payload_items_decoded"], "0"; got != want {
 				t.Fatalf("payload items decoded extra = %q, want %q", got, want)
@@ -3919,8 +3949,14 @@ func TestAnalyzeMergesetBadItemPayloadNotice(t *testing.T) {
 	if got, want := file.Extra["item_payload_decode_failures"], "1"; got != want {
 		t.Fatalf("payload decode failures extra = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["item_payload_plain_decode_failures"], "1"; got != want {
+		t.Fatalf("payload plain decode failures extra = %q, want %q", got, want)
+	}
 	if got, want := file.BlocksByType["mergeset-item-payload-decode-failure"], 1; got != want {
 		t.Fatalf("payload decode failure block type count = %d, want %d", got, want)
+	}
+	if got, want := file.BlocksByType["mergeset-item-payload-plain-decode-failure"], 1; got != want {
+		t.Fatalf("payload plain decode failure block type count = %d, want %d", got, want)
 	}
 	if got, want := file.Extra["item_payload_items_decoded"], "0"; got != want {
 		t.Fatalf("payload items decoded extra = %q, want %q", got, want)
