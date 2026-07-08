@@ -278,6 +278,9 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	if _, err := parseStorageFieldFilters([]string{"not contains value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing contains key guidance", err)
 	}
+	if _, err := parseStorageFieldFilters([]string{"not like value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing like key guidance", err)
+	}
 	if _, err := parseStorageFieldFilters([]string{"not starts with value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing starts-with key guidance", err)
 	}
@@ -296,6 +299,9 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 	got, err := parseStorageFieldFilters([]string{
 		"message contains error",
 		"notice contains warning",
+		"message like bl%",
+		"message not like r_d",
+		"message not-like tmp%",
 		"message not contains ok",
 		"notify starts with edge",
 		"region not-contains us",
@@ -318,6 +324,9 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 	}{
 		{"message", "contains", "error"},
 		{"notice", "contains", "warning"},
+		{"message", "like", "bl%"},
+		{"message", "not-like", "r_d"},
+		{"message", "not-like", "tmp%"},
 		{"message", "not-contains", "ok"},
 		{"notify", "starts-with", "edge"},
 		{"region", "not-contains", "us"},

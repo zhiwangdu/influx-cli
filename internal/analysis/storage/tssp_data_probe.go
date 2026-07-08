@@ -813,7 +813,7 @@ func tsspDataBlockSupportsRange(block tsspDetachedDataBlockInfo) bool {
 
 func tsspDataBlockLiteralMatches(block tsspDetachedDataBlockInfo, row int, op, want string) bool {
 	got := tsspDataProbeRecordValue(block, row)
-	if op == "contains" || op == "not-contains" || op == "starts-with" || op == "not-starts-with" || op == "ends-with" || op == "not-ends-with" {
+	if op == "contains" || op == "not-contains" || op == "like" || op == "not-like" || op == "starts-with" || op == "not-starts-with" || op == "ends-with" || op == "not-ends-with" {
 		if !strings.HasPrefix(block.Type, "string") || got == "null" || want == "null" {
 			return false
 		}
@@ -932,6 +932,10 @@ func compareTSSPStringValues(got, want, op string) bool {
 		return strings.Contains(got, want)
 	case "not-contains":
 		return !strings.Contains(got, want)
+	case "like":
+		return tsspStringLike(got, want)
+	case "not-like":
+		return !tsspStringLike(got, want)
 	case "starts-with":
 		return strings.HasPrefix(got, want)
 	case "not-starts-with":
@@ -951,6 +955,32 @@ func compareTSSPStringValues(got, want, op string) bool {
 	default:
 		return false
 	}
+}
+
+func tsspStringLike(value, pattern string) bool {
+	valueRunes := []rune(value)
+	matches := make([]bool, len(valueRunes)+1)
+	matches[0] = true
+	for _, patternRune := range pattern {
+		next := make([]bool, len(valueRunes)+1)
+		switch patternRune {
+		case '%':
+			next[0] = matches[0]
+			for i := 1; i <= len(valueRunes); i++ {
+				next[i] = matches[i] || next[i-1]
+			}
+		case '_':
+			for i := 1; i <= len(valueRunes); i++ {
+				next[i] = matches[i-1]
+			}
+		default:
+			for i := 1; i <= len(valueRunes); i++ {
+				next[i] = matches[i-1] && valueRunes[i-1] == patternRune
+			}
+		}
+		matches = next
+	}
+	return matches[len(valueRunes)]
 }
 
 func tsspDataBlockRowMatches(matchingRows []bool, row int) bool {
