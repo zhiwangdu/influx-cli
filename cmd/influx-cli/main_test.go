@@ -364,6 +364,9 @@ func TestStorageAnalyzeColumnFlagRegistered(t *testing.T) {
 	if flag := found.Flags().Lookup("field-none"); flag == nil {
 		t.Fatal("storage analyze --field-none flag is not registered")
 	}
+	if flag := found.Flags().Lookup("report"); flag == nil {
+		t.Fatal("storage analyze --report flag is not registered")
+	}
 }
 
 func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
@@ -467,5 +470,44 @@ func TestStorageAnalyzeTableWarningsAreCountOnly(t *testing.T) {
 		if strings.Contains(warning, notWant) {
 			t.Fatalf("stderr = %q, want no raw notice detail %q", warning, notWant)
 		}
+	}
+}
+
+func TestStorageAnalyzeReportOutputsMarkdownDiagnostic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fields.idxl")
+	if err := os.WriteFile(path, []byte{1}, 0o600); err != nil {
+		t.Fatalf("write fields index log: %v", err)
+	}
+
+	cmd := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"storage", "analyze", "--report", "--storage-format", "fields-index", path})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"# Storage Analyzer Report",
+		"## Summary",
+		"| files | 1 |",
+		"| notices | 1 |",
+		"## Files",
+		"| file-1 | fields-index |",
+		"notices=1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want %q", out, want)
+		}
+	}
+	for _, notWant := range []string{path, "offset"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("stdout = %q, want no raw report detail %q", out, notWant)
+		}
+	}
+	if got := strings.TrimSpace(stderr.String()); got != "" {
+		t.Fatalf("stderr = %q, want no table warning for markdown report", got)
 	}
 }

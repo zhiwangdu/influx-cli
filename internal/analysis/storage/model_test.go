@@ -857,6 +857,132 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	}
 }
 
+func TestReportMarkdownIncludesCountOrientedDiagnostics(t *testing.T) {
+	report := Report{
+		Files: []FileReport{
+			{
+				Path:               "/private/shard/00000001-0001-00000000.tssp",
+				Format:             FormatTSSP,
+				SizeBytes:          100,
+				MinTime:            10,
+				MaxTime:            20,
+				KeyCount:           2,
+				BlockCount:         3,
+				QueryOverlapBlocks: 1,
+				Tombstones: TombstoneSummary{
+					Exists:             true,
+					SizeBytes:          32,
+					RangeCount:         2,
+					QueryOverlapRanges: 1,
+					AffectedBlocks:     1,
+				},
+				BlocksByType: map[string]int{"data": 2, "chunk-meta": 1},
+				Notices:      []string{"private offset diagnostic"},
+			},
+		},
+		Summary: Summary{
+			FileCount:                   1,
+			TotalSizeBytes:              100,
+			KeyCount:                    2,
+			BlockCount:                  3,
+			BlocksByType:                map[string]int{"data": 2, "chunk-meta": 1},
+			QueryOverlapFiles:           1,
+			QueryOverlapBlocks:          1,
+			TombstoneFiles:              1,
+			TombstoneSizeBytes:          32,
+			TombstoneRanges:             2,
+			TombstoneQueryOverlapRanges: 1,
+			TombstoneAffectedBlocks:     1,
+		},
+		DecodePath: &DecodePathSummary{
+			Mode:                  "tssp-file-set-location-cursor-ascending",
+			BaselineDecodeBlocks:  3,
+			OptimizedDecodeBlocks: 1,
+			SavedDecodeBlocks:     2,
+			Recommendations:       []string{"copyable issue diagnostic"},
+		},
+		Notices: []string{"/private/shard/00000001-0001-00000000.tssp: private offset diagnostic"},
+	}
+
+	out := report.Markdown()
+	for _, want := range []string{
+		"# Storage Analyzer Report",
+		"| files | 1 |",
+		"| query_overlap_blocks | 1 |",
+		"| tombstone_query_overlap_ranges | 1 |",
+		"| notices | 1 |",
+		"## Block Types",
+		"| chunk-meta | 1 |",
+		"## File-Set Decode Path",
+		"- mode: `tssp-file-set-location-cursor-ascending`",
+		"blocks 3->1 saved=2",
+		"copyable issue diagnostic",
+		"## Files",
+		"| file-1 | tssp | 100 |",
+		"yes (32 bytes, 2 ranges, query_ranges=1, 1 blocks)",
+		"notices=1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("markdown report = %q, want %q", out, want)
+		}
+	}
+	for _, notWant := range []string{"/private/shard", "private offset diagnostic"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("markdown report = %q, want no raw diagnostic %q", out, notWant)
+		}
+	}
+}
+
+func TestReportMarkdownHandlesEmptyAndStableFileLabels(t *testing.T) {
+	empty := Report{}.Markdown()
+	if !strings.Contains(empty, "| files | 0 |") {
+		t.Fatalf("empty markdown report = %q, want zero file summary", empty)
+	}
+	if strings.Contains(empty, "## Files") {
+		t.Fatalf("empty markdown report = %q, want no files section", empty)
+	}
+
+	report := Report{
+		Files: []FileReport{
+			{
+				Path:       "/private/a.tsm",
+				Format:     FormatTSM,
+				SizeBytes:  10,
+				KeyCount:   1,
+				BlockCount: 2,
+			},
+			{
+				Path:       "/private/b.tssp",
+				Format:     FormatTSSP,
+				SizeBytes:  20,
+				KeyCount:   3,
+				BlockCount: 4,
+			},
+		},
+		Summary: Summary{
+			FileCount:      2,
+			TotalSizeBytes: 30,
+			KeyCount:       4,
+			BlockCount:     6,
+		},
+	}
+
+	out := report.Markdown()
+	first := strings.Index(out, "| file-1 | tsm | 10 |")
+	second := strings.Index(out, "| file-2 | tssp | 20 |")
+	if first < 0 || second < 0 {
+		t.Fatalf("markdown report = %q, want file-1 and file-2 rows", out)
+	}
+	if first > second {
+		t.Fatalf("markdown report = %q, want stable input file order", out)
+	}
+	for _, notWant := range []string{"/private/a.tsm", "/private/b.tssp"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("markdown report = %q, want stable file labels instead of %q", out, notWant)
+		}
+	}
+}
+
 func TestAccumulateSummaryIncludesBlockTypes(t *testing.T) {
 	var summary Summary
 	accumulateSummary(&summary, FileReport{

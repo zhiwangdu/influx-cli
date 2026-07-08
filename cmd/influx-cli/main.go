@@ -185,6 +185,7 @@ func newConfigCommand(flags *globalFlags) *cobra.Command {
 
 type storageAnalyzeFlags struct {
 	format       string
+	report       bool
 	recursive    bool
 	from         string
 	to           string
@@ -293,6 +294,11 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				return fmt.Errorf("storage analyze: %w", err)
 			}
 
+			if analyzeFlags.report {
+				fmt.Fprint(cmd.OutOrStdout(), report.Markdown())
+				return nil
+			}
+
 			outputFormat := firstNonEmpty(flags.overrides.Render, render.FormatTable)
 			normalized, err := render.NormalizeFormat(outputFormat)
 			if err != nil {
@@ -333,6 +339,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 		},
 	}
 	analyzeCommand.Flags().StringVar(&analyzeFlags.format, "storage-format", analyzeFlags.format, "storage file format: auto, tsm, wal, tssp, tssp-metaindex, tsi, tsi-log, series-file, fields-index, mergeset, opengemini-meta, opengemini-pk-meta, opengemini-pk-index, opengemini-bloom-filter, opengemini-text-index (skipped)")
+	analyzeCommand.Flags().BoolVar(&analyzeFlags.report, "report", false, "render a count-oriented markdown storage diagnostic report for issue or PR sharing")
 	analyzeCommand.Flags().BoolVar(&analyzeFlags.recursive, "recursive", false, "walk directories recursively")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.from, "from", "", "query range start as RFC3339 or unix nanoseconds")
 	analyzeCommand.Flags().StringVar(&analyzeFlags.to, "to", "", "query range end as RFC3339 or unix nanoseconds")
