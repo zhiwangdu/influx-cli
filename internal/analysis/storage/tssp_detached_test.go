@@ -2941,6 +2941,123 @@ func TestAnalyzeTSSPDetachedFieldFilterMatchesStringContains(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedFilterExecutionReportsUnquotedScalarDecisionValues(t *testing.T) {
+	dir := t.TempDir()
+	values := []string{"ok value", "debug:trace;1"}
+	timestamps := []int64{333, 444}
+	valueSize, err := testTSSPDetachedStringFullBlockSize(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := []testTSSPChunkSpec{{
+		sid:      42,
+		minTime:  333,
+		maxTime:  444,
+		offset:   1200,
+		size:     valueSize,
+		timeSize: testTSSPDetachedIntegerFullBlockSize(timestamps),
+	}}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedStringFullData(filepath.Join(dir, tsspDetachedDataFileName), 1400, chunks[0], values, timestamps); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 8,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "equals", Value: `"ok value"`}},
+		QueryAnyFields:   []FieldFilter{{Key: "value", Op: "=~", Value: `"ok.*"`}},
+		QueryNoneFields:  []FieldFilter{{Key: "value", Op: "contains", Value: `"debug:trace;1"`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "=:2,=~:1,contains:1"; got != want {
+		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Value: `"ok value"`}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.QueryAnyFields, []FieldFilter{{Key: "value", Op: "=~", Value: `"ok.*"`}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query any fields = %v, want %v", got, want)
+	}
+	if got, want := decode.QueryNoneFields, []FieldFilter{{Key: "value", Op: "contains", Value: `"debug:trace;1"`}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query none fields = %v, want %v", got, want)
+	}
+	for op, want := range map[string]int{"=": 2, "=~": 1, "contains": 1} {
+		if got := decode.DataBlockProbeFilterOps[op]; got != want {
+			t.Fatalf("%s operator evaluations = %d, want %d", op, got, want)
+		}
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	wantFilterSteps := []DecodePathCursorStep{
+		{
+			Step:              1,
+			Type:              "tssp-filter-row-step",
+			Action:            "filter_row_match",
+			Key:               "meta-index-id:42/row:0",
+			CandidateValue:    "row=0 time=333 required=1/1 any=1/1 none=0/1 skips=0/0/0 values=value=ok\\svalue decisions=required:value:=:ok\\svalue:match;any:value:=~:ok.*:match;none:value:contains:debug\\:trace\\;1:miss result=match",
+			CursorIndexBefore: 0,
+			CursorIndexAfter:  1,
+			CursorAdvanced:    true,
+		},
+		{
+			Step:              2,
+			Type:              "tssp-filter-row-step",
+			Action:            "filter_row_reject_required",
+			Key:               "meta-index-id:42/row:1",
+			CandidateValue:    "row=1 time=444 required=0/1 any=0/0 none=0/0 skips=0/1/1 values=value=debug:trace;1 decisions=required:value:=:ok\\svalue:miss result=reject_required",
+			CursorIndexBefore: 1,
+			CursorIndexAfter:  2,
+			CursorAdvanced:    true,
+		},
+	}
+	if got, want := len(decode.FilterExecutionSamples), len(wantFilterSteps); got != want {
+		t.Fatalf("filter execution samples = %d, want %d", got, want)
+	}
+	for i, want := range wantFilterSteps {
+		if got := decode.FilterExecutionSamples[i]; got != want {
+			t.Fatalf("filter execution sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_match"], 1; got != want {
+		t.Fatalf("filter row match actions = %d, want %d", got, want)
+	}
+	if got, want := decode.FilterExecutionActions["filter_row_reject_required"], 1; got != want {
+		t.Fatalf("filter row reject required actions = %d, want %d", got, want)
+	}
+	if !containsString(decode.Recommendations, "detached TSSP filter execution samples show local decoded-row predicate decisions") {
+		t.Fatalf("recommendations = %v, want detached predicate execution sample recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPDetachedFieldFilterMatchesStringLike(t *testing.T) {
 	dir := t.TempDir()
 	values := []string{"red", "blue"}
