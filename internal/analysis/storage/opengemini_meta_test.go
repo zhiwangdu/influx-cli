@@ -168,6 +168,24 @@ func TestOpenGeminiMetaAutoDetectNames(t *testing.T) {
 	}
 }
 
+func TestAnalyzeOpenGeminiMetaRejectsDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "meta.pb")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatOpenGeminiMeta})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "opengemini-meta format requires a topology snapshot file, got directory meta.pb") {
+		t.Fatalf("notices = %v, want directory warning", report.Notices)
+	}
+}
+
 func testOpenGeminiMetaProto() []byte {
 	return testProtoMessage(
 		testProtoVarintField(1, 4),

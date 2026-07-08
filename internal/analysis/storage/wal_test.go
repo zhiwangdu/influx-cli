@@ -167,6 +167,24 @@ func TestAnalyzeDiscoversWALSegmentInDirectory(t *testing.T) {
 	}
 }
 
+func TestAnalyzeWALRejectsDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "_00001.wal")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatWAL})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "wal format requires a .wal segment file, got directory _00001.wal") {
+		t.Fatalf("notices = %v, want directory warning", report.Notices)
+	}
+}
+
 func TestAnalyzeWALEmptySegment(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "_00001.wal")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {

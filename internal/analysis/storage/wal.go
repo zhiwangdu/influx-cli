@@ -71,6 +71,10 @@ type walTimeRange struct {
 }
 
 func analyzeWAL(path string, info os.FileInfo, options Options) (FileReport, error) {
+	if info.IsDir() {
+		return FileReport{}, fmt.Errorf("wal format requires a .wal segment file, got directory %s", filepath.Base(path))
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return FileReport{}, err

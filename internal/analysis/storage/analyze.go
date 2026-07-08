@@ -629,6 +629,14 @@ func detectFormat(path string) (Format, error) {
 		return FormatFieldsIndex, nil
 	}
 
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return "", statErr
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("storage format auto-detection requires a file or recognized storage directory, got directory %s", filepath.Base(path))
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

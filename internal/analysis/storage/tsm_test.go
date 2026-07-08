@@ -1546,6 +1546,42 @@ func TestAnalyzeTSMWithZeroBlockSampleLimit(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSMRejectsDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatTSM})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "tsm format requires a .tsm file, got directory 000000001-000000001.tsm") {
+		t.Fatalf("notices = %v, want directory warning", report.Notices)
+	}
+}
+
+func TestAnalyzeAutoDetectRejectsFileLikeDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "000000001-000000001.tsm")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatAuto})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "storage format auto-detection requires a file or recognized storage directory, got directory 000000001-000000001.tsm") {
+		t.Fatalf("notices = %v, want auto-detect directory warning", report.Notices)
+	}
+}
+
 func TestAnalyzeQueryKeysRequireRange(t *testing.T) {
 	_, err := Analyze(context.Background(), []string{"unused.tsm"}, Options{
 		Format:    FormatTSM,

@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 
@@ -54,6 +55,10 @@ type tsmPoint struct {
 }
 
 func analyzeTSM(path string, info os.FileInfo, options Options) (FileReport, error) {
+	if info.IsDir() {
+		return FileReport{}, fmt.Errorf("tsm format requires a .tsm file, got directory %s", filepath.Base(path))
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return FileReport{}, err

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +69,10 @@ type openGeminiMetaPtInfo struct {
 }
 
 func analyzeOpenGeminiMeta(path string, info os.FileInfo, options Options) (FileReport, error) {
+	if info.IsDir() {
+		return FileReport{}, fmt.Errorf("opengemini-meta format requires a topology snapshot file, got directory %s", filepath.Base(path))
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return FileReport{}, err
