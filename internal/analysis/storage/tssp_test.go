@@ -747,6 +747,9 @@ func TestAnalyzeTSSPMaterializesAttachedRecordSamples(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_record_samples"], "2"; got != want {
 		t.Fatalf("data block probe record samples = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_record_rows"], "2"; got != want {
+		t.Fatalf("data block probe record rows = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["data_block_probe_record_outputs"], "2"; got != want {
 		t.Fatalf("data block probe record outputs = %q, want %q", got, want)
 	}
@@ -762,6 +765,9 @@ func TestAnalyzeTSSPMaterializesAttachedRecordSamples(t *testing.T) {
 	}
 	if got, want := decode.DataBlockProbeRecordSamples, 2; got != want {
 		t.Fatalf("data block probe record samples = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordRows, 2; got != want {
+		t.Fatalf("data block probe record rows = %d, want %d", got, want)
 	}
 	if got, want := decode.DataBlockProbeRecordOutputs, 2; got != want {
 		t.Fatalf("data block probe record outputs = %d, want %d", got, want)
@@ -932,6 +938,15 @@ func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
 		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["data_block_probe_record_rows"], "2"; got != want {
+		t.Fatalf("data block probe record rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_record_range_rejects"], "0"; got != want {
+		t.Fatalf("data block probe record range rejects = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_record_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe record filter rejects = %q, want %q", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("decode path is nil")
@@ -954,6 +969,15 @@ func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	if got, want := decode.DataBlockProbeRecordOutputs, 1; got != want {
 		t.Fatalf("data block probe record outputs = %d, want %d", got, want)
 	}
+	if got, want := decode.DataBlockProbeRecordRows, 2; got != want {
+		t.Fatalf("data block probe record rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordRangeRejects, 0; got != want {
+		t.Fatalf("data block probe record range rejects = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordFilterRejects, 1; got != want {
+		t.Fatalf("data block probe record filter rejects = %d, want %d", got, want)
+	}
 	if got, want := decode.DataBlockProbeFilterRows, 2; got != want {
 		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
 	}
@@ -965,6 +989,9 @@ func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	}
 	if got, want := len(decode.CursorOutputSamples), 3; got != want {
 		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "rejected 1 TSSP record row(s) during local materialization: range=0 filters=1") {
+		t.Fatalf("recommendations = %v, want record reject recommendation", decode.Recommendations)
 	}
 	for i, want := range []DecodePathCursorOutput{
 		{Key: "sid:7/record", Time: times[0], Type: "record", OptimizedValue: "status=true,value=1.25", Matches: true},
@@ -1778,12 +1805,15 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 
 	var outputs []DecodePathCursorOutput
 	var merged []DecodePathCursorStep
-	outputs, firstSteps, firstRecords, firstRecordOutputs := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5))
+	outputs, firstSteps, firstStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5))
 	appendTSSPRecordExecutionSamples(&merged, firstSteps, 5)
-	if got, want := firstRecords, 3; got != want {
+	if got, want := firstStats.Rows, 3; got != want {
+		t.Fatalf("first record rows = %d, want %d", got, want)
+	}
+	if got, want := firstStats.Samples, 3; got != want {
 		t.Fatalf("first record samples = %d, want %d", got, want)
 	}
-	if got, want := firstRecordOutputs, 3; got != want {
+	if got, want := firstStats.Outputs, 3; got != want {
 		t.Fatalf("first record outputs = %d, want %d", got, want)
 	}
 	if got, want := len(merged), 3; got != want {
@@ -1793,12 +1823,12 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 		t.Fatalf("remaining record execution sample limit = %d, want %d", got, want)
 	}
 
-	outputs, secondSteps, secondRecords, secondRecordOutputs := appendTSSPDataProbeRecordSamples(outputs, "sid", 8, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5))
+	outputs, secondSteps, secondStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 8, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5))
 	appendTSSPRecordExecutionSamples(&merged, secondSteps, 5)
-	if got, want := secondRecords, 2; got != want {
+	if got, want := secondStats.Samples, 2; got != want {
 		t.Fatalf("second record samples = %d, want remaining output cap %d", got, want)
 	}
-	if got, want := secondRecordOutputs, 3; got != want {
+	if got, want := secondStats.Outputs, 3; got != want {
 		t.Fatalf("second record outputs = %d, want full local record output count %d", got, want)
 	}
 	if got, want := len(outputs), 5; got != want {
@@ -1823,6 +1853,61 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 		if got.Step != i+1 || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
 			t.Fatalf("merged record execution sample[%d] = %+v, want key=%q value=%q indexes=%d->%d advanced", i, got, want.key, want.value, want.indexBefore, want.indexAfter)
 		}
+	}
+}
+
+func TestTSSPRecordMaterializationStatsCountRangeAndFilterRejects(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			Rows:       4,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"100", "200", "300", "400"},
+		},
+		"status": {
+			Type:       "boolean-full",
+			Rows:       4,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"true", "true", "false", "true"},
+		},
+		"value": {
+			Type:       "integer",
+			Rows:       4,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"1", "2", "3", "4"},
+		},
+	}
+	queryRange, err := NewTimeRange(150, 350)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputs, steps, stats := appendTSSPDataProbeRecordSamples(nil, "sid", 7, tsspTimeRange{Min: 100, Max: 400}, blocks, []bool{false, true, false, true}, queryRange, 4, 4)
+	if got, want := stats.Rows, 4; got != want {
+		t.Fatalf("record rows = %d, want %d", got, want)
+	}
+	if got, want := stats.Outputs, 1; got != want {
+		t.Fatalf("record outputs = %d, want %d", got, want)
+	}
+	if got, want := stats.Samples, 1; got != want {
+		t.Fatalf("record samples = %d, want %d", got, want)
+	}
+	if got, want := stats.RangeRejects, 2; got != want {
+		t.Fatalf("record range rejects = %d, want %d", got, want)
+	}
+	if got, want := stats.FilterRejects, 1; got != want {
+		t.Fatalf("record filter rejects = %d, want %d", got, want)
+	}
+	if got, want := len(outputs), 1; got != want {
+		t.Fatalf("record output samples = %d, want %d", got, want)
+	}
+	if got, want := len(steps), 1; got != want {
+		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	if got, want := steps[0].CandidateValue, "row=1 local_output=0 time=200 range=150:350 columns=2 values=status=true,value=2 result=output"; got != want {
+		t.Fatalf("record execution sample value = %q, want %q", got, want)
 	}
 }
 

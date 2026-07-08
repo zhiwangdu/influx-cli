@@ -27,8 +27,11 @@ type tsspAttachedDataProbe struct {
 	ValueUnknowns          int
 	ValueUnknownReasons    map[string]int
 	NullValues             int
+	RecordRows             int
 	RecordSamples          int
 	RecordOutputs          int
+	RecordRangeRejects     int
+	RecordFilterRejects    int
 	RangeRows              int
 	RangeMatches           int
 	RangeRejects           int
@@ -60,6 +63,14 @@ type tsspAttachedDataProbe struct {
 	rangeExecutionSamples  []DecodePathCursorStep
 	recordExecutionSamples []DecodePathCursorStep
 	filterExecutionSamples []DecodePathCursorStep
+}
+
+type tsspRecordMaterializationStats struct {
+	Rows          int
+	Samples       int
+	Outputs       int
+	RangeRejects  int
+	FilterRejects int
 }
 
 func (p *tsspAttachedDataProbe) Failures() int {
@@ -309,12 +320,15 @@ func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk
 	if probe == nil {
 		return
 	}
-	var recordSamples, recordOutputs int
 	var recordExecutionSamples []DecodePathCursorStep
-	probe.valueSamples, recordExecutionSamples, recordSamples, recordOutputs = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit))
+	var recordStats tsspRecordMaterializationStats
+	probe.valueSamples, recordExecutionSamples, recordStats = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit))
 	appendTSSPRecordExecutionSamples(&probe.recordExecutionSamples, recordExecutionSamples, sampleLimit)
-	probe.RecordSamples += recordSamples
-	probe.RecordOutputs += recordOutputs
+	probe.RecordRows += recordStats.Rows
+	probe.RecordSamples += recordStats.Samples
+	probe.RecordOutputs += recordStats.Outputs
+	probe.RecordRangeRejects += recordStats.RangeRejects
+	probe.RecordFilterRejects += recordStats.FilterRejects
 	if sampleLimit <= 0 || len(probe.valueSamples) >= sampleLimit {
 		return
 	}

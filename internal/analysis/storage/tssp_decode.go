@@ -150,8 +150,11 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		addTSSPDecodePathCounts(summary.DataBlockProbeTypes, dataProbe.BlockTypes)
 		addTSSPDecodePathCounts(summary.DataBlockProbeValueReasons, dataProbe.ValueUnknownReasons)
 		summary.DataBlockProbeNullValues = dataProbe.NullValues
+		summary.DataBlockProbeRecordRows = dataProbe.RecordRows
 		summary.DataBlockProbeRecordSamples = dataProbe.RecordSamples
 		summary.DataBlockProbeRecordOutputs = dataProbe.RecordOutputs
+		summary.DataBlockProbeRecordRangeRejects = dataProbe.RecordRangeRejects
+		summary.DataBlockProbeRecordFilterRejects = dataProbe.RecordFilterRejects
 		summary.DataBlockProbeRangeRows = dataProbe.RangeRows
 		summary.DataBlockProbeRangeMatches = dataProbe.RangeMatches
 		summary.DataBlockProbeRangeRejects = dataProbe.RangeRejects
@@ -449,8 +452,11 @@ func addTSSPFileDecodePathSummary(dst, src *DecodePathSummary, path string, samp
 	addTSSPDecodePathCounts(dst.DataBlockProbeTypes, src.DataBlockProbeTypes)
 	addTSSPDecodePathCounts(dst.DataBlockProbeValueReasons, src.DataBlockProbeValueReasons)
 	dst.DataBlockProbeNullValues += src.DataBlockProbeNullValues
+	dst.DataBlockProbeRecordRows += src.DataBlockProbeRecordRows
 	dst.DataBlockProbeRecordSamples += src.DataBlockProbeRecordSamples
 	dst.DataBlockProbeRecordOutputs += src.DataBlockProbeRecordOutputs
+	dst.DataBlockProbeRecordRangeRejects += src.DataBlockProbeRecordRangeRejects
+	dst.DataBlockProbeRecordFilterRejects += src.DataBlockProbeRecordFilterRejects
 	dst.DataBlockProbeRangeRows += src.DataBlockProbeRangeRows
 	dst.DataBlockProbeRangeMatches += src.DataBlockProbeRangeMatches
 	dst.DataBlockProbeRangeRejects += src.DataBlockProbeRangeRejects
@@ -1071,6 +1077,14 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 			"materialized %d TSSP record output row(s) from decoded column blocks with %d sampled",
 			summary.DataBlockProbeRecordOutputs,
 			summary.DataBlockProbeRecordSamples,
+		))
+	}
+	if summary.DataBlockProbeRecordRangeRejects > 0 || summary.DataBlockProbeRecordFilterRejects > 0 {
+		recommendations = append(recommendations, fmt.Sprintf(
+			"rejected %d TSSP record row(s) during local materialization: range=%d filters=%d",
+			summary.DataBlockProbeRecordRangeRejects+summary.DataBlockProbeRecordFilterRejects,
+			summary.DataBlockProbeRecordRangeRejects,
+			summary.DataBlockProbeRecordFilterRejects,
 		))
 	}
 	if len(summary.CursorFinalOutputSamples) > 0 {
