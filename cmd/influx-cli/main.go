@@ -347,7 +347,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
-	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), key not-between (lower,upper), key contains value, key not-contains value, key like pattern, key not-like pattern, key starts-with value, key not-starts-with value, key ends-with value, or key not-ends-with value for local record filtering, including decoded time when present; multi-word operators also accept space or underscore separators; range parentheses are optional; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key==value, key!=value, key<>value, key=~<pattern>, key!~<pattern>, key matches/match/regex/regexp <pattern> and not/! variants, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), key not-between (lower,upper), key contains value, key not-contains value, key like pattern, key not-like pattern, key starts-with value, key not-starts-with value, key ends-with value, or key not-ends-with value for local record filtering, including decoded time when present; multi-word operators also accept space or underscore separators; range parentheses are optional; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.anyFields, "field-any", nil, "TSSP decoded field predicate using the same syntax as --field; at least one repeated --field-any predicate must match; combines with --field as required AND predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.noneFields, "field-none", nil, "TSSP decoded field predicate using the same syntax as --field; no repeated --field-none predicate may match; combines after required AND and OR predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
@@ -472,7 +472,7 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key=~regex, key!~regex, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key !in (value1,value2), key between (lower,upper), key not-between (lower,upper), key !between (lower,upper), key contains value, key not-contains value, key !contains value, key like pattern, key not-like pattern, key !like pattern, key starts-with value, key not-starts-with value, key !starts-with value, key ends-with value, key not-ends-with value, or key !ends-with value; multi-word operators also accept space or underscore separators; range parentheses are optional", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key=~<pattern>, key!~<pattern>, key matches/match/regex/regexp <pattern> and not/! variants, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key in (value1,value2), key not-in (value1,value2), key !in (value1,value2), key between (lower,upper), key not-between (lower,upper), key !between (lower,upper), key contains value, key not-contains value, key !contains value, key like pattern, key not-like pattern, key !like pattern, key starts-with value, key not-starts-with value, key !starts-with value, key ends-with value, key not-ends-with value, or key !ends-with value; multi-word operators also accept space or underscore separators; range parentheses are optional", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -518,8 +518,20 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 		}
 	}
 	if bestOp != "" {
+		wordKey, wordOp, wordValue, wordIndex, wordOK := splitStorageFieldWordFilter(value)
+		if wordOK && wordIndex < bestIndex && storageFieldWordOperatorCanPrecedeLaterSymbol(wordOp) {
+			return wordKey, wordOp, wordValue, true
+		}
 		return value[:bestIndex], bestOp, value[bestIndex+len(bestOp):], true
 	}
+	wordKey, wordOp, wordValue, _, wordOK := splitStorageFieldWordFilter(value)
+	if wordOK {
+		return wordKey, wordOp, wordValue, true
+	}
+	return "", "", "", false
+}
+
+func splitStorageFieldWordFilter(value string) (string, string, string, int, bool) {
 	for _, operator := range []struct {
 		text string
 		op   string
@@ -546,6 +558,22 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 		{text: "not like", op: "not-like"},
 		{text: "not_like", op: "not-like"},
 		{text: "!like", op: "not-like"},
+		{text: "not-matches", op: "!~"},
+		{text: "not matches", op: "!~"},
+		{text: "not_matches", op: "!~"},
+		{text: "!matches", op: "!~"},
+		{text: "not-match", op: "!~"},
+		{text: "not match", op: "!~"},
+		{text: "not_match", op: "!~"},
+		{text: "!match", op: "!~"},
+		{text: "not-regex", op: "!~"},
+		{text: "not regex", op: "!~"},
+		{text: "not_regex", op: "!~"},
+		{text: "!regex", op: "!~"},
+		{text: "not-regexp", op: "!~"},
+		{text: "not regexp", op: "!~"},
+		{text: "not_regexp", op: "!~"},
+		{text: "!regexp", op: "!~"},
 		{text: "not-in", op: "not-in"},
 		{text: "not in", op: "not-in"},
 		{text: "not_in", op: "not-in"},
@@ -563,17 +591,30 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 		{text: "ends_with", op: "ends-with"},
 		{text: "contains", op: "contains"},
 		{text: "like", op: "like"},
+		{text: "matches", op: "=~"},
+		{text: "match", op: "=~"},
+		{text: "regex", op: "=~"},
+		{text: "regexp", op: "=~"},
 		{text: "in", op: "in"},
 	} {
-		key, filterValue, ok := splitStorageFieldWordOperator(value, operator.text)
+		key, filterValue, index, ok := splitStorageFieldWordOperator(value, operator.text)
 		if ok {
-			return key, operator.op, filterValue, true
+			return key, operator.op, filterValue, index, true
 		}
 	}
-	return "", "", "", false
+	return "", "", "", 0, false
 }
 
-func splitStorageFieldWordOperator(value, operator string) (string, string, bool) {
+func storageFieldWordOperatorCanPrecedeLaterSymbol(op string) bool {
+	switch op {
+	case "=~", "!~", "contains", "not-contains", "like", "not-like", "starts-with", "not-starts-with", "ends-with", "not-ends-with":
+		return true
+	default:
+		return false
+	}
+}
+
+func splitStorageFieldWordOperator(value, operator string) (string, string, int, bool) {
 	lower := strings.ToLower(value)
 	for _, needle := range []string{" " + operator + " ", " " + operator + "("} {
 		searchFrom := 0
@@ -595,10 +636,10 @@ func splitStorageFieldWordOperator(value, operator string) (string, string, bool
 				continue
 			}
 			valueStart := index + 1 + len(operator)
-			return key, strings.TrimSpace(value[valueStart:]), true
+			return key, strings.TrimSpace(value[valueStart:]), index, true
 		}
 	}
-	return "", "", false
+	return "", "", 0, false
 }
 
 func storageFieldOperatorInLiteral(value string, index int) bool {

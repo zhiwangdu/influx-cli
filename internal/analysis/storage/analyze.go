@@ -245,6 +245,10 @@ func normalizeFieldFilterOperator(op string) string {
 		return "not-contains"
 	case "!like", "not like", "not-like":
 		return "not-like"
+	case "matches", "match", "regex", "regexp":
+		return "=~"
+	case "!matches", "!match", "!regex", "!regexp", "not matches", "not match", "not regex", "not regexp", "not-matches", "not-match", "not-regex", "not-regexp":
+		return "!~"
 	case "starts with", "starts-with":
 		return "starts-with"
 	case "!starts-with", "not starts with", "not-starts-with":

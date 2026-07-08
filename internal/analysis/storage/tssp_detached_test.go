@@ -2822,7 +2822,7 @@ func TestAnalyzeTSSPDetachedFieldFilterMatchesStringRegex(t *testing.T) {
 		Format:           FormatTSSPDetachedIndex,
 		BlockSampleLimit: 4,
 		QueryRange:       queryRange,
-		QueryFields:      []FieldFilter{{Key: "value", Op: "=~", Value: "^b"}},
+		QueryFields:      []FieldFilter{{Key: "value", Op: "regex", Value: "^b"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2840,6 +2840,9 @@ func TestAnalyzeTSSPDetachedFieldFilterMatchesStringRegex(t *testing.T) {
 	}
 	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: "=~", Value: "^b"}}; !equalFieldFilters(got, want) {
 		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["=~"], 2; got != want {
+		t.Fatalf("regex operator evaluations = %d, want %d", got, want)
 	}
 	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
 		t.Fatalf("optimized value output points = %d, want %d", got, want)

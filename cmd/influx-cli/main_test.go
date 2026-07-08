@@ -259,7 +259,7 @@ func TestParseStorageFieldFiltersParsesBetweenOperators(t *testing.T) {
 }
 
 func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
-	if _, err := parseStorageFieldFilters([]string{"value"}); err == nil || !strings.Contains(err.Error(), "key=value") || !strings.Contains(err.Error(), "key=~regex") {
+	if _, err := parseStorageFieldFilters([]string{"value"}); err == nil || !strings.Contains(err.Error(), "key=value") || !strings.Contains(err.Error(), "key=~<pattern>") {
 		t.Fatalf("error = %v, want key=value guidance", err)
 	}
 	if _, err := parseStorageFieldFilters([]string{"=99"}); err == nil || !strings.Contains(err.Error(), "key cannot be empty") {
@@ -303,8 +303,10 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 	got, err := parseStorageFieldFilters([]string{
 		"message contains error",
+		"message contains key=value",
 		"notice contains warning",
 		"message like bl%",
+		"message like a>b",
 		"message not like r_d",
 		"message not-like tmp%",
 		"message !like _tmp%",
@@ -313,6 +315,7 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 		"notify starts with edge",
 		"region not-contains us",
 		"host starts-with edge",
+		"host starts-with a<b",
 		"host starts with edge",
 		"path not-starts-with tmp",
 		"path not starts with tmp",
@@ -320,6 +323,7 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 		"region ends-with east",
 		"region ends with west",
 		"device not-ends-with old",
+		"device not-ends-with old=1",
 		"device not ends with old",
 		"device !ends-with stale",
 	})
@@ -332,8 +336,10 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 		value string
 	}{
 		{"message", "contains", "error"},
+		{"message", "contains", "key=value"},
 		{"notice", "contains", "warning"},
 		{"message", "like", "bl%"},
+		{"message", "like", "a>b"},
 		{"message", "not-like", "r_d"},
 		{"message", "not-like", "tmp%"},
 		{"message", "not-like", "_tmp%"},
@@ -342,6 +348,7 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 		{"notify", "starts-with", "edge"},
 		{"region", "not-contains", "us"},
 		{"host", "starts-with", "edge"},
+		{"host", "starts-with", "a<b"},
 		{"host", "starts-with", "edge"},
 		{"path", "not-starts-with", "tmp"},
 		{"path", "not-starts-with", "tmp"},
@@ -349,8 +356,73 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 		{"region", "ends-with", "east"},
 		{"region", "ends-with", "west"},
 		{"device", "not-ends-with", "old"},
+		{"device", "not-ends-with", "old=1"},
 		{"device", "not-ends-with", "old"},
 		{"device", "not-ends-with", "stale"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("field filters = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Key != want[i].key || got[i].Op != want[i].op || got[i].Value != want[i].value {
+			t.Fatalf("field filter %d = %+v, want key=%q op=%q value=%q", i, got[i], want[i].key, want[i].op, want[i].value)
+		}
+	}
+}
+
+func TestParseStorageFieldFiltersParsesRegexOperatorAliases(t *testing.T) {
+	got, err := parseStorageFieldFilters([]string{
+		"message matches ^err",
+		"payload matches key=value",
+		"payload regex a<b",
+		"message not matches ok$",
+		"payload not matches a>b",
+		"notice not-matches warn$",
+		"notice not_matches trace$",
+		"trace !matches debug",
+		"event match ^start",
+		"event not-match abort$",
+		"event not_match stop$",
+		"trace !match verbose",
+		"region regex ^us-",
+		"region not regex eu$",
+		"host not-regex tmp",
+		"host not_regex cold",
+		"host !regex tmp",
+		"path regexp ^/var",
+		"path not-regexp cache",
+		"path not_regexp cache",
+		"path !regexp tmp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		key   string
+		op    string
+		value string
+	}{
+		{"message", "=~", "^err"},
+		{"payload", "=~", "key=value"},
+		{"payload", "=~", "a<b"},
+		{"message", "!~", "ok$"},
+		{"payload", "!~", "a>b"},
+		{"notice", "!~", "warn$"},
+		{"notice", "!~", "trace$"},
+		{"trace", "!~", "debug"},
+		{"event", "=~", "^start"},
+		{"event", "!~", "abort$"},
+		{"event", "!~", "stop$"},
+		{"trace", "!~", "verbose"},
+		{"region", "=~", "^us-"},
+		{"region", "!~", "eu$"},
+		{"host", "!~", "tmp"},
+		{"host", "!~", "cold"},
+		{"host", "!~", "tmp"},
+		{"path", "=~", "^/var"},
+		{"path", "!~", "cache"},
+		{"path", "!~", "cache"},
+		{"path", "!~", "tmp"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("field filters = %d, want %d", len(got), len(want))

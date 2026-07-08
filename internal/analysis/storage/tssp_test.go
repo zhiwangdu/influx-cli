@@ -3199,8 +3199,8 @@ func TestAnalyzeTSSPFieldFilterMatchesStringRegex(t *testing.T) {
 	report, err := Analyze(context.Background(), []string{path}, Options{
 		Format:           FormatTSSP,
 		QueryRange:       queryRange,
-		QueryFields:      []FieldFilter{{Key: "value", Op: "=~", Value: "^(red|blue)$"}},
-		QueryNoneFields:  []FieldFilter{{Key: "value", Op: "!~", Value: "e$"}},
+		QueryFields:      []FieldFilter{{Key: "value", Op: "matches", Value: "^(red|blue)$"}},
+		QueryNoneFields:  []FieldFilter{{Key: "value", Op: "not matches", Value: "e$"}},
 		KeySampleLimit:   3,
 		BlockSampleLimit: 4,
 	})
@@ -3226,6 +3226,12 @@ func TestAnalyzeTSSPFieldFilterMatchesStringRegex(t *testing.T) {
 	}
 	if got, want := decode.QueryNoneFields, []FieldFilter{{Key: "value", Op: "!~", Value: "e$"}}; !equalFieldFilters(got, want) {
 		t.Fatalf("query none fields = %v, want %v", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["=~"], 2; got != want {
+		t.Fatalf("regex operator evaluations = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterOps["!~"], 2; got != want {
+		t.Fatalf("not regex operator evaluations = %d, want %d", got, want)
 	}
 	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
 		t.Fatalf("optimized value output points = %d, want %d", got, want)
@@ -5882,6 +5888,11 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 		{Key: "pattern", Op: "not like", Value: "tmp%"},
 		{Key: "pattern", Op: "not-like", Value: "tmp%"},
 		{Key: "pattern_under", Op: "not_like", Value: "trace%"},
+		{Key: "matches", Op: "matches", Value: "^ok"},
+		{Key: "match", Op: "match", Value: "^start"},
+		{Key: "regex", Op: "not regex", Value: "^debug"},
+		{Key: "regex_under", Op: "not_regex", Value: "^trace"},
+		{Key: "regexp", Op: "!regexp", Value: "^tmp"},
 		{Key: "prefix", Op: "!starts-with", Value: "edge"},
 		{Key: "prefix", Op: "starts with", Value: "edge"},
 		{Key: "prefix", Op: "starts-with", Value: "edge"},
@@ -5897,6 +5908,8 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 	})
 	want := []FieldFilter{
 		{Key: "device", Op: "not-in", Value: "(cpu,mem)"},
+		{Key: "match", Op: "=~", Value: "^start"},
+		{Key: "matches", Op: "=~", Value: "^ok"},
 		{Key: "message", Op: "not-contains", Value: "debug"},
 		{Key: "message_under", Op: "not-contains", Value: "trace"},
 		{Key: "missing", Value: "null"},
@@ -5910,6 +5923,9 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 		{Key: "rack_under", Op: "not-in", Value: "(r3,r4)"},
 		{Key: "range", Op: "not-between", Value: "(1,3)"},
 		{Key: "range_under", Op: "not-between", Value: "(4,5)"},
+		{Key: "regex", Op: "!~", Value: "^debug"},
+		{Key: "regex_under", Op: "!~", Value: "^trace"},
+		{Key: "regexp", Op: "!~", Value: "^tmp"},
 		{Key: "state", Op: "!=", Value: "null"},
 		{Key: "status", Op: "!=", Value: "true"},
 		{Key: "suffix", Op: "not-ends-with", Value: "tmp"},
@@ -5945,6 +5961,15 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "pattern", Op: "!like", Value: "tmp%"}), "not-like"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "matches", Op: "matches", Value: "^ok"}), "=~"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "regex", Op: "not regex", Value: "^debug"}), "!~"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "regexp", Op: "!regexp", Value: "^tmp"}), "!~"; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "prefix", Op: "starts with", Value: "edge"}), "starts-with"; got != want {
