@@ -413,7 +413,7 @@ func (s *tsspDataBlockFilterRowStats) skip(clause string, count int) {
 	}
 }
 
-func (s tsspDataBlockFilterRowStats) candidateValue(row int, timestamp int64, timestampKnown bool, result string) string {
+func (s tsspDataBlockFilterRowStats) candidateValue(row int, timestamp int64, timestampKnown bool, values, result string) string {
 	parts := []string{fmt.Sprintf("row=%d", row)}
 	if timestampKnown {
 		parts = append(parts, fmt.Sprintf("time=%d", timestamp))
@@ -423,8 +423,11 @@ func (s tsspDataBlockFilterRowStats) candidateValue(row int, timestamp int64, ti
 		fmt.Sprintf("any=%d/%d", s.AnyMatches, s.AnyEvaluations),
 		fmt.Sprintf("none=%d/%d", s.NoneMatches, s.NoneEvaluations),
 		fmt.Sprintf("skips=%d/%d/%d", s.RequiredSkips, s.AnySkips, s.NoneSkips),
-		"result="+result,
 	)
+	if values != "" {
+		parts = append(parts, "values="+values)
+	}
+	parts = append(parts, "result="+result)
 	return strings.Join(parts, " ")
 }
 
@@ -480,7 +483,7 @@ func (s *tsspDataBlockFilterStats) skip(clause string, count int) {
 	}
 }
 
-func (s *tsspDataBlockFilterStats) appendExecutionSample(row int, timestamp int64, timestampKnown bool, key string, rowStats tsspDataBlockFilterRowStats, result string, sampleLimit int) {
+func (s *tsspDataBlockFilterStats) appendExecutionSample(row int, timestamp int64, timestampKnown bool, key string, rowStats tsspDataBlockFilterRowStats, values, result string, sampleLimit int) {
 	if sampleLimit <= 0 || len(s.FilterExecutionSamples) >= sampleLimit {
 		return
 	}
@@ -489,7 +492,7 @@ func (s *tsspDataBlockFilterStats) appendExecutionSample(row int, timestamp int6
 		Type:              "tssp-filter-row-step",
 		Action:            "filter_row_" + result,
 		Key:               key,
-		CandidateValue:    rowStats.candidateValue(row, timestamp, timestampKnown, result),
+		CandidateValue:    rowStats.candidateValue(row, timestamp, timestampKnown, values, result),
 		CursorIndexBefore: row,
 		CursorIndexAfter:  row + 1,
 		CursorAdvanced:    true,
@@ -535,6 +538,7 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 	if sampleLimit > 0 {
 		sampleTimes, sampleTimesKnown = tsspDataBlockSampleTimes(timeRange, blocks, rows)
 	}
+	sampleColumns := tsspDataBlockFilterSampleColumns(blocks, filters, anyFilters, noneFilters)
 	for row := 0; row < rows; row++ {
 		if len(rangeRows) > 0 && !rangeRows[row] {
 			continue
@@ -606,9 +610,42 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		if sampleTimesKnown {
 			timestamp = sampleTimes[row]
 		}
-		stats.appendExecutionSample(row, timestamp, sampleTimesKnown, fmt.Sprintf("%s/row:%d", sampleKey, row), rowStats, result, sampleLimit)
+		stats.appendExecutionSample(row, timestamp, sampleTimesKnown, fmt.Sprintf("%s/row:%d", sampleKey, row), rowStats, tsspDataBlockFilterSampleValues(blocks, sampleColumns, row), result, sampleLimit)
 	}
 	return matchingRows, matched, rangeMatched, stats, true
+}
+
+func tsspDataBlockFilterSampleColumns(blocks map[string]tsspDetachedDataBlockInfo, filters ...[]FieldFilter) []string {
+	seen := map[string]struct{}{}
+	for _, group := range filters {
+		for _, filter := range group {
+			if _, ok := seen[filter.Key]; ok {
+				continue
+			}
+			block, ok := blocks[filter.Key]
+			if !ok || !block.RowsKnown || !block.ValueKnown {
+				continue
+			}
+			seen[filter.Key] = struct{}{}
+		}
+	}
+	columns := make([]string, 0, len(seen))
+	for column := range seen {
+		columns = append(columns, column)
+	}
+	sort.Strings(columns)
+	return columns
+}
+
+func tsspDataBlockFilterSampleValues(blocks map[string]tsspDetachedDataBlockInfo, columns []string, row int) string {
+	if len(columns) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(columns))
+	for _, column := range columns {
+		parts = append(parts, column+"="+tsspDataProbeRecordValue(blocks[column], row))
+	}
+	return strings.Join(parts, ",")
 }
 
 func addTSSPFilterOperatorCounts(dst, src map[string]int) {
