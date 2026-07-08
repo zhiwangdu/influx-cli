@@ -275,6 +275,15 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	if _, err := parseStorageFieldFilters([]string{"not between (1,2)"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing between key guidance", err)
 	}
+	if _, err := parseStorageFieldFilters([]string{"not contains value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing contains key guidance", err)
+	}
+	if _, err := parseStorageFieldFilters([]string{"not starts with value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing starts-with key guidance", err)
+	}
+	if _, err := parseStorageFieldFilters([]string{"not ends with value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing ends-with key guidance", err)
+	}
 }
 
 func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {

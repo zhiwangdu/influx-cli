@@ -571,7 +571,7 @@ func splitStorageFieldWordOperator(value, operator string) (string, string, bool
 			if strings.ContainsAny(key, "=<>!") {
 				continue
 			}
-			if (operator == "in" || operator == "between") && strings.EqualFold(strings.TrimSpace(key), "not") {
+			if strings.EqualFold(strings.TrimSpace(key), "not") {
 				continue
 			}
 			valueStart := index + 1 + len(operator)
