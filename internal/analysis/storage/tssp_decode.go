@@ -176,6 +176,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 		summary.RangeExecutionSamples = append(summary.RangeExecutionSamples, dataProbe.rangeExecutionSamples...)
+		summary.RecordExecutionSamples = append(summary.RecordExecutionSamples, dataProbe.recordExecutionSamples...)
 		summary.FilterExecutionSamples = append(summary.FilterExecutionSamples, dataProbe.filterExecutionSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -559,6 +560,23 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 		sample.CursorIndexAfter += rangeIndexBase
 		sample.CursorExhausted = false
 		dst.RangeExecutionSamples = append(dst.RangeExecutionSamples, sample)
+	}
+	recordIndexBase := 0
+	if len(dst.RecordExecutionSamples) > 0 {
+		recordIndexBase = dst.RecordExecutionSamples[len(dst.RecordExecutionSamples)-1].CursorIndexAfter
+	}
+	for _, sample := range src.RecordExecutionSamples {
+		if len(dst.RecordExecutionSamples) >= sampleLimit {
+			break
+		}
+		if sample.File == "" {
+			sample.File = path
+		}
+		sample.Step = len(dst.RecordExecutionSamples) + 1
+		sample.CursorIndexBefore += recordIndexBase
+		sample.CursorIndexAfter += recordIndexBase
+		sample.CursorExhausted = false
+		dst.RecordExecutionSamples = append(dst.RecordExecutionSamples, sample)
 	}
 	filterIndexBase := 0
 	if len(dst.FilterExecutionSamples) > 0 {
@@ -1088,6 +1106,9 @@ func tsspDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(summary.CursorExecutionSamples) > 0 {
 		recommendations = append(recommendations, "TSSP location cursor execution samples show local metadata skip/read steps")
+	}
+	if len(summary.RecordExecutionSamples) > 0 {
+		recommendations = append(recommendations, "TSSP record execution samples show local decoded-row materialization steps")
 	}
 	if len(summary.FilterExecutionSamples) > 0 {
 		recommendations = append(recommendations, "TSSP filter execution samples show local decoded-row predicate decisions")

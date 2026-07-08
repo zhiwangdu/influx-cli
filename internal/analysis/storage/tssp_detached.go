@@ -439,6 +439,7 @@ type tsspDetachedDataProbe struct {
 	chunkOutputPoints      map[uint64]int
 	valueSamples           []DecodePathCursorOutput
 	rangeExecutionSamples  []DecodePathCursorStep
+	recordExecutionSamples []DecodePathCursorStep
 	filterExecutionSamples []DecodePathCursorStep
 }
 
@@ -2049,7 +2050,9 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 		return
 	}
 	var recordSamples int
-	probe.valueSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "meta-index-id", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit)
+	var recordExecutionSamples []DecodePathCursorStep
+	probe.valueSamples, recordExecutionSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "meta-index-id", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit))
+	appendTSSPRecordExecutionSamples(&probe.recordExecutionSamples, recordExecutionSamples, sampleLimit)
 	probe.RecordSamples += recordSamples
 	if len(probe.valueSamples) >= sampleLimit {
 		return
@@ -2089,32 +2092,33 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 	}
 }
 
-func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefix string, id uint64, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int) ([]DecodePathCursorOutput, int) {
+func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefix string, id uint64, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int, recordStepLimit int) ([]DecodePathCursorOutput, []DecodePathCursorStep, int) {
+	var recordSteps []DecodePathCursorStep
 	if sampleLimit <= 0 || len(samples) >= sampleLimit {
-		return samples, 0
+		return samples, recordSteps, 0
 	}
 	columnNames := tsspDataProbeRecordColumns(blocks)
 	if len(columnNames) < 2 {
-		return samples, 0
+		return samples, recordSteps, 0
 	}
 	rows := 0
 	for _, columnName := range columnNames {
 		block := blocks[columnName]
 		if !block.RowsKnown || !block.ValueKnown {
-			return samples, 0
+			return samples, recordSteps, 0
 		}
 		if rows == 0 {
 			rows = block.Rows
 		} else if rows != block.Rows {
-			return samples, 0
+			return samples, recordSteps, 0
 		}
 		if !block.ValueNull && len(block.Values) != block.Rows {
-			return samples, 0
+			return samples, recordSteps, 0
 		}
 	}
 	timestamps, ok := tsspDataBlockSampleTimes(timeRange, blocks, rows)
 	if !ok {
-		return samples, 0
+		return samples, recordSteps, 0
 	}
 	recordSamples := 0
 	for row := 0; row < rows; row++ {
@@ -2129,19 +2133,32 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 		for _, columnName := range columnNames {
 			fields = append(fields, columnName+"="+tsspDataProbeRecordValue(blocks[columnName], row))
 		}
+		values := strings.Join(fields, ",")
 		samples = append(samples, DecodePathCursorOutput{
 			Key:            fmt.Sprintf("%s:%d/record", keyPrefix, id),
 			Time:           timestamp,
 			Type:           "record",
-			OptimizedValue: strings.Join(fields, ","),
+			OptimizedValue: values,
 			Matches:        true,
 		})
+		if recordStepLimit > 0 && len(recordSteps) < recordStepLimit {
+			recordSteps = append(recordSteps, DecodePathCursorStep{
+				Step:              len(recordSteps) + 1,
+				Type:              "tssp-record-row-step",
+				Action:            "record_row_output",
+				Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
+				CandidateValue:    fmt.Sprintf("row=%d time=%d values=%s result=output", row, timestamp, values),
+				CursorIndexBefore: row,
+				CursorIndexAfter:  row + 1,
+				CursorAdvanced:    true,
+			})
+		}
 		recordSamples++
 		if len(samples) >= sampleLimit {
-			return samples, recordSamples
+			return samples, recordSteps, recordSamples
 		}
 	}
-	return samples, recordSamples
+	return samples, recordSteps, recordSamples
 }
 
 func tsspDataProbeRecordColumns(blocks map[string]tsspDetachedDataBlockInfo) []string {
@@ -2363,6 +2380,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 		addTSSPDecodePathCounts(summary.DataBlockProbeFilterOps, dataProbe.FilterOperators)
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 		summary.RangeExecutionSamples = append(summary.RangeExecutionSamples, dataProbe.rangeExecutionSamples...)
+		summary.RecordExecutionSamples = append(summary.RecordExecutionSamples, dataProbe.recordExecutionSamples...)
 		summary.FilterExecutionSamples = append(summary.FilterExecutionSamples, dataProbe.filterExecutionSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -2879,6 +2897,9 @@ func tsspDetachedChunkDecodeRecommendations(summary *DecodePathSummary) []string
 	}
 	if len(summary.CursorExecutionSamples) > 0 {
 		recommendations = append(recommendations, "detached TSSP cursor execution samples show local metadata skip/read steps")
+	}
+	if len(summary.RecordExecutionSamples) > 0 {
+		recommendations = append(recommendations, "detached TSSP record execution samples show local decoded-row materialization steps")
 	}
 	if len(summary.FilterExecutionSamples) > 0 {
 		recommendations = append(recommendations, "detached TSSP filter execution samples show local decoded-row predicate decisions")

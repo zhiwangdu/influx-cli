@@ -57,6 +57,7 @@ type tsspAttachedDataProbe struct {
 	chunkOutputPoints      map[uint64]int
 	valueSamples           []DecodePathCursorOutput
 	rangeExecutionSamples  []DecodePathCursorStep
+	recordExecutionSamples []DecodePathCursorStep
 	filterExecutionSamples []DecodePathCursorStep
 }
 
@@ -275,6 +276,10 @@ func appendTSSPRangeExecutionSamples(dst *[]DecodePathCursorStep, src []DecodePa
 	appendTSSPCursorStepSamples(dst, src, sampleLimit)
 }
 
+func appendTSSPRecordExecutionSamples(dst *[]DecodePathCursorStep, src []DecodePathCursorStep, sampleLimit int) {
+	appendTSSPCursorStepSamples(dst, src, sampleLimit)
+}
+
 func appendTSSPFilterExecutionSamples(dst *[]DecodePathCursorStep, src []DecodePathCursorStep, sampleLimit int) {
 	appendTSSPCursorStepSamples(dst, src, sampleLimit)
 }
@@ -304,7 +309,9 @@ func appendTSSPAttachedDataProbeValueSamples(probe *tsspAttachedDataProbe, chunk
 		return
 	}
 	var recordSamples int
-	probe.valueSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit)
+	var recordExecutionSamples []DecodePathCursorStep
+	probe.valueSamples, recordExecutionSamples, recordSamples = appendTSSPDataProbeRecordSamples(probe.valueSamples, "sid", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit))
+	appendTSSPRecordExecutionSamples(&probe.recordExecutionSamples, recordExecutionSamples, sampleLimit)
 	probe.RecordSamples += recordSamples
 	if len(probe.valueSamples) >= sampleLimit {
 		return

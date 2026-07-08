@@ -1691,6 +1691,79 @@ func TestTSSPRangeExecutionSamplesLimitAndRebase(t *testing.T) {
 	}
 }
 
+func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			Rows:       3,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"100", "200", "300"},
+		},
+		"status": {
+			Type:       "boolean-full",
+			Rows:       3,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"true", "false", "true"},
+		},
+		"value": {
+			Type:       "integer",
+			Rows:       3,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"1", "2", "3"},
+		},
+	}
+	queryRange, err := NewTimeRange(100, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var outputs []DecodePathCursorOutput
+	var merged []DecodePathCursorStep
+	outputs, firstSteps, firstRecords := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5))
+	appendTSSPRecordExecutionSamples(&merged, firstSteps, 5)
+	if got, want := firstRecords, 3; got != want {
+		t.Fatalf("first record samples = %d, want %d", got, want)
+	}
+	if got, want := len(merged), 3; got != want {
+		t.Fatalf("first record execution samples = %d, want %d", got, want)
+	}
+	if got, want := remainingTSSPExecutionSampleLimit(merged, 5), 2; got != want {
+		t.Fatalf("remaining record execution sample limit = %d, want %d", got, want)
+	}
+
+	outputs, secondSteps, secondRecords := appendTSSPDataProbeRecordSamples(outputs, "sid", 8, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5))
+	appendTSSPRecordExecutionSamples(&merged, secondSteps, 5)
+	if got, want := secondRecords, 2; got != want {
+		t.Fatalf("second record samples = %d, want remaining output cap %d", got, want)
+	}
+	if got, want := len(outputs), 5; got != want {
+		t.Fatalf("record output samples = %d, want %d", got, want)
+	}
+	if got, want := len(merged), 5; got != want {
+		t.Fatalf("merged record execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		key         string
+		value       string
+		indexBefore int
+		indexAfter  int
+	}{
+		{"sid:7/record/row:0", "row=0 time=100 values=status=true,value=1 result=output", 0, 1},
+		{"sid:7/record/row:1", "row=1 time=200 values=status=false,value=2 result=output", 1, 2},
+		{"sid:7/record/row:2", "row=2 time=300 values=status=true,value=3 result=output", 2, 3},
+		{"sid:8/record/row:0", "row=0 time=100 values=status=true,value=1 result=output", 3, 4},
+		{"sid:8/record/row:1", "row=1 time=200 values=status=false,value=2 result=output", 4, 5},
+	} {
+		got := merged[i]
+		if got.Step != i+1 || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
+			t.Fatalf("merged record execution sample[%d] = %+v, want key=%q value=%q indexes=%d->%d advanced", i, got, want.key, want.value, want.indexBefore, want.indexAfter)
+		}
+	}
+}
+
 func TestAppendTSSPFileDecodePathSamplesRebasesRangeExecutionSamples(t *testing.T) {
 	dst := &DecodePathSummary{}
 	src1 := &DecodePathSummary{
@@ -1761,6 +1834,81 @@ func TestAppendTSSPFileDecodePathSamplesRebasesRangeExecutionSamples(t *testing.
 		got := dst.RangeExecutionSamples[i]
 		if got.Step != i+1 || got.File != want.file || got.Key != want.key || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
 			t.Fatalf("range execution sample[%d] = %+v, want file=%q key=%q indexes=%d->%d advanced", i, got, want.file, want.key, want.indexBefore, want.indexAfter)
+		}
+	}
+}
+
+func TestAppendTSSPFileDecodePathSamplesRebasesRecordExecutionSamples(t *testing.T) {
+	dst := &DecodePathSummary{}
+	src1 := &DecodePathSummary{
+		RecordExecutionSamples: []DecodePathCursorStep{
+			{
+				Step:              1,
+				Type:              "tssp-record-row-step",
+				Action:            "record_row_output",
+				Key:               "sid:7/record/row:0",
+				CandidateValue:    "row=0 time=100 values=status=true,value=1 result=output",
+				CursorIndexBefore: 0,
+				CursorIndexAfter:  1,
+				CursorAdvanced:    true,
+			},
+			{
+				Step:              2,
+				Type:              "tssp-record-row-step",
+				Action:            "record_row_output",
+				Key:               "sid:7/record/row:1",
+				CandidateValue:    "row=1 time=200 values=status=false,value=2 result=output",
+				CursorIndexBefore: 1,
+				CursorIndexAfter:  2,
+				CursorAdvanced:    true,
+			},
+		},
+	}
+	src2 := &DecodePathSummary{
+		RecordExecutionSamples: []DecodePathCursorStep{
+			{
+				Step:              1,
+				Type:              "tssp-record-row-step",
+				Action:            "record_row_output",
+				Key:               "sid:8/record/row:0",
+				CandidateValue:    "row=0 time=100 values=status=true,value=1 result=output",
+				CursorIndexBefore: 0,
+				CursorIndexAfter:  1,
+				CursorAdvanced:    true,
+			},
+			{
+				Step:              2,
+				Type:              "tssp-record-row-step",
+				Action:            "record_row_output",
+				Key:               "sid:8/record/row:1",
+				CandidateValue:    "row=1 time=200 values=status=false,value=2 result=output",
+				CursorIndexBefore: 1,
+				CursorIndexAfter:  2,
+				CursorAdvanced:    true,
+			},
+		},
+	}
+
+	appendTSSPFileDecodePathSamples(dst, src1, "a.tssp", 3, nil)
+	appendTSSPFileDecodePathSamples(dst, src2, "b.tssp", 3, nil)
+
+	if got, want := len(dst.RecordExecutionSamples), 3; got != want {
+		t.Fatalf("record execution samples = %d, want sample limit %d", got, want)
+	}
+	for i, want := range []struct {
+		file        string
+		key         string
+		value       string
+		indexBefore int
+		indexAfter  int
+	}{
+		{"a.tssp", "sid:7/record/row:0", "row=0 time=100 values=status=true,value=1 result=output", 0, 1},
+		{"a.tssp", "sid:7/record/row:1", "row=1 time=200 values=status=false,value=2 result=output", 1, 2},
+		{"b.tssp", "sid:8/record/row:0", "row=0 time=100 values=status=true,value=1 result=output", 2, 3},
+	} {
+		got := dst.RecordExecutionSamples[i]
+		if got.Step != i+1 || got.File != want.file || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
+			t.Fatalf("record execution sample[%d] = %+v, want file=%q key=%q value=%q indexes=%d->%d advanced", i, got, want.file, want.key, want.value, want.indexBefore, want.indexAfter)
 		}
 	}
 }
@@ -2189,6 +2337,25 @@ func TestAnalyzeTSSPFieldFilterMatchesFloatBetween(t *testing.T) {
 		if got != want {
 			t.Fatalf("cursor output sample %d = %+v, want %+v", i, got, want)
 		}
+	}
+	if got, want := len(decode.RecordExecutionSamples), 1; got != want {
+		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	wantStep := DecodePathCursorStep{
+		Step:              1,
+		Type:              "tssp-record-row-step",
+		Action:            "record_row_output",
+		Key:               "sid:7/record/row:0",
+		CandidateValue:    fmt.Sprintf("row=0 time=%d values=status=true,value=1.25 result=output", times[0]),
+		CursorIndexBefore: 0,
+		CursorIndexAfter:  1,
+		CursorAdvanced:    true,
+	}
+	if got := decode.RecordExecutionSamples[0]; got != wantStep {
+		t.Fatalf("record execution sample = %+v, want %+v", got, wantStep)
+	}
+	if !containsString(decode.Recommendations, "TSSP record execution samples show local decoded-row materialization steps") {
+		t.Fatalf("recommendations = %v, want record execution sample recommendation", decode.Recommendations)
 	}
 }
 
@@ -4283,6 +4450,27 @@ func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) 
 		got := decode.FilterExecutionSamples[i]
 		if got.Step != i+1 || got.File != want.file || got.Action != want.action || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
 			t.Fatalf("filter execution sample[%d] = %+v, want file=%q action=%q indexes=%d->%d advanced", i, got, want.file, want.action, want.indexBefore, want.indexAfter)
+		}
+	}
+	if got, want := len(decode.RecordExecutionSamples), 2; got != want {
+		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		file        string
+		key         string
+		indexBefore int
+		indexAfter  int
+	}{
+		{path1, "sid:7/record/row:0", 0, 1},
+		{path2, "sid:7/record/row:0", 1, 2},
+	} {
+		got := decode.RecordExecutionSamples[i]
+		if got.Step != i+1 || got.File != want.file || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
+			t.Fatalf("record execution sample[%d] = %+v, want file=%q key=%q indexes=%d->%d advanced", i, got, want.file, want.key, want.indexBefore, want.indexAfter)
+		}
+		wantValue := fmt.Sprintf("row=0 time=%d values=status=true,value=1.25 result=output", times[0])
+		if got.CandidateValue != wantValue {
+			t.Fatalf("record execution sample[%d] value = %q, want %q", i, got.CandidateValue, wantValue)
 		}
 	}
 	if got, want := len(decode.CursorOutputSamples), 6; got != want {
