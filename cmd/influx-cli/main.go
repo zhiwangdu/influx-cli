@@ -347,7 +347,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.seriesIDs, "series-id", nil, "series ID to inspect; for TSSP it also participates in query decode-path planning and requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.metaIndexIDs, "meta-index-id", nil, "openGemini detached TSSP meta-index ID to include in query decode-path planning; repeat for multiple IDs")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.columns, "column", nil, "TSSP column name to project during local data ReadAt planning and block probes; repeat for multiple columns; requires --from/--to")
-	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key==value, key!=value, key<>value, key exists, key not-exists, key !exists, key=~<pattern>, key!~<pattern>, key matches/match/regex/regexp <pattern> and not/! variants, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key !> value, key !>= value, key !< value, key !<= value, key not > value, key not >= value, key not < value, key not <= value as inverse ordered comparison aliases, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), key not-between (lower,upper), key contains/icontains value, key not-contains/not-icontains value, key like/ilike pattern, key not-like/not-ilike pattern, key starts-with/istarts-with value, key not-starts-with/not-istarts-with value, key ends-with/iends-with value, or key not-ends-with/not-iends-with value for local record filtering, including decoded time when present; multi-word operators also accept hyphen, space, or underscore separators; range parentheses are optional; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
+	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.fields, "field", nil, "TSSP decoded field predicate as key=value, key==value, key equals/equal value, key!=value, key<>value, key not-equals/not equals/not_equals value, key not = value, key not == value, key !equals/!equal value, key exists, key not-exists, key !exists, key=~<pattern>, key!~<pattern>, key matches/match/regex/regexp <pattern> and not/! variants, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key !> value, key !>= value, key !< value, key !<= value, key not > value, key not >= value, key not < value, key not <= value as inverse ordered comparison aliases, key in (value1,value2), key not-in (value1,value2), key between (lower,upper), key not-between (lower,upper), key contains/icontains value, key not-contains/not-icontains value, key like/ilike pattern, key not-like/not-ilike pattern, key starts-with/istarts-with value, key not-starts-with/not-istarts-with value, key ends-with/iends-with value, or key not-ends-with/not-iends-with value for local record filtering, including decoded time when present; multi-word operators also accept hyphen, space, or underscore separators; range parentheses are optional; quote string values that contain commas or parentheses; repeat for multiple fields; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.anyFields, "field-any", nil, "TSSP decoded field predicate using the same syntax as --field; at least one repeated --field-any predicate must match; combines with --field as required AND predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.noneFields, "field-none", nil, "TSSP decoded field predicate using the same syntax as --field; no repeated --field-none predicate may match; combines after required AND and OR predicates; requires --from/--to")
 	analyzeCommand.Flags().StringArrayVar(&analyzeFlags.measurements, "measurement", nil, "TSI measurement name to inspect; repeat for multiple measurements")
@@ -472,7 +472,7 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key!=value, key<>value, key exists, key not-exists, key !exists, key=~<pattern>, key!~<pattern>, key matches/match/regex/regexp <pattern> and not/! variants, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key !> value, key !>= value, key !< value, key !<= value, key not > value, key not >= value, key not < value, key not <= value as inverse ordered comparison aliases, key in (value1,value2), key not-in (value1,value2), key !in (value1,value2), key between (lower,upper), key not-between (lower,upper), key !between (lower,upper), key contains/icontains value, key not-contains/not-icontains value, key !contains/!icontains value, key like/ilike pattern, key not-like/not-ilike pattern, key !like/!ilike pattern, key starts-with/istarts-with value, key not-starts-with/not-istarts-with value, key !starts-with/!istarts-with value, key ends-with/iends-with value, key not-ends-with/not-iends-with value, or key !ends-with/!iends-with value; multi-word operators also accept hyphen, space, or underscore separators; range parentheses are optional", value)
+			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key equals/equal value, key!=value, key<>value, key not-equals/not equals/not_equals value, key not = value, key not == value, key !equals/!equal value, key exists, key not-exists, key !exists, key=~<pattern>, key!~<pattern>, key matches/match/regex/regexp <pattern> and not/! variants, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key !> value, key !>= value, key !< value, key !<= value, key not > value, key not >= value, key not < value, key not <= value as inverse ordered comparison aliases, key in (value1,value2), key not-in (value1,value2), key !in (value1,value2), key between (lower,upper), key not-between (lower,upper), key !between (lower,upper), key contains/icontains value, key not-contains/not-icontains value, key !contains/!icontains value, key like/ilike pattern, key not-like/not-ilike pattern, key !like/!ilike pattern, key starts-with/istarts-with value, key not-starts-with/not-istarts-with value, key !starts-with/!istarts-with value, key ends-with/iends-with value, key not-ends-with/not-iends-with value, or key !ends-with/!iends-with value; multi-word operators also accept hyphen, space, or underscore separators; range parentheses are optional", value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
@@ -549,6 +549,16 @@ func splitStorageFieldWordFilter(value string) (string, string, string, int, boo
 		{text: "not between", op: "not-between"},
 		{text: "not_between", op: "not-between"},
 		{text: "!between", op: "not-between"},
+		{text: "not-equals", op: "!="},
+		{text: "not equals", op: "!="},
+		{text: "not_equals", op: "!="},
+		{text: "not-equal", op: "!="},
+		{text: "not equal", op: "!="},
+		{text: "not_equal", op: "!="},
+		{text: "not ==", op: "!="},
+		{text: "not =", op: "!="},
+		{text: "!equals", op: "!="},
+		{text: "!equal", op: "!="},
 		{text: "not->=", op: "!>="},
 		{text: "not_>=", op: "!>="},
 		{text: "not >=", op: "!>="},
@@ -625,6 +635,8 @@ func splitStorageFieldWordFilter(value string) (string, string, string, int, boo
 		{text: "is not", op: "!="},
 		{text: "is_not", op: "!="},
 		{text: "is", op: "="},
+		{text: "equals", op: "="},
+		{text: "equal", op: "="},
 		{text: "between", op: "between"},
 		{text: "istarts-with", op: "istarts-with"},
 		{text: "istarts with", op: "istarts-with"},
@@ -659,7 +671,7 @@ func splitStorageFieldWordFilter(value string) (string, string, string, int, boo
 
 func storageFieldWordOperatorCanPrecedeLaterSymbol(op string) bool {
 	switch op {
-	case "=~", "!~", "!>", "!>=", "!<", "!<=", "contains", "not-contains", "icontains", "not-icontains", "like", "not-like", "ilike", "not-ilike", "starts-with", "not-starts-with", "istarts-with", "not-istarts-with", "ends-with", "not-ends-with", "iends-with", "not-iends-with":
+	case "=", "!=", "=~", "!~", "!>", "!>=", "!<", "!<=", "contains", "not-contains", "icontains", "not-icontains", "like", "not-like", "ilike", "not-ilike", "starts-with", "not-starts-with", "istarts-with", "not-istarts-with", "ends-with", "not-ends-with", "iends-with", "not-iends-with":
 		return true
 	default:
 		return false

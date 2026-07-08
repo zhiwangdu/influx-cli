@@ -93,6 +93,14 @@ func TestParseStorageFieldFilters(t *testing.T) {
 	got, err := parseStorageFieldFilters([]string{
 		" value = 99 ",
 		"",
+		"device equals cpu",
+		"mode equal auto",
+		"raw !equals zero",
+		"phase not_equals stop",
+		"field not = value",
+		"field not == value",
+		"message equals a=b",
+		"message not equals a=b",
 		"status!=true",
 		"temperature>=1.5",
 		"temperature!>1.5",
@@ -141,6 +149,14 @@ func TestParseStorageFieldFilters(t *testing.T) {
 		value string
 	}{
 		{"value", "", "99"},
+		{"device", "", "cpu"},
+		{"mode", "", "auto"},
+		{"raw", "!=", "zero"},
+		{"phase", "!=", "stop"},
+		{"field", "!=", "value"},
+		{"field", "!=", "value"},
+		{"message", "", "a=b"},
+		{"message", "!=", "a=b"},
 		{"status", "!=", "true"},
 		{"temperature", ">=", "1.5"},
 		{"temperature", "<=", "1.5"},
@@ -202,6 +218,8 @@ func TestParseStorageFieldFiltersUsesLeftmostSymbolOperator(t *testing.T) {
 		`temperature>=>`,
 		`temperature!>=10`,
 		`message=a!>b`,
+		`message equals a=b`,
+		`message not equals a=b`,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -221,6 +239,8 @@ func TestParseStorageFieldFiltersUsesLeftmostSymbolOperator(t *testing.T) {
 		{"temperature", ">=", ">"},
 		{"temperature", "<", "10"},
 		{"message", "", "a!>b"},
+		{"message", "", "a=b"},
+		{"message", "!=", "a=b"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("field filters = %d, want %d", len(got), len(want))

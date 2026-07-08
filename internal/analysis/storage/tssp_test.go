@@ -1196,6 +1196,72 @@ func TestTSSPDataBlockFilterRowsMatchesNegatedComparisonAliases(t *testing.T) {
 	}
 }
 
+func TestTSSPDataBlockFilterRowsMatchesEqualityWordAliases(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			RowsKnown:  true,
+			Rows:       2,
+			ValueKnown: true,
+			Values:     []string{"100", "200"},
+		},
+		"status": {
+			Type:       "string",
+			RowsKnown:  true,
+			Rows:       2,
+			ValueKnown: true,
+			Values:     []string{"ok", "fail"},
+		},
+	}
+	queryRange, err := NewTimeRange(100, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, matches, filterRows, stats, ok := tsspDataBlockFilterRows(
+		blocks,
+		[]FieldFilter{{Key: "status", Op: "equals", Value: "ok"}},
+		[]FieldFilter{{Key: "status", Op: "not equals", Value: "fail"}},
+		nil,
+		2,
+		tsspTimeRange{Min: 100, Max: 200},
+		queryRange,
+		"sid:7",
+		0,
+		2,
+	)
+	if !ok {
+		t.Fatal("filter rows returned unavailable")
+	}
+	if got, want := rows, []bool{true, false}; !equalBools(got, want) {
+		t.Fatalf("matching rows = %v, want %v", got, want)
+	}
+	if got, want := matches, 1; got != want {
+		t.Fatalf("matches = %d, want %d", got, want)
+	}
+	if got, want := filterRows, 2; got != want {
+		t.Fatalf("filter rows = %d, want %d", got, want)
+	}
+	for op, want := range map[string]int{"=": 2, "!=": 1} {
+		if got := stats.OperatorEvaluations[op]; got != want {
+			t.Fatalf("%s operator evaluations = %d, want %d", op, got, want)
+		}
+	}
+	wantSamples := []struct {
+		action string
+		value  string
+	}{
+		{"filter_row_match", "row=0 time=100 required=1/1 any=1/1 none=0/0 skips=0/0/0 values=status=ok decisions=required:status:=:ok:match;any:status:!=:fail:match result=match"},
+		{"filter_row_reject_required", "row=1 time=200 required=0/1 any=0/0 none=0/0 skips=0/1/0 values=status=fail decisions=required:status:=:ok:miss result=reject_required"},
+	}
+	for i, want := range wantSamples {
+		got := stats.FilterExecutionSamples[i]
+		if got.Action != want.action || got.CandidateValue != want.value {
+			t.Fatalf("filter execution sample[%d] = %+v, want action=%q value=%q", i, got, want.action, want.value)
+		}
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)
@@ -6445,6 +6511,61 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "state", Op: "is_not", Value: "null"}), "!="; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeQueryFieldsNormalizesEqualityWordOperators(t *testing.T) {
+	filters := normalizeFieldFilters([]FieldFilter{
+		{Key: "a_eq_word", Op: "equals", Value: "ok"},
+		{Key: "b_eq_short", Op: "equal", Value: "ok"},
+		{Key: "c_ne_words", Op: "not equals", Value: "bad"},
+		{Key: "d_ne_hyphen", Op: "not-equals", Value: "bad"},
+		{Key: "e_ne_under", Op: "not_equals", Value: "bad"},
+		{Key: "f_ne_word_short", Op: "not equal", Value: "bad"},
+		{Key: "g_ne_hyphen_short", Op: "not-equal", Value: "bad"},
+		{Key: "h_ne_under_short", Op: "not_equal", Value: "bad"},
+		{Key: "i_ne_symbol_word", Op: "not =", Value: "bad"},
+		{Key: "j_ne_symbol_double", Op: "not ==", Value: "bad"},
+		{Key: "k_ne_bang", Op: "!equals", Value: "bad"},
+		{Key: "l_ne_bang_short", Op: "!equal", Value: "bad"},
+	})
+	want := []FieldFilter{
+		{Key: "a_eq_word", Value: "ok"},
+		{Key: "b_eq_short", Value: "ok"},
+		{Key: "c_ne_words", Op: "!=", Value: "bad"},
+		{Key: "d_ne_hyphen", Op: "!=", Value: "bad"},
+		{Key: "e_ne_under", Op: "!=", Value: "bad"},
+		{Key: "f_ne_word_short", Op: "!=", Value: "bad"},
+		{Key: "g_ne_hyphen_short", Op: "!=", Value: "bad"},
+		{Key: "h_ne_under_short", Op: "!=", Value: "bad"},
+		{Key: "i_ne_symbol_word", Op: "!=", Value: "bad"},
+		{Key: "j_ne_symbol_double", Op: "!=", Value: "bad"},
+		{Key: "k_ne_bang", Op: "!=", Value: "bad"},
+		{Key: "l_ne_bang_short", Op: "!=", Value: "bad"},
+	}
+	if !equalFieldFilters(filters, want) {
+		t.Fatalf("filters = %v, want %v", filters, want)
+	}
+	if err := validateFieldFilters(filters); err != nil {
+		t.Fatalf("validate field filters: %v", err)
+	}
+	for _, tc := range []struct {
+		filter FieldFilter
+		want   string
+	}{
+		{FieldFilter{Key: "value", Op: "equals", Value: "ok"}, "="},
+		{FieldFilter{Key: "value", Op: "equal", Value: "ok"}, "="},
+		{FieldFilter{Key: "value", Op: "not equals", Value: "bad"}, "!="},
+		{FieldFilter{Key: "value", Op: "not_equals", Value: "bad"}, "!="},
+		{FieldFilter{Key: "value", Op: "not-equal", Value: "bad"}, "!="},
+		{FieldFilter{Key: "value", Op: "not =", Value: "bad"}, "!="},
+		{FieldFilter{Key: "value", Op: "not ==", Value: "bad"}, "!="},
+		{FieldFilter{Key: "value", Op: "!equals", Value: "bad"}, "!="},
+		{FieldFilter{Key: "value", Op: "!equal", Value: "bad"}, "!="},
+	} {
+		if got := fieldFilterOperator(tc.filter); got != tc.want {
+			t.Fatalf("field filter operator for %+v = %q, want %q", tc.filter, got, tc.want)
+		}
 	}
 }
 

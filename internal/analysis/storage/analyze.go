@@ -233,9 +233,9 @@ func normalizeFieldFilterOperator(op string) string {
 	op = strings.ToLower(strings.TrimSpace(op))
 	op = strings.ReplaceAll(op, "_", "-")
 	switch op {
-	case "=", "==", "is", "":
+	case "=", "==", "is", "equals", "equal", "":
 		return ""
-	case "<>":
+	case "<>", "not equals", "not-equals", "not equal", "not-equal", "not ==", "not =", "!equals", "!equal":
 		return "!="
 	case "!>", "not >", "not->":
 		return "<="
