@@ -227,6 +227,12 @@ func TestAnalyzeMergesetPartMetadata(t *testing.T) {
 	if got := []byte(decode.CursorOutputSamples[1].OptimizedValue); !bytes.Equal(got, wantSecondOutput) {
 		t.Fatalf("second cursor output sample = %x, want %x", got, wantSecondOutput)
 	}
+	if got, want := decode.CursorOutputSamples[1].KeyHex, hex.EncodeToString(wantSecondOutput); got != want {
+		t.Fatalf("second cursor output key hex = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[1].OptimizedValueHex, hex.EncodeToString(wantSecondOutput); got != want {
+		t.Fatalf("second cursor output value hex = %q, want %q", got, want)
+	}
 	if !containsString(decode.Recommendations, "scan 41 decoded mergeset item") {
 		t.Fatalf("recommendations = %v, want scan recommendation", decode.Recommendations)
 	}
@@ -377,6 +383,12 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 	if got := []byte(decode.CursorOutputSamples[1].OptimizedValue); !bytes.Equal(got, wantSecondOutput) {
 		t.Fatalf("second cursor output sample = %x, want %x", got, wantSecondOutput)
 	}
+	if got, want := decode.CursorOutputSamples[1].KeyHex, hex.EncodeToString(wantSecondOutput); got != want {
+		t.Fatalf("second cursor output key hex = %q, want %q", got, want)
+	}
+	if got, want := decode.CursorOutputSamples[1].OptimizedValueHex, hex.EncodeToString(wantSecondOutput); got != want {
+		t.Fatalf("second cursor output value hex = %q, want %q", got, want)
+	}
 	if got, want := decode.CursorOutputSamples[1].File, partPath1; got != want {
 		t.Fatalf("second cursor output files = %v, want %v", got, want)
 	}
@@ -404,6 +416,11 @@ func TestAnalyzeMergesetFileSetTableScan(t *testing.T) {
 		got := decode.CursorFinalOutputSamples[i]
 		if got.OptimizedValue != want.value {
 			t.Fatalf("cursor final output sample[%d] value = %q, want %q", i, got.OptimizedValue, want.value)
+		}
+		if i == 1 {
+			if gotHex, wantHex := got.OptimizedValueHex, hex.EncodeToString(wantSecondOutput); gotHex != wantHex {
+				t.Fatalf("cursor final output sample[%d] value hex = %q, want %q", i, gotHex, wantHex)
+			}
 		}
 		if got.File != want.file {
 			t.Fatalf("cursor final output sample[%d] file = %q, want %q", i, got.File, want.file)
@@ -494,6 +511,10 @@ func TestAnalyzeMergesetFileSetTableScanSingleStreamHeapAccounting(t *testing.T)
 	}
 	if got := decode.CursorExecutionSamples[1]; got.Step != 2 || got.Action != "heap_pop_cursor_advance" || got.CursorIndexBefore != 1 || got.CursorIndexAfter != 2 || !got.CursorAdvanced {
 		t.Fatalf("cursor execution sample[1] = %+v, want second local advance", got)
+	}
+	wantSecondKey := []byte{'a', 'a', 0, 0, 0, 0, 0, 0, 0, 1}
+	if got, want := decode.CursorExecutionSamples[1].KeyHex, hex.EncodeToString(wantSecondKey); got != want {
+		t.Fatalf("cursor execution sample[1] key hex = %q, want %q", got, want)
 	}
 }
 
@@ -2578,6 +2599,68 @@ func TestAnalyzeMergesetQueryKeySearch(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "final item-search output samples show exact local mergeset seek results") {
 		t.Fatalf("recommendations = %v, want final output recommendation", decode.Recommendations)
+	}
+}
+
+func TestAnalyzeMergesetQueryKeySearchBinaryItemHexSamples(t *testing.T) {
+	partPath := filepath.Join(t.TempDir(), "41_2_1847A3A45055EEF0")
+	if err := writeTestMergesetPart(partPath, mergesetPartMetadata{
+		ItemsCount:  41,
+		BlocksCount: 2,
+		FirstItem:   "6161",
+		LastItem:    "7a7a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	queryItem := []byte{'a', 'a', 0, 0, 0, 0, 0, 0, 0, 1}
+	queryKey := string(queryItem)
+	queryHex := hex.EncodeToString(queryItem)
+
+	report, err := Analyze(context.Background(), []string{partPath}, Options{
+		Format:           FormatMergeset,
+		QueryKeys:        []string{queryKey},
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileDecode := report.Files[0].DecodePath
+	if fileDecode == nil {
+		t.Fatal("expected file decode path")
+	}
+	if got, want := len(fileDecode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("file cursor output samples = %d, want %d", got, want)
+	}
+	fileOutput := fileDecode.CursorOutputSamples[0]
+	if got := []byte(fileOutput.OptimizedValue); !bytes.Equal(got, queryItem) {
+		t.Fatalf("file cursor output value = %x, want %x", got, queryItem)
+	}
+	if got, want := fileOutput.KeyHex, queryHex; got != want {
+		t.Fatalf("file cursor output key hex = %q, want %q", got, want)
+	}
+	if got, want := fileOutput.OptimizedValueHex, queryHex; got != want {
+		t.Fatalf("file cursor output value hex = %q, want %q", got, want)
+	}
+	if got, want := len(fileDecode.CursorFinalOutputSamples), 1; got != want {
+		t.Fatalf("file final output samples = %d, want %d", got, want)
+	}
+	if got, want := fileDecode.CursorFinalOutputSamples[0].OptimizedValueHex, queryHex; got != want {
+		t.Fatalf("file final output value hex = %q, want %q", got, want)
+	}
+
+	fileSetDecode := report.DecodePath
+	if fileSetDecode == nil {
+		t.Fatal("expected file-set decode path")
+	}
+	if got, want := len(fileSetDecode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("file-set cursor execution samples = %d, want %d", got, want)
+	}
+	step := fileSetDecode.CursorExecutionSamples[0]
+	if got, want := step.KeyHex, queryHex; got != want {
+		t.Fatalf("file-set execution key hex = %q, want %q", got, want)
+	}
+	if got, want := step.CandidateValueHex, queryHex; got != want {
+		t.Fatalf("file-set execution candidate hex = %q, want %q", got, want)
 	}
 }
 

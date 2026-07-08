@@ -96,7 +96,7 @@ func mergeMergesetFileSetSearchCandidates(summary *DecodePathSummary, candidates
 			result := heap.Pop(&candidateHeap).(mergesetSeekResult)
 			heapPops++
 			results[key] = result
-			appendMergesetFileSetSearchExecutionSample(summary, options.BlockSampleLimit, DecodePathCursorStep{
+			appendMergesetFileSetSearchExecutionSample(summary, options.BlockSampleLimit, withMergesetCursorStepHex(DecodePathCursorStep{
 				Step:                heapPops,
 				Type:                "mergeset-table-search-candidate-heap-step",
 				Action:              mergesetFileSetSearchExecutionAction(result.Matches),
@@ -108,7 +108,7 @@ func mergeMergesetFileSetSearchCandidates(summary *DecodePathSummary, candidates
 				HeapSizeAfterAction: candidateHeap.Len(),
 				CursorIndexBefore:   -1,
 				CursorIndexAfter:    -1,
-			})
+			}, []byte(key), result.Item))
 		}
 	}
 	return results, heapInserts, heapPops
@@ -311,15 +311,10 @@ func populateMergesetFileSetCursorOutputSamples(summary *DecodePathSummary, tabl
 		}
 		files := uniqueStringsPreserveOrder(matchedKeyFiles[key])
 		requiresDedup := result.Matches && len(files) > 1
-		output := DecodePathCursorOutput{
-			Key:            key,
-			Type:           "mergeset-table-search-item",
-			File:           result.File,
-			OptimizedValue: string(result.Item),
-			Matches:        result.Matches,
-			RequiresDedup:  requiresDedup,
-			RequiresMerge:  requiresDedup,
-		}
+		output := newMergesetCursorOutputSample(key, "mergeset-table-search-item", result.Item, result.Matches)
+		output.File = result.File
+		output.RequiresDedup = requiresDedup
+		output.RequiresMerge = requiresDedup
 		if requiresDedup {
 			output.MergeFiles = newDecodePathStringList(files)
 		}
@@ -341,15 +336,10 @@ func populateMergesetFileSetFinalSearchOutputSamples(summary *DecodePathSummary,
 		}
 		files := uniqueStringsPreserveOrder(matchedKeyFiles[key])
 		requiresDedup := len(files) > 1
-		output := DecodePathCursorOutput{
-			Key:            key,
-			Type:           "mergeset-table-search-final-output-item",
-			File:           result.File,
-			OptimizedValue: string(result.Item),
-			Matches:        true,
-			RequiresDedup:  requiresDedup,
-			RequiresMerge:  requiresDedup,
-		}
+		output := newMergesetCursorOutputSample(key, "mergeset-table-search-final-output-item", result.Item, true)
+		output.File = result.File
+		output.RequiresDedup = requiresDedup
+		output.RequiresMerge = requiresDedup
 		if requiresDedup {
 			output.MergeFiles = newDecodePathStringList(files)
 		}
@@ -489,14 +479,9 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 			}
 		}
 		if options.BlockSampleLimit > 0 && len(summary.CursorFinalOutputSamples) < options.BlockSampleLimit {
-			output := DecodePathCursorOutput{
-				Key:            string(previous),
-				Type:           "mergeset-table-final-output-item",
-				OptimizedValue: string(previous),
-				Matches:        true,
-				RequiresDedup:  groupSize > 1,
-				RequiresMerge:  requiresMerge,
-			}
+			output := newMergesetCursorOutputSample(string(previous), "mergeset-table-final-output-item", previous, true)
+			output.RequiresDedup = groupSize > 1
+			output.RequiresMerge = requiresMerge
 			if len(groupFiles) > 0 {
 				output.File = groupFiles[0]
 			}
@@ -527,13 +512,9 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 		groupFiles = append(groupFiles, stream.path)
 		if options.BlockSampleLimit > 0 && len(summary.CursorOutputSamples) < options.BlockSampleLimit {
 			sampleIndex := len(summary.CursorOutputSamples)
-			summary.CursorOutputSamples = append(summary.CursorOutputSamples, DecodePathCursorOutput{
-				Key:            string(item),
-				Type:           "mergeset-table-search-item",
-				File:           stream.path,
-				OptimizedValue: string(item),
-				Matches:        true,
-			})
+			output := newMergesetCursorOutputSample(string(item), "mergeset-table-search-item", item, true)
+			output.File = stream.path
+			summary.CursorOutputSamples = append(summary.CursorOutputSamples, output)
 			groupSampleIndexes = append(groupSampleIndexes, sampleIndex)
 		}
 		advanced := stream.advance(options.CursorDescending)
@@ -545,7 +526,7 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 		} else {
 			cursorExhaustions++
 		}
-		appendMergesetFileSetScanExecutionSample(summary, options.BlockSampleLimit, DecodePathCursorStep{
+		appendMergesetFileSetScanExecutionSample(summary, options.BlockSampleLimit, withMergesetCursorStepHex(DecodePathCursorStep{
 			Step:                total,
 			Type:                "mergeset-table-scan-heap-step",
 			Action:              mergesetFileSetScanExecutionAction(advanced),
@@ -558,7 +539,7 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 			CursorIndexAfter:    stream.index,
 			CursorAdvanced:      advanced,
 			CursorExhausted:     exhausted,
-		})
+		}, item, nil))
 	}
 	finishGroup()
 	summary.TableSearchHeapInserts = heapInserts

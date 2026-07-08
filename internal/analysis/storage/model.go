@@ -493,16 +493,18 @@ type DecodePathCursorWindow struct {
 }
 
 type DecodePathCursorOutput struct {
-	Key            string               `json:"key"`
-	Time           int64                `json:"time"`
-	Type           string               `json:"type"`
-	File           string               `json:"file,omitempty"`
-	MergeFiles     DecodePathStringList `json:"merge_files,omitempty"`
-	BaselineValue  string               `json:"baseline_value,omitempty"`
-	OptimizedValue string               `json:"optimized_value,omitempty"`
-	Matches        bool                 `json:"matches"`
-	RequiresDedup  bool                 `json:"requires_dedup,omitempty"`
-	RequiresMerge  bool                 `json:"requires_merge,omitempty"`
+	Key               string               `json:"key"`
+	KeyHex            string               `json:"key_hex,omitempty"`
+	Time              int64                `json:"time"`
+	Type              string               `json:"type"`
+	File              string               `json:"file,omitempty"`
+	MergeFiles        DecodePathStringList `json:"merge_files,omitempty"`
+	BaselineValue     string               `json:"baseline_value,omitempty"`
+	OptimizedValue    string               `json:"optimized_value,omitempty"`
+	OptimizedValueHex string               `json:"optimized_value_hex,omitempty"`
+	Matches           bool                 `json:"matches"`
+	RequiresDedup     bool                 `json:"requires_dedup,omitempty"`
+	RequiresMerge     bool                 `json:"requires_merge,omitempty"`
 }
 
 type DecodePathCursorStep struct {
@@ -510,7 +512,9 @@ type DecodePathCursorStep struct {
 	Type                string `json:"type"`
 	Action              string `json:"action"`
 	Key                 string `json:"key"`
+	KeyHex              string `json:"key_hex,omitempty"`
 	CandidateValue      string `json:"candidate_value,omitempty"`
+	CandidateValueHex   string `json:"candidate_value_hex,omitempty"`
 	File                string `json:"file,omitempty"`
 	HeapSizeBefore      int    `json:"heap_size_before"`
 	HeapSizeAfterPop    int    `json:"heap_size_after_pop"`

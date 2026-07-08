@@ -1398,12 +1398,7 @@ func (p *mergesetScanPlan) ObserveDecodedBlock(index int, header mergesetBlockHe
 		if len(summary.CursorOutputSamples) >= p.SampleLimit {
 			break
 		}
-		output := DecodePathCursorOutput{
-			Key:            string(item),
-			Type:           "mergeset-table-scan-item",
-			OptimizedValue: string(item),
-			Matches:        true,
-		}
+		output := newMergesetCursorOutputSample(string(item), "mergeset-table-scan-item", item, true)
 		if p.DecodePath.Mode == "mergeset-table-scan-descending" {
 			summary.CursorOutputSamples = append([]DecodePathCursorOutput{output}, summary.CursorOutputSamples...)
 		} else {
@@ -1535,23 +1530,13 @@ func (p *mergesetSearchPlan) ObserveDecodedBlock(index int, decoded mergesetDeco
 		}
 		if !result.Matches {
 			if len(p.DecodePath.CursorOutputSamples) < p.SampleLimit {
-				p.DecodePath.CursorOutputSamples = append(p.DecodePath.CursorOutputSamples, DecodePathCursorOutput{
-					Key:            key,
-					Type:           "mergeset-item",
-					OptimizedValue: string(result.Item),
-					Matches:        false,
-				})
+				p.DecodePath.CursorOutputSamples = append(p.DecodePath.CursorOutputSamples, newMergesetCursorOutputSample(key, "mergeset-item", result.Item, false))
 			}
 			continue
 		}
 		p.MatchedKeys[key] = struct{}{}
 		if len(p.DecodePath.CursorOutputSamples) < p.SampleLimit {
-			p.DecodePath.CursorOutputSamples = append(p.DecodePath.CursorOutputSamples, DecodePathCursorOutput{
-				Key:            key,
-				Type:           "mergeset-item",
-				OptimizedValue: string(result.Item),
-				Matches:        true,
-			})
+			p.DecodePath.CursorOutputSamples = append(p.DecodePath.CursorOutputSamples, newMergesetCursorOutputSample(key, "mergeset-item", result.Item, true))
 		}
 	}
 }
@@ -1598,13 +1583,47 @@ func populateMergesetSearchFinalOutputSamples(summary *DecodePathSummary, seekRe
 		if !ok || !result.Matches {
 			continue
 		}
-		summary.CursorFinalOutputSamples = append(summary.CursorFinalOutputSamples, DecodePathCursorOutput{
-			Key:            key,
-			Type:           "mergeset-item-search-final-output-item",
-			OptimizedValue: string(result.Item),
-			Matches:        true,
-		})
+		summary.CursorFinalOutputSamples = append(summary.CursorFinalOutputSamples, newMergesetCursorOutputSample(key, "mergeset-item-search-final-output-item", result.Item, true))
 	}
+}
+
+func newMergesetCursorOutputSample(key, typ string, item []byte, matches bool) DecodePathCursorOutput {
+	return DecodePathCursorOutput{
+		Key:               key,
+		KeyHex:            mergesetDiagnosticHex([]byte(key)),
+		Type:              typ,
+		OptimizedValue:    string(item),
+		OptimizedValueHex: mergesetDiagnosticHex(item),
+		Matches:           matches,
+	}
+}
+
+func withMergesetCursorStepHex(sample DecodePathCursorStep, key, candidate []byte) DecodePathCursorStep {
+	if key != nil {
+		sample.KeyHex = mergesetDiagnosticHex(key)
+	}
+	if candidate != nil {
+		sample.CandidateValueHex = mergesetDiagnosticHex(candidate)
+	}
+	return sample
+}
+
+func mergesetDiagnosticHex(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	remaining := data
+	for len(remaining) > 0 {
+		r, size := utf8.DecodeRune(remaining)
+		if r == utf8.RuneError && size == 1 {
+			return hex.EncodeToString(data)
+		}
+		if !strconv.IsPrint(r) {
+			return hex.EncodeToString(data)
+		}
+		remaining = remaining[size:]
+	}
+	return ""
 }
 
 func mergesetSearchMode(options Options) string {
