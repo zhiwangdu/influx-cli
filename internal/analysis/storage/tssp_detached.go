@@ -2135,19 +2135,41 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 		timestamp := timestamps[row]
 		if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
 			stats.RangeRejects++
+			if recordStepLimit > 0 && len(recordSteps) < recordStepLimit {
+				values := tsspDataProbeRecordValues(blocks, columnNames, row)
+				recordSteps = append(recordSteps, DecodePathCursorStep{
+					Step:              len(recordSteps) + 1,
+					Type:              "tssp-record-row-step",
+					Action:            "record_row_range_reject",
+					Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
+					CandidateValue:    tsspRecordExecutionCandidateValue(row, -1, timestamp, len(columnNames), values, queryRange, "range_reject"),
+					CursorIndexBefore: row,
+					CursorIndexAfter:  row + 1,
+					CursorAdvanced:    true,
+				})
+			}
 			continue
 		}
 		if !tsspDataBlockRowMatches(matchingRows, row) {
 			stats.FilterRejects++
+			if recordStepLimit > 0 && len(recordSteps) < recordStepLimit {
+				values := tsspDataProbeRecordValues(blocks, columnNames, row)
+				recordSteps = append(recordSteps, DecodePathCursorStep{
+					Step:              len(recordSteps) + 1,
+					Type:              "tssp-record-row-step",
+					Action:            "record_row_filter_reject",
+					Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
+					CandidateValue:    tsspRecordExecutionCandidateValue(row, -1, timestamp, len(columnNames), values, queryRange, "filter_reject"),
+					CursorIndexBefore: row,
+					CursorIndexAfter:  row + 1,
+					CursorAdvanced:    true,
+				})
+			}
 			continue
 		}
 		sampled := sampleLimit > 0 && len(samples) < sampleLimit
 		if sampled {
-			fields := make([]string, 0, len(columnNames))
-			for _, columnName := range columnNames {
-				fields = append(fields, columnName+"="+tsspDataProbeRecordValue(blocks[columnName], row))
-			}
-			values := strings.Join(fields, ",")
+			values := tsspDataProbeRecordValues(blocks, columnNames, row)
 			outputOrdinal := outputOrdinalBase + stats.Outputs
 			samples = append(samples, DecodePathCursorOutput{
 				Key:            fmt.Sprintf("%s:%d/record", keyPrefix, id),
@@ -2164,7 +2186,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 					Type:              "tssp-record-row-step",
 					Action:            "record_row_output",
 					Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
-					CandidateValue:    tsspRecordExecutionCandidateValue(row, outputOrdinal, timestamp, len(columnNames), values, queryRange),
+					CandidateValue:    tsspRecordExecutionCandidateValue(row, outputOrdinal, timestamp, len(columnNames), values, queryRange, "output"),
 					CursorIndexBefore: row,
 					CursorIndexAfter:  row + 1,
 					CursorAdvanced:    true,
@@ -2176,19 +2198,31 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 	return samples, recordSteps, stats
 }
 
-func tsspRecordExecutionCandidateValue(row int, localOutput int, timestamp int64, columnCount int, values string, queryRange TimeRange) string {
+func tsspDataProbeRecordValues(blocks map[string]tsspDetachedDataBlockInfo, columnNames []string, row int) string {
+	fields := make([]string, 0, len(columnNames))
+	for _, columnName := range columnNames {
+		fields = append(fields, columnName+"="+tsspDataProbeRecordValue(blocks[columnName], row))
+	}
+	return strings.Join(fields, ",")
+}
+
+func tsspRecordExecutionCandidateValue(row int, localOutput int, timestamp int64, columnCount int, values string, queryRange TimeRange, result string) string {
 	parts := []string{
 		fmt.Sprintf("row=%d", row),
-		fmt.Sprintf("local_output=%d", localOutput),
-		fmt.Sprintf("time=%d", timestamp),
 	}
+	if localOutput >= 0 {
+		parts = append(parts, fmt.Sprintf("local_output=%d", localOutput))
+	} else {
+		parts = append(parts, "local_output=none")
+	}
+	parts = append(parts, fmt.Sprintf("time=%d", timestamp))
 	if queryRange.Set {
 		parts = append(parts, fmt.Sprintf("range=%d:%d", queryRange.Min, queryRange.Max))
 	}
 	parts = append(parts,
 		fmt.Sprintf("columns=%d", columnCount),
 		"values="+values,
-		"result=output",
+		"result="+result,
 	)
 	return strings.Join(parts, " ")
 }
