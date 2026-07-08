@@ -56,6 +56,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				OptimizedValueOutputPoints:   2,
 				ComparedValueOutputPoints:    2,
 				ValueOutputUnavailableBlocks: 1,
+				ValueOutputMismatches:        1,
 				BaselineCursorOutputPoints:   6,
 				OptimizedCursorOutputPoints:  2,
 				CursorOutputSamples: []DecodePathCursorOutput{
@@ -162,7 +163,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"cursor_reads 3->1",
 		"read_at calls 6->2 saved=4",
 		"iterator_cost files=1 blocks=3 bytes=273",
-		"value_output points=6->2 compared=2 unavailable_blocks=1",
+		"value_output points=6->2 compared=2 unavailable_blocks=1 mismatches=1",
 		"cursor_output points=6->2 samples=2 final_samples=1",
 		"execution windows cursor=2 sampled=1 merge=1 merge_blocks=2 merge_keys=1 samples decisions=1 cursor_steps=1 filter_steps=1 amplification=2.50x",
 		"data_probe blocks=4 bytes=256 valid=3 failures=4 crc_mismatches=1 short=1 unknown_types=1 read_errors=1 row_blocks=3 row_unknowns=1 row_mismatches=1 output_points=2 value_blocks=2 value_unknowns=1 nulls=3 record_samples=1",
@@ -499,6 +500,14 @@ func TestDecodePathTextIncludesValueOutputSparseCounters(t *testing.T) {
 			},
 			want:     "value_output points=0->0 unavailable_blocks=1",
 			notWants: []string{"compared="},
+		},
+		{
+			name: "mismatch-only",
+			summary: DecodePathSummary{
+				ValueOutputMismatches: 1,
+			},
+			want:     "value_output points=0->0 mismatches=1",
+			notWants: []string{"compared=", "unavailable_blocks"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1021,7 +1030,7 @@ func TestReportResultIncludesTSMCursorDecodePathSummary(t *testing.T) {
 		"decode_bytes 256->128 saved=128",
 		"cursor_reads 2->1",
 		"iterator_cost files=2 blocks=3 bytes=256",
-		"mismatches 1",
+		"value_output points=0->0 mismatches=1",
 	} {
 		if !strings.Contains(decodeText, want) {
 			t.Fatalf("decode path summary %q does not contain %q", decodeText, want)

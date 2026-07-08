@@ -879,9 +879,6 @@ func decodePathText(summary *DecodePathSummary) string {
 	if summary.DataBlockProbeFilterSkips > 0 {
 		parts = append(parts, fmt.Sprintf("field_filter_short_circuit skips=%d required=%d any=%d none=%d", summary.DataBlockProbeFilterSkips, summary.DataBlockProbeRequiredSkips, summary.DataBlockProbeAnySkips, summary.DataBlockProbeNoneSkips))
 	}
-	if summary.ValueOutputMismatches > 0 {
-		parts = append(parts, fmt.Sprintf("mismatches %d", summary.ValueOutputMismatches))
-	}
 	return strings.Join(parts, ", ")
 }
 
@@ -1001,7 +998,8 @@ func valueOutputSummaryText(summary *DecodePathSummary) string {
 		return ""
 	}
 	if summary.BaselineValueOutputPoints == 0 && summary.OptimizedValueOutputPoints == 0 &&
-		summary.ComparedValueOutputPoints == 0 && summary.ValueOutputUnavailableBlocks == 0 {
+		summary.ComparedValueOutputPoints == 0 && summary.ValueOutputUnavailableBlocks == 0 &&
+		summary.ValueOutputMismatches == 0 {
 		return ""
 	}
 	parts := []string{fmt.Sprintf("points=%d->%d", summary.BaselineValueOutputPoints, summary.OptimizedValueOutputPoints)}
@@ -1010,6 +1008,9 @@ func valueOutputSummaryText(summary *DecodePathSummary) string {
 	}
 	if summary.ValueOutputUnavailableBlocks > 0 {
 		parts = append(parts, fmt.Sprintf("unavailable_blocks=%d", summary.ValueOutputUnavailableBlocks))
+	}
+	if summary.ValueOutputMismatches > 0 {
+		parts = append(parts, fmt.Sprintf("mismatches=%d", summary.ValueOutputMismatches))
 	}
 	return "value_output " + strings.Join(parts, " ")
 }
