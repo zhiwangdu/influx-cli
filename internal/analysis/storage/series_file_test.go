@@ -75,6 +75,12 @@ func TestAnalyzeSeriesFileDirectory(t *testing.T) {
 	if got, want := file.Index.SeriesRefs, int64(2); got != want {
 		t.Fatalf("series refs = %d, want %d", got, want)
 	}
+	if got, want := uint64PtrValue(file.Index.SeriesIDSetMin), uint64(1); got != want {
+		t.Fatalf("live series id set min = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.SeriesIDSetMax), uint64(2); got != want {
+		t.Fatalf("live series id set max = %d, want %d", got, want)
+	}
 	if got, want := file.Index.TagKeyCount, 2; got != want {
 		t.Fatalf("tag key count = %d, want %d", got, want)
 	}
@@ -83,6 +89,15 @@ func TestAnalyzeSeriesFileDirectory(t *testing.T) {
 	}
 	if got, want := file.Index.TombstoneSeriesIDSetCardinality, int64(1); got != want {
 		t.Fatalf("tombstone cardinality = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.TombstoneSeriesIDSetMin), uint64(9); got != want {
+		t.Fatalf("tombstone series id set min = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.TombstoneSeriesIDSetMax), uint64(9); got != want {
+		t.Fatalf("tombstone series id set max = %d, want %d", got, want)
+	}
+	if details := indexDetailsText(file.Index); !strings.Contains(details, "series_ids=2 range=1:2") || !strings.Contains(details, "series_ids=1 range=9:9") {
+		t.Fatalf("index details = %q, want live and tombstone ranges", details)
 	}
 	if got, want := len(file.Index.MeasurementSamples), 1; got != want {
 		t.Fatalf("measurement samples = %d, want %d", got, want)
@@ -111,6 +126,10 @@ func TestAnalyzeSeriesFileDirectory(t *testing.T) {
 		"tombstone_entry_count":  "1",
 		"live_series_count":      "2",
 		"tombstone_series_count": "1",
+		"live_series_min":        "1",
+		"live_series_max":        "2",
+		"tombstone_series_min":   "9",
+		"tombstone_series_max":   "9",
 		"max_series_id":          "9",
 		"partition_check":        "series-id-modulo",
 		"partition_mismatches":   "0",

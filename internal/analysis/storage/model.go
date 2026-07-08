@@ -228,6 +228,10 @@ type SeriesIDSummary struct {
 	HasRange bool   `json:"-"`
 }
 
+func uint64Ptr(value uint64) *uint64 {
+	return &value
+}
+
 type TombstoneSummary struct {
 	Exists             bool                   `json:"exists"`
 	Path               string                 `json:"path,omitempty"`

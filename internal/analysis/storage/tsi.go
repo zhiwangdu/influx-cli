@@ -120,10 +120,6 @@ type tsiRoaringInspectResult struct {
 	HasRange    bool
 }
 
-func uint64Ptr(value uint64) *uint64 {
-	return &value
-}
-
 func analyzeTSI(path string, info os.FileInfo, options Options) (FileReport, error) {
 	if info.IsDir() {
 		return FileReport{}, fmt.Errorf("tsi format requires a .tsi index file, got directory %s", filepath.Base(path))

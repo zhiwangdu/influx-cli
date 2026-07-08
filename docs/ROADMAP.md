@@ -314,7 +314,7 @@ influx-cli ingest out-of-order --ratio 0.1
 | overlap analysis | block/file 与 query range 关系 |
 | tombstone summary | 删除范围和影响 |
 | TSI summary | series index 概览 |
-| series-file summary | 本地 `_series` partition/segment、live/tombstone series-id、measurement/tag summary |
+| series-file summary | 本地 `_series` partition/segment、live/tombstone series-id count/range、measurement/tag summary |
 | fields-index summary | 本地 `fields.idx`/`fields.idxl` measurement field-type summary |
 
 ### 8.3 L3: Queryable Inspector
@@ -332,7 +332,7 @@ influx-cli ingest out-of-order --ratio 0.1
 
 | 类型 | 说明 |
 | --- | --- |
-| series-file | 已有本地 InfluxDB `_series` 目录、partition directory 和 `SSEG` segment 解析，输出 insert/tombstone entry、live/tombstone series-id、series key sample、measurement/tag summary；`--series-id` 只做本地 ID 检索，不连接数据库或 tsdb runtime |
+| series-file | 已有本地 InfluxDB `_series` 目录、partition directory 和 `SSEG` segment 解析，输出 insert/tombstone entry、live/tombstone series-id count/range、series key sample、measurement/tag summary；`--series-id` 只做本地 ID 检索，不连接数据库或 tsdb runtime |
 | fields-index | 已有本地 InfluxDB `fields.idx` snapshot 和 sibling `fields.idxl` change log 解析，输出 measurement、field、field type 和 add/delete change summary；不调用 shard engine 或 `MeasurementFieldSet` runtime |
 | tssp | openGemini 文件元数据、chunk metadata expansion、local LocationCursor execution samples、`--column` projected ReadAt planning、file-set decoded output provenance/final exact dedup samples、decoded-time row-level query-range filtering/input-match-reject accounting/range execution row samples、`--field` required-AND、`--field-any` OR 与 `--field-none` NOT simple/existence/quoted finite-set/range/regex/like/ilike/contains/icontains/starts-with/istarts-with/ends-with/iends-with/decoded-time/string-ordered decoded-row predicate filtering/input-match-reject/operator accounting/per-clause result evaluation accounting/predicate short-circuit skip accounting/含本地字段值和已评估谓词 decisions 的 filter execution row samples、query-hit projected data block header probe、row-count materialization、one-row value samples、含 null bitmap 的普通 block samples、raw/old-gorilla/snappy/gorilla/same/RLE/MLF float full-block samples、uncompressed/const-delta/simple8b/zstd integer full-block samples、bitpack boolean full-block samples、uncompressed/snappy/zstd/LZ4 string full-block samples、跨列 record samples 和 record execution row samples |
 | tssp-metaindex | openGemini detached `segment.idx` meta-index sidecar、chunk metadata batch planning/local execution samples、sibling `segment.meta` expansion、`--column` projected segment-level data ReadAt planning、decoded-time row-level query-range filtering/input-match-reject accounting/range execution row samples、`--field` required-AND、`--field-any` OR 与 `--field-none` NOT simple/existence/quoted finite-set/range/regex/like/ilike/contains/icontains/starts-with/istarts-with/ends-with/iends-with/decoded-time/string-ordered decoded-row predicate filtering/input-match-reject/operator accounting/per-clause result evaluation accounting/predicate short-circuit skip accounting/含本地字段值和已评估谓词 decisions 的 filter execution row samples、sibling `segment.bin` range validation、query-hit projected data block CRC/header probe、row-count materialization、one-row value samples、含 null bitmap 的普通 block samples、raw/old-gorilla/snappy/gorilla/same/RLE/MLF float full-block samples、uncompressed/const-delta/simple8b/zstd integer full-block samples、bitpack boolean full-block samples、uncompressed/snappy/zstd/LZ4 string full-block samples、跨列 record samples 和 record execution row samples |

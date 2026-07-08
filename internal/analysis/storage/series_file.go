@@ -135,8 +135,18 @@ func analyzeSeriesFile(path string, info os.FileInfo, options Options) (FileRepo
 	index, measurementNames := buildSeriesFileIndexSummary(state, options)
 	index.Type = "series-file"
 	keySamples := seriesFileKeySamples(state, options)
-	minSeriesID, maxLiveSeriesID := seriesIDMinMax(seriesFileLiveIDSet(state.Live))
+	liveSeriesIDs := seriesFileLiveIDSet(state.Live)
+	minSeriesID, maxLiveSeriesID := seriesIDMinMax(liveSeriesIDs)
 	tombstoneSeriesCount := len(state.Tombstones)
+	tombstoneMinSeriesID, tombstoneMaxSeriesID := seriesIDMinMax(state.Tombstones)
+	if len(liveSeriesIDs) > 0 {
+		index.SeriesIDSetMin = uint64Ptr(minSeriesID)
+		index.SeriesIDSetMax = uint64Ptr(maxLiveSeriesID)
+	}
+	if tombstoneSeriesCount > 0 {
+		index.TombstoneSeriesIDSetMin = uint64Ptr(tombstoneMinSeriesID)
+		index.TombstoneSeriesIDSetMax = uint64Ptr(tombstoneMaxSeriesID)
+	}
 
 	extra := map[string]string{
 		"layout":                 layout.Layout,
@@ -153,6 +163,14 @@ func analyzeSeriesFile(path string, info os.FileInfo, options Options) (FileRepo
 		"max_series_id":          fmt.Sprint(maxSeriesID),
 		"partition_check":        "series-id-modulo",
 		"partition_mismatches":   fmt.Sprint(partitionMismatchCount),
+	}
+	if len(liveSeriesIDs) > 0 {
+		extra["live_series_min"] = fmt.Sprint(minSeriesID)
+		extra["live_series_max"] = fmt.Sprint(maxLiveSeriesID)
+	}
+	if tombstoneSeriesCount > 0 {
+		extra["tombstone_series_min"] = fmt.Sprint(tombstoneMinSeriesID)
+		extra["tombstone_series_max"] = fmt.Sprint(tombstoneMaxSeriesID)
 	}
 	if len(partitionMismatchSamples) > 0 {
 		extra["partition_mismatch_samples"] = strings.Join(partitionMismatchSamples, ";")
