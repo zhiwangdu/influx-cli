@@ -155,6 +155,66 @@ func TestAnalyzeFieldsIndexLogOnly(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFieldsIndexQueryMeasurements(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, fieldsIndexFileName)
+	writeTestFieldsIndex(t, path, []fieldsIndexMeasurement{
+		{Name: "cpu", Fields: []fieldsIndexField{{Name: "value", Type: 1}}},
+		{Name: "mem", Fields: []fieldsIndexField{{Name: "used", Type: 4}}},
+	})
+	writeTestFieldsIndexLog(t, filepath.Join(dir, fieldsIndexLogFileName), []fieldsIndexChange{
+		{Measurement: "disk", FieldName: "free", FieldType: 9, Change: fieldsIndexChangeAddMeasurementField},
+		{Measurement: "mem", Change: fieldsIndexChangeDeleteMeasurement},
+	})
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:            FormatFieldsIndex,
+		KeySampleLimit:    1,
+		BlockSampleLimit:  5,
+		QueryMeasurements: []string{" disk ", "cpu", "cpu", "mem"},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if file.Index == nil || file.Index.Query == nil {
+		t.Fatalf("index query summary is nil")
+	}
+	query := file.Index.Query
+	if !query.MeasurementFilterApplied {
+		t.Fatalf("measurement filter applied = false, want true")
+	}
+	if got, want := query.QueryMeasurements, []string{"cpu", "disk", "mem"}; !equalStrings(got, want) {
+		t.Fatalf("query measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MatchedMeasurements, []string{"cpu", "disk"}; !equalStrings(got, want) {
+		t.Fatalf("matched measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MissingMeasurements, []string{"mem"}; !equalStrings(got, want) {
+		t.Fatalf("missing measurements = %v, want %v", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 2; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := len(query.MeasurementSamples), 1; got != want {
+		t.Fatalf("query measurement samples = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].Name, "cpu"; got != want {
+		t.Fatalf("query measurement sample = %q, want %q", got, want)
+	}
+
+	details := report.Result().Table.Rows[0][tableColumnIndex(t, report.Result().Table.Columns, "details")].(string)
+	for _, want := range []string{
+		"index measurements=2",
+		"query measurement_filter=true measurements=3/2/1 candidates=2",
+		"fields measurements=2 fields=2",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details = %q, want %q", details, want)
+		}
+	}
+}
+
 func TestAnalyzeFieldsIndexTruncatedChangeLog(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, fieldsIndexFileName)

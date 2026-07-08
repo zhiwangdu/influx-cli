@@ -125,11 +125,50 @@ func analyzeFieldsIndex(path string, info os.FileInfo, options Options) (FileRep
 		Extra:        extra,
 		Notices:      load.Notices,
 	}
+	if query := buildFieldsIndexQuerySummary(measurements, options); query != nil {
+		report.Index = &IndexSummary{
+			Type:             string(FormatFieldsIndex),
+			MeasurementCount: len(measurements),
+			Query:            query,
+		}
+	}
 	if len(measurements) > 0 {
 		report.MinKey = measurements[0].Name
 		report.MaxKey = measurements[len(measurements)-1].Name
 	}
 	return report, nil
+}
+
+func buildFieldsIndexQuerySummary(measurements []fieldsIndexMeasurement, options Options) *IndexQuerySummary {
+	if len(options.QueryMeasurements) == 0 {
+		return nil
+	}
+	query := &IndexQuerySummary{
+		MeasurementFilterApplied: true,
+		QueryMeasurements:        append([]string(nil), options.QueryMeasurements...),
+	}
+	measurementSet := make(map[string]struct{}, len(measurements))
+	for _, measurement := range measurements {
+		measurementSet[measurement.Name] = struct{}{}
+	}
+	for _, measurement := range query.QueryMeasurements {
+		if _, ok := measurementSet[measurement]; ok {
+			query.MatchedMeasurements = append(query.MatchedMeasurements, measurement)
+		} else {
+			query.MissingMeasurements = append(query.MissingMeasurements, measurement)
+		}
+	}
+	queryMatchSet := queryKeySet(query.MatchedMeasurements)
+	for _, measurement := range measurements {
+		if _, ok := queryMatchSet[measurement.Name]; !ok {
+			continue
+		}
+		query.CandidateMeasurements++
+		if len(query.MeasurementSamples) < options.KeySampleLimit {
+			query.MeasurementSamples = append(query.MeasurementSamples, IndexQueryMeasurementReport{Name: measurement.Name})
+		}
+	}
+	return query
 }
 
 func loadFieldsIndex(path string, info os.FileInfo) (fieldsIndexLoad, error) {
