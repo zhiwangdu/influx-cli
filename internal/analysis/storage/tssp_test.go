@@ -1969,12 +1969,12 @@ func TestTSSPFilterExecutionSamplesEscapeDecisionSeparators(t *testing.T) {
 			ValueKnown: true,
 			Values:     []string{"100"},
 		},
-		"value": {
+		"value:field": {
 			Type:       "string",
 			Rows:       1,
 			RowsKnown:  true,
 			ValueKnown: true,
-			Values:     []string{"a;b"},
+			Values:     []string{"a:b;c"},
 		},
 	}
 	queryRange, err := NewTimeRange(100, 100)
@@ -1984,8 +1984,8 @@ func TestTSSPFilterExecutionSamplesEscapeDecisionSeparators(t *testing.T) {
 
 	_, matchedRows, filterRows, stats, ok := tsspDataBlockFilterRows(
 		blocks,
-		[]FieldFilter{{Key: "value", Op: "=", Value: "a;b"}},
-		[]FieldFilter{{Key: "value", Op: "=", Value: `a\b`}},
+		[]FieldFilter{{Key: "value:field", Op: "=", Value: "a:b;c"}},
+		[]FieldFilter{{Key: "value:field", Op: "=", Value: `a:\b`}},
 		nil,
 		1,
 		tsspTimeRange{Min: 100, Max: 100},
@@ -2006,7 +2006,7 @@ func TestTSSPFilterExecutionSamplesEscapeDecisionSeparators(t *testing.T) {
 	if got, want := len(stats.FilterExecutionSamples), 1; got != want {
 		t.Fatalf("filter execution samples = %d, want %d", got, want)
 	}
-	want := `row=0 time=100 required=1/1 any=0/1 none=0/0 skips=0/0/0 values=value=a;b decisions=required:value:=:a\;b:match;any:value:=:a\\b:miss result=reject_any`
+	want := `row=0 time=100 required=1/1 any=0/1 none=0/0 skips=0/0/0 values=value:field=a:b;c decisions=required:value\:field:=:a\:b\;c:match;any:value\:field:=:a\:\\b:miss result=reject_any`
 	if got := stats.FilterExecutionSamples[0]; got.Step != 1 || got.Type != "tssp-filter-row-step" || got.Action != "filter_row_reject_any" || got.CandidateValue != want || got.CursorIndexBefore != 0 || got.CursorIndexAfter != 1 || !got.CursorAdvanced {
 		t.Fatalf("filter execution sample = %+v, want value=%q indexes=0->1 advanced", got, want)
 	}

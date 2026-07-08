@@ -541,16 +541,22 @@ func tsspDataBlockFilterDecision(filter FieldFilter, clause string, matched bool
 	if matched {
 		result = "match"
 	}
-	return fmt.Sprintf("%s:%s:%s:%s:%s", clause, filter.Key, fieldFilterOperator(filter), strings.TrimSpace(filter.Value), result)
+	return strings.Join([]string{
+		tsspDataBlockFilterDecisionField(clause),
+		tsspDataBlockFilterDecisionField(filter.Key),
+		tsspDataBlockFilterDecisionField(fieldFilterOperator(filter)),
+		tsspDataBlockFilterDecisionField(strings.TrimSpace(filter.Value)),
+		tsspDataBlockFilterDecisionField(result),
+	}, ":")
 }
 
 func tsspDataBlockFilterDecisionList(decisions []string) string {
-	escaped := make([]string, 0, len(decisions))
-	replacer := strings.NewReplacer(`\`, `\\`, `;`, `\;`)
-	for _, decision := range decisions {
-		escaped = append(escaped, replacer.Replace(decision))
-	}
-	return strings.Join(escaped, ";")
+	return strings.Join(decisions, ";")
+}
+
+func tsspDataBlockFilterDecisionField(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `:`, `\:`, `;`, `\;`)
+	return replacer.Replace(value)
 }
 
 func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, anyFilters []FieldFilter, noneFilters []FieldFilter, rows int, timeRange tsspTimeRange, queryRange TimeRange, sampleKey string, rangeSampleLimit int, filterSampleLimit int) ([]bool, int, int, tsspDataBlockFilterStats, bool) {
