@@ -26,9 +26,6 @@ type opengeminiTextIndexPaths struct {
 }
 
 func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, _ Options) (FileReport, error) {
-	if info.IsDir() {
-		return FileReport{}, fmt.Errorf("opengemini-text-index format requires a .pos, .bh, or .ph file")
-	}
 	paths, err := openGeminiTextIndexPaths(path)
 	if err != nil {
 		return FileReport{}, err
@@ -42,10 +39,15 @@ func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, _ Options) (FileR
 		"skip_reason":     "text_index_analysis_disabled",
 		"local_only":      "true",
 	}
+	sizeBytes := info.Size()
+	if info.IsDir() {
+		extra["input_is_directory"] = "true"
+		sizeBytes = 0
+	}
 	return FileReport{
 		Path:      path,
 		Format:    FormatOpenGeminiText,
-		SizeBytes: info.Size(),
+		SizeBytes: sizeBytes,
 		ModTime:   info.ModTime(),
 		Extra:     extra,
 		Notices:   []string{opengeminiTextIndexSkipNotice},
@@ -53,6 +55,7 @@ func analyzeOpenGeminiTextIndex(path string, info os.FileInfo, _ Options) (FileR
 }
 
 func openGeminiTextIndexPaths(path string) (opengeminiTextIndexPaths, error) {
+	path = filepath.Clean(path)
 	suffix, component, ok := openGeminiTextIndexSuffix(path)
 	if !ok {
 		return opengeminiTextIndexPaths{}, fmt.Errorf("opengemini-text-index format requires a .pos, .bh, or .ph file")
@@ -70,6 +73,7 @@ func openGeminiTextIndexPaths(path string) (opengeminiTextIndexPaths, error) {
 }
 
 func openGeminiTextIndexSuffix(path string) (suffix string, component string, ok bool) {
+	path = filepath.Clean(path)
 	lower := strings.ToLower(path)
 	switch {
 	case strings.HasSuffix(lower, opengeminiTextIndexDataSuffix):

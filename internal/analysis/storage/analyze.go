@@ -462,11 +462,16 @@ func expandPaths(ctx context.Context, paths []string, options Options) ([]string
 		if path == "" {
 			continue
 		}
+		path = filepath.Clean(path)
 		info, err := os.Stat(path)
 		if err != nil {
 			return nil, err
 		}
 		if !info.IsDir() {
+			files = append(files, path)
+			continue
+		}
+		if isOpenGeminiTextIndexPath(path) {
 			files = append(files, path)
 			continue
 		}
@@ -484,6 +489,9 @@ func expandPaths(ctx context.Context, paths []string, options Options) ([]string
 					return err
 				}
 				if d.IsDir() {
+					if p != path && isOpenGeminiTextIndexPath(p) {
+						return filepath.SkipDir
+					}
 					if p != path && isStorageCandidate(p, options.Format) {
 						files = append(files, p)
 						return filepath.SkipDir
@@ -522,7 +530,9 @@ func analyzeFile(path string, options Options) (FileReport, error) {
 		return FileReport{}, err
 	}
 	format := options.Format
-	if format == FormatAuto {
+	if isOpenGeminiTextIndexPath(path) {
+		format = FormatOpenGeminiText
+	} else if format == FormatAuto {
 		format, err = detectFormat(path)
 		if err != nil {
 			return FileReport{}, err
