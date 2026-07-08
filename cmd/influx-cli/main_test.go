@@ -284,12 +284,20 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	if _, err := parseStorageFieldFilters([]string{"not ends with value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
 		t.Fatalf("error = %v, want missing ends-with key guidance", err)
 	}
+	if _, err := parseStorageFieldFilters([]string{"not is value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing is key guidance", err)
+	}
+	if _, err := parseStorageFieldFilters([]string{"not is not value"}); err == nil || !strings.Contains(err.Error(), "key=value") {
+		t.Fatalf("error = %v, want missing is-not key guidance", err)
+	}
 }
 
 func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 	got, err := parseStorageFieldFilters([]string{
 		"message contains error",
+		"notice contains warning",
 		"message not contains ok",
+		"notify starts with edge",
 		"region not-contains us",
 		"host starts-with edge",
 		"host starts with edge",
@@ -309,7 +317,9 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 		value string
 	}{
 		{"message", "contains", "error"},
+		{"notice", "contains", "warning"},
 		{"message", "not-contains", "ok"},
+		{"notify", "starts-with", "edge"},
 		{"region", "not-contains", "us"},
 		{"host", "starts-with", "edge"},
 		{"host", "starts-with", "edge"},
