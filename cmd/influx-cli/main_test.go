@@ -362,6 +362,46 @@ func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 	}
 }
 
+func TestParseStorageFieldFiltersParsesUnderscoreOperatorAliases(t *testing.T) {
+	got, err := parseStorageFieldFilters([]string{
+		"status is_not null",
+		"value not_in(1,2)",
+		"score not_between(10,20)",
+		"message not_contains ok",
+		"message not_like tmp%",
+		"host starts_with edge",
+		"path not_starts_with tmp",
+		"region ends_with east",
+		"device not_ends_with old",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		key   string
+		op    string
+		value string
+	}{
+		{"status", "!=", "null"},
+		{"value", "not-in", "(1,2)"},
+		{"score", "not-between", "(10,20)"},
+		{"message", "not-contains", "ok"},
+		{"message", "not-like", "tmp%"},
+		{"host", "starts-with", "edge"},
+		{"path", "not-starts-with", "tmp"},
+		{"region", "ends-with", "east"},
+		{"device", "not-ends-with", "old"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("field filters = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Key != want[i].key || got[i].Op != want[i].op || got[i].Value != want[i].value {
+			t.Fatalf("field filter %d = %+v, want key=%q op=%q value=%q", i, got[i], want[i].key, want[i].op, want[i].value)
+		}
+	}
+}
+
 func TestParseStorageFieldFiltersIgnoresWordOperatorsInsideSets(t *testing.T) {
 	got, err := parseStorageFieldFilters([]string{"status in (this is true,not in service)"})
 	if err != nil {

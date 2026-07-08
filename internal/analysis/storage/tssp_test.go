@@ -3062,10 +3062,10 @@ func TestAnalyzeTSSPFieldFilterMatchesStringPrefixSuffix(t *testing.T) {
 		Format:     FormatTSSP,
 		QueryRange: queryRange,
 		QueryFields: []FieldFilter{
-			{Key: "value", Op: "starts with", Value: "b"},
+			{Key: "value", Op: "starts_with", Value: "b"},
 			{Key: "value", Op: "ends-with", Value: "e"},
-			{Key: "value", Op: "not starts with", Value: "r"},
-			{Key: "value", Op: "not-ends-with", Value: "d"},
+			{Key: "value", Op: "not_starts_with", Value: "r"},
+			{Key: "value", Op: "not_ends_with", Value: "d"},
 		},
 		KeySampleLimit:   3,
 		BlockSampleLimit: 4,
@@ -5343,33 +5343,51 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 		{Key: "status", Op: "!=", Value: "true"},
 		{Key: "device", Op: "!in", Value: "(cpu,mem)"},
 		{Key: "rack", Op: "not in", Value: "(r1,r2)"},
+		{Key: "rack_under", Op: "not_in", Value: "(r3,r4)"},
 		{Key: "range", Op: "!between", Value: "(1,3)"},
 		{Key: "range", Op: "not between", Value: "(1,3)"},
+		{Key: "range_under", Op: "not_between", Value: "(4,5)"},
 		{Key: "message", Op: "!contains", Value: "debug"},
 		{Key: "message", Op: "not contains", Value: "debug"},
 		{Key: "message", Op: "not-contains", Value: "debug"},
+		{Key: "message_under", Op: "not_contains", Value: "trace"},
 		{Key: "pattern", Op: "!like", Value: "tmp%"},
 		{Key: "pattern", Op: "not like", Value: "tmp%"},
 		{Key: "pattern", Op: "not-like", Value: "tmp%"},
+		{Key: "pattern_under", Op: "not_like", Value: "trace%"},
 		{Key: "prefix", Op: "!starts-with", Value: "edge"},
 		{Key: "prefix", Op: "starts with", Value: "edge"},
 		{Key: "prefix", Op: "starts-with", Value: "edge"},
+		{Key: "prefix_under", Op: "starts_with", Value: "edge"},
+		{Key: "prefix_under", Op: "not_starts_with", Value: "core"},
 		{Key: "suffix", Op: "!ends-with", Value: "tmp"},
 		{Key: "suffix", Op: "not ends with", Value: "tmp"},
 		{Key: "suffix", Op: "not-ends-with", Value: "tmp"},
+		{Key: "suffix_under", Op: "ends_with", Value: "tmp"},
+		{Key: "suffix_under", Op: "not_ends_with", Value: "bak"},
 		{Key: "missing", Op: "==", Value: "null"},
+		{Key: "state", Op: "is_not", Value: "null"},
 	})
 	want := []FieldFilter{
 		{Key: "device", Op: "not-in", Value: "(cpu,mem)"},
 		{Key: "message", Op: "not-contains", Value: "debug"},
+		{Key: "message_under", Op: "not-contains", Value: "trace"},
 		{Key: "missing", Value: "null"},
 		{Key: "pattern", Op: "not-like", Value: "tmp%"},
+		{Key: "pattern_under", Op: "not-like", Value: "trace%"},
 		{Key: "prefix", Op: "not-starts-with", Value: "edge"},
 		{Key: "prefix", Op: "starts-with", Value: "edge"},
+		{Key: "prefix_under", Op: "not-starts-with", Value: "core"},
+		{Key: "prefix_under", Op: "starts-with", Value: "edge"},
 		{Key: "rack", Op: "not-in", Value: "(r1,r2)"},
+		{Key: "rack_under", Op: "not-in", Value: "(r3,r4)"},
 		{Key: "range", Op: "not-between", Value: "(1,3)"},
+		{Key: "range_under", Op: "not-between", Value: "(4,5)"},
+		{Key: "state", Op: "!=", Value: "null"},
 		{Key: "status", Op: "!=", Value: "true"},
 		{Key: "suffix", Op: "not-ends-with", Value: "tmp"},
+		{Key: "suffix_under", Op: "ends-with", Value: "tmp"},
+		{Key: "suffix_under", Op: "not-ends-with", Value: "bak"},
 		{Key: "value", Value: "99"},
 	}
 	if !equalFieldFilters(filters, want) {
@@ -5418,6 +5436,12 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "suffix", Op: "!ends-with", Value: "tmp"}), "not-ends-with"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "suffix", Op: "not_ends_with", Value: "tmp"}), "not-ends-with"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "state", Op: "is_not", Value: "null"}), "!="; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 }

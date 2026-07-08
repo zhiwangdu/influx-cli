@@ -2840,10 +2840,10 @@ func TestAnalyzeTSSPDetachedFieldFilterMatchesStringPrefixSuffix(t *testing.T) {
 		BlockSampleLimit: 4,
 		QueryRange:       queryRange,
 		QueryFields: []FieldFilter{
-			{Key: "value", Op: "starts with", Value: "b"},
+			{Key: "value", Op: "starts_with", Value: "b"},
 			{Key: "value", Op: "ends-with", Value: "e"},
-			{Key: "value", Op: "not starts with", Value: "r"},
-			{Key: "value", Op: "not-ends-with", Value: "d"},
+			{Key: "value", Op: "not_starts_with", Value: "r"},
+			{Key: "value", Op: "not_ends_with", Value: "d"},
 		},
 	})
 	if err != nil {

@@ -231,6 +231,7 @@ func normalizeFieldFilters(values []FieldFilter) []FieldFilter {
 
 func normalizeFieldFilterOperator(op string) string {
 	op = strings.ToLower(strings.TrimSpace(op))
+	op = strings.ReplaceAll(op, "_", "-")
 	switch op {
 	case "=", "==", "is", "":
 		return ""
