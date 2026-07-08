@@ -40,6 +40,9 @@ func analyzeOpenGeminiPKIndex(path string, info os.FileInfo, options Options) (F
 	if strings.EqualFold(filepath.Base(path), opengeminiPKDataFileName) {
 		return FileReport{}, fmt.Errorf("primary.idx is detached primary-key data; analyze primary.meta with opengemini-pk-meta")
 	}
+	if isOpenGeminiBloomFilterPath(path) {
+		return FileReport{}, fmt.Errorf("%s uses opengemini-bloom-filter format, not opengemini-pk-index", filepath.Base(path))
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {

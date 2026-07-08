@@ -323,6 +323,24 @@ func TestAnalyzeOpenGeminiPKIndexRejectsDetachedPrimaryData(t *testing.T) {
 	}
 }
 
+func TestAnalyzeOpenGeminiPKIndexRejectsBloomFilterSidecar(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bloomfilter_content.idx")
+	if err := os.WriteFile(path, []byte("detached bloom filter data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatOpenGeminiPKIndex})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsOpenGeminiPKNotice(report.Notices, "uses opengemini-bloom-filter format") {
+		t.Fatalf("notices = %v, want bloom-filter format warning", report.Notices)
+	}
+}
+
 func TestAnalyzeOpenGeminiPKIndexAutoDoesNotDetectDetachedPrimaryData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), opengeminiPKDataFileName)
 	data := append([]byte(opengeminiPKMagic), 0, 0, 0, 0)
