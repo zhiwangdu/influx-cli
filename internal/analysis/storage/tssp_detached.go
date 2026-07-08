@@ -2059,7 +2059,7 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 	}
 	var recordExecutionSamples []DecodePathCursorStep
 	var recordStats tsspRecordMaterializationStats
-	probe.valueSamples, recordExecutionSamples, recordStats = appendTSSPDataProbeRecordSamples(probe.valueSamples, "meta-index-id", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit), probe.RecordOutputs)
+	probe.valueSamples, recordExecutionSamples, recordStats = appendTSSPDataProbeRecordSamples(probe.valueSamples, "meta-index-id", chunk.SID, timeRange, blocks, matchingRows, queryRange, sampleLimit, remainingTSSPExecutionSampleLimit(probe.recordExecutionSamples, sampleLimit), probe.RecordOutputs, probe.RecordRows)
 	appendTSSPRecordExecutionSamples(&probe.recordExecutionSamples, recordExecutionSamples, sampleLimit)
 	probe.RecordRows += recordStats.Rows
 	probe.RecordSamples += recordStats.Samples
@@ -2104,7 +2104,7 @@ func appendTSSPDetachedDataProbeValueSamples(probe *tsspDetachedDataProbe, chunk
 	}
 }
 
-func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefix string, id uint64, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int, recordStepLimit int, outputOrdinalBase int) ([]DecodePathCursorOutput, []DecodePathCursorStep, tsspRecordMaterializationStats) {
+func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefix string, id uint64, timeRange tsspTimeRange, blocks map[string]tsspDetachedDataBlockInfo, matchingRows []bool, queryRange TimeRange, sampleLimit int, recordStepLimit int, outputOrdinalBase int, inputOrdinalBase int) ([]DecodePathCursorOutput, []DecodePathCursorStep, tsspRecordMaterializationStats) {
 	var recordSteps []DecodePathCursorStep
 	var stats tsspRecordMaterializationStats
 	columnNames := tsspDataProbeRecordColumns(blocks)
@@ -2133,6 +2133,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 	stats.Rows = rows
 	for row := 0; row < rows; row++ {
 		timestamp := timestamps[row]
+		inputOrdinal := inputOrdinalBase + row
 		if queryRange.Set && (timestamp < queryRange.Min || timestamp > queryRange.Max) {
 			stats.RangeRejects++
 			if recordStepLimit > 0 && len(recordSteps) < recordStepLimit {
@@ -2142,7 +2143,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 					Type:              "tssp-record-row-step",
 					Action:            "record_row_range_reject",
 					Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
-					CandidateValue:    tsspRecordExecutionCandidateValue(row, -1, timestamp, len(columnNames), values, queryRange, "range_reject"),
+					CandidateValue:    tsspRecordExecutionCandidateValue(row, inputOrdinal, -1, timestamp, len(columnNames), values, queryRange, "range_reject"),
 					CursorIndexBefore: row,
 					CursorIndexAfter:  row + 1,
 					CursorAdvanced:    true,
@@ -2159,7 +2160,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 					Type:              "tssp-record-row-step",
 					Action:            "record_row_filter_reject",
 					Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
-					CandidateValue:    tsspRecordExecutionCandidateValue(row, -1, timestamp, len(columnNames), values, queryRange, "filter_reject"),
+					CandidateValue:    tsspRecordExecutionCandidateValue(row, inputOrdinal, -1, timestamp, len(columnNames), values, queryRange, "filter_reject"),
 					CursorIndexBefore: row,
 					CursorIndexAfter:  row + 1,
 					CursorAdvanced:    true,
@@ -2189,7 +2190,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 					Type:              "tssp-record-row-step",
 					Action:            "record_row_output",
 					Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
-					CandidateValue:    tsspRecordExecutionCandidateValue(row, outputOrdinal, timestamp, len(columnNames), values, queryRange, "output"),
+					CandidateValue:    tsspRecordExecutionCandidateValue(row, inputOrdinal, outputOrdinal, timestamp, len(columnNames), values, queryRange, "output"),
 					CursorIndexBefore: row,
 					CursorIndexAfter:  row + 1,
 					CursorAdvanced:    true,
@@ -2209,9 +2210,10 @@ func tsspDataProbeRecordValues(blocks map[string]tsspDetachedDataBlockInfo, colu
 	return strings.Join(fields, ",")
 }
 
-func tsspRecordExecutionCandidateValue(row int, localOutput int, timestamp int64, columnCount int, values string, queryRange TimeRange, result string) string {
+func tsspRecordExecutionCandidateValue(row int, localInput int, localOutput int, timestamp int64, columnCount int, values string, queryRange TimeRange, result string) string {
 	parts := []string{
 		fmt.Sprintf("row=%d", row),
+		fmt.Sprintf("local_input=%d", localInput),
 	}
 	if localOutput >= 0 {
 		parts = append(parts, fmt.Sprintf("local_output=%d", localOutput))

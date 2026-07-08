@@ -827,6 +827,23 @@ func TestAnalyzeTSSPRecordOutputOrdinalsContinueAcrossChunks(t *testing.T) {
 			t.Fatalf("record output sample %d ordinal = %d, want %d: %+v", i, got, want, sample)
 		}
 	}
+	if got, want := len(decode.RecordExecutionSamples), 4; got != want {
+		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		key   string
+		value string
+	}{
+		{"sid:7/record/row:0", fmt.Sprintf("row=0 local_input=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1])},
+		{"sid:7/record/row:1", fmt.Sprintf("row=1 local_input=1 local_output=1 time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=output", times[1], times[0], times[len(times)-1])},
+		{"sid:7/record/row:0", fmt.Sprintf("row=0 local_input=2 local_output=2 time=%d range=%d:%d columns=2 values=status=false,value=3.25 result=output", times[2], times[0], times[len(times)-1])},
+		{"sid:7/record/row:1", fmt.Sprintf("row=1 local_input=3 local_output=3 time=%d range=%d:%d columns=2 values=status=true,value=4.5 result=output", times[3], times[0], times[len(times)-1])},
+	} {
+		got := decode.RecordExecutionSamples[i]
+		if got.Step != i+1 || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != i || got.CursorIndexAfter != i+1 || !got.CursorAdvanced {
+			t.Fatalf("record execution sample[%d] = %+v, want key=%q value=%q indexes=%d->%d advanced", i, got, want.key, want.value, i, i+1)
+		}
+	}
 }
 
 func TestAnalyzeTSSPFieldFilterMatchesNullPredicates(t *testing.T) {
@@ -1845,7 +1862,7 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 
 	var outputs []DecodePathCursorOutput
 	var merged []DecodePathCursorStep
-	outputs, firstSteps, firstStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5), 0)
+	outputs, firstSteps, firstStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5), 0, 0)
 	appendTSSPRecordExecutionSamples(&merged, firstSteps, 5)
 	if got, want := firstStats.Rows, 3; got != want {
 		t.Fatalf("first record rows = %d, want %d", got, want)
@@ -1863,7 +1880,7 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 		t.Fatalf("remaining record execution sample limit = %d, want %d", got, want)
 	}
 
-	outputs, secondSteps, secondStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 8, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5), 0)
+	outputs, secondSteps, secondStats := appendTSSPDataProbeRecordSamples(outputs, "sid", 8, tsspTimeRange{Min: 100, Max: 300}, blocks, nil, queryRange, 5, remainingTSSPExecutionSampleLimit(merged, 5), 0, 0)
 	appendTSSPRecordExecutionSamples(&merged, secondSteps, 5)
 	if got, want := secondStats.Samples, 2; got != want {
 		t.Fatalf("second record samples = %d, want remaining output cap %d", got, want)
@@ -1883,11 +1900,11 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 		indexBefore int
 		indexAfter  int
 	}{
-		{"sid:7/record/row:0", "row=0 local_output=0 time=100 range=100:300 columns=2 values=status=true,value=1 result=output", 0, 1},
-		{"sid:7/record/row:1", "row=1 local_output=1 time=200 range=100:300 columns=2 values=status=false,value=2 result=output", 1, 2},
-		{"sid:7/record/row:2", "row=2 local_output=2 time=300 range=100:300 columns=2 values=status=true,value=3 result=output", 2, 3},
-		{"sid:8/record/row:0", "row=0 local_output=0 time=100 range=100:300 columns=2 values=status=true,value=1 result=output", 3, 4},
-		{"sid:8/record/row:1", "row=1 local_output=1 time=200 range=100:300 columns=2 values=status=false,value=2 result=output", 4, 5},
+		{"sid:7/record/row:0", "row=0 local_input=0 local_output=0 time=100 range=100:300 columns=2 values=status=true,value=1 result=output", 0, 1},
+		{"sid:7/record/row:1", "row=1 local_input=1 local_output=1 time=200 range=100:300 columns=2 values=status=false,value=2 result=output", 1, 2},
+		{"sid:7/record/row:2", "row=2 local_input=2 local_output=2 time=300 range=100:300 columns=2 values=status=true,value=3 result=output", 2, 3},
+		{"sid:8/record/row:0", "row=0 local_input=0 local_output=0 time=100 range=100:300 columns=2 values=status=true,value=1 result=output", 3, 4},
+		{"sid:8/record/row:1", "row=1 local_input=1 local_output=1 time=200 range=100:300 columns=2 values=status=false,value=2 result=output", 4, 5},
 	} {
 		got := merged[i]
 		if got.Step != i+1 || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
@@ -1926,7 +1943,7 @@ func TestTSSPRecordExecutionSamplesDoNotRequireOutputSampleBudget(t *testing.T) 
 	}
 
 	outputs := []DecodePathCursorOutput{{Key: "existing"}}
-	outputs, steps, stats := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 200}, blocks, nil, queryRange, 1, 2, 9)
+	outputs, steps, stats := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 200}, blocks, nil, queryRange, 1, 2, 9, 11)
 	if got, want := len(outputs), 1; got != want {
 		t.Fatalf("record output samples = %d, want unchanged cap %d", got, want)
 	}
@@ -1943,8 +1960,8 @@ func TestTSSPRecordExecutionSamplesDoNotRequireOutputSampleBudget(t *testing.T) 
 		key   string
 		value string
 	}{
-		{"sid:7/record/row:0", "row=0 local_output=9 time=100 range=100:200 columns=2 values=status=true,value=1 result=output"},
-		{"sid:7/record/row:1", "row=1 local_output=10 time=200 range=100:200 columns=2 values=status=false,value=2 result=output"},
+		{"sid:7/record/row:0", "row=0 local_input=11 local_output=9 time=100 range=100:200 columns=2 values=status=true,value=1 result=output"},
+		{"sid:7/record/row:1", "row=1 local_input=12 local_output=10 time=200 range=100:200 columns=2 values=status=false,value=2 result=output"},
 	} {
 		got := steps[i]
 		if got.Step != i+1 || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != i || got.CursorIndexAfter != i+1 || !got.CursorAdvanced {
@@ -1981,7 +1998,7 @@ func TestTSSPRecordMaterializationStatsCountRangeAndFilterRejects(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	outputs, steps, stats := appendTSSPDataProbeRecordSamples(nil, "sid", 7, tsspTimeRange{Min: 100, Max: 400}, blocks, []bool{false, true, false, true}, queryRange, 4, 4, 0)
+	outputs, steps, stats := appendTSSPDataProbeRecordSamples(nil, "sid", 7, tsspTimeRange{Min: 100, Max: 400}, blocks, []bool{false, true, false, true}, queryRange, 4, 4, 0, 0)
 	if got, want := stats.Rows, 4; got != want {
 		t.Fatalf("record rows = %d, want %d", got, want)
 	}
@@ -2010,10 +2027,10 @@ func TestTSSPRecordMaterializationStatsCountRangeAndFilterRejects(t *testing.T) 
 		action string
 		value  string
 	}{
-		{"record_row_range_reject", "row=0 local_output=none time=100 range=150:350 columns=2 values=status=true,value=1 result=range_reject"},
-		{"record_row_output", "row=1 local_output=0 time=200 range=150:350 columns=2 values=status=true,value=2 result=output"},
-		{"record_row_filter_reject", "row=2 local_output=none time=300 range=150:350 columns=2 values=status=false,value=3 result=filter_reject"},
-		{"record_row_range_reject", "row=3 local_output=none time=400 range=150:350 columns=2 values=status=true,value=4 result=range_reject"},
+		{"record_row_range_reject", "row=0 local_input=0 local_output=none time=100 range=150:350 columns=2 values=status=true,value=1 result=range_reject"},
+		{"record_row_output", "row=1 local_input=1 local_output=0 time=200 range=150:350 columns=2 values=status=true,value=2 result=output"},
+		{"record_row_filter_reject", "row=2 local_input=2 local_output=none time=300 range=150:350 columns=2 values=status=false,value=3 result=filter_reject"},
+		{"record_row_range_reject", "row=3 local_input=3 local_output=none time=400 range=150:350 columns=2 values=status=true,value=4 result=range_reject"},
 	} {
 		if got := steps[i]; got.Action != want.action || got.CandidateValue != want.value {
 			t.Fatalf("record execution sample[%d] = %+v, want action=%q value=%q", i, got, want.action, want.value)
@@ -2026,13 +2043,13 @@ func TestTSSPRecordExecutionCandidateValueIncludesOptionalQueryRange(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := tsspRecordExecutionCandidateValue(1, 4, 150, 2, "status=true,value=1", queryRange, "output"), "row=1 local_output=4 time=150 range=100:200 columns=2 values=status=true,value=1 result=output"; got != want {
+	if got, want := tsspRecordExecutionCandidateValue(1, 12, 4, 150, 2, "status=true,value=1", queryRange, "output"), "row=1 local_input=12 local_output=4 time=150 range=100:200 columns=2 values=status=true,value=1 result=output"; got != want {
 		t.Fatalf("record execution candidate = %q, want %q", got, want)
 	}
-	if got, want := tsspRecordExecutionCandidateValue(1, 4, 150, 2, "status=true,value=1", TimeRange{}, "output"), "row=1 local_output=4 time=150 columns=2 values=status=true,value=1 result=output"; got != want {
+	if got, want := tsspRecordExecutionCandidateValue(1, 12, 4, 150, 2, "status=true,value=1", TimeRange{}, "output"), "row=1 local_input=12 local_output=4 time=150 columns=2 values=status=true,value=1 result=output"; got != want {
 		t.Fatalf("record execution candidate without range = %q, want %q", got, want)
 	}
-	if got, want := tsspRecordExecutionCandidateValue(2, -1, 175, 2, "status=false,value=2", queryRange, "filter_reject"), "row=2 local_output=none time=175 range=100:200 columns=2 values=status=false,value=2 result=filter_reject"; got != want {
+	if got, want := tsspRecordExecutionCandidateValue(2, 13, -1, 175, 2, "status=false,value=2", queryRange, "filter_reject"), "row=2 local_input=13 local_output=none time=175 range=100:200 columns=2 values=status=false,value=2 result=filter_reject"; got != want {
 		t.Fatalf("record execution reject candidate = %q, want %q", got, want)
 	}
 }
@@ -2120,7 +2137,7 @@ func TestAppendTSSPFileDecodePathSamplesRebasesRecordExecutionSamples(t *testing
 				Type:              "tssp-record-row-step",
 				Action:            "record_row_output",
 				Key:               "sid:7/record/row:0",
-				CandidateValue:    "row=0 local_output=0 time=100 values=status=true,value=1 result=output",
+				CandidateValue:    "row=0 local_input=0 local_output=0 time=100 values=status=true,value=1 result=output",
 				CursorIndexBefore: 0,
 				CursorIndexAfter:  1,
 				CursorAdvanced:    true,
@@ -2130,7 +2147,7 @@ func TestAppendTSSPFileDecodePathSamplesRebasesRecordExecutionSamples(t *testing
 				Type:              "tssp-record-row-step",
 				Action:            "record_row_output",
 				Key:               "sid:7/record/row:1",
-				CandidateValue:    "row=1 local_output=1 time=200 values=status=false,value=2 result=output",
+				CandidateValue:    "row=1 local_input=1 local_output=1 time=200 values=status=false,value=2 result=output",
 				CursorIndexBefore: 1,
 				CursorIndexAfter:  2,
 				CursorAdvanced:    true,
@@ -2144,7 +2161,7 @@ func TestAppendTSSPFileDecodePathSamplesRebasesRecordExecutionSamples(t *testing
 				Type:              "tssp-record-row-step",
 				Action:            "record_row_output",
 				Key:               "sid:8/record/row:0",
-				CandidateValue:    "row=0 local_output=0 time=100 values=status=true,value=1 result=output",
+				CandidateValue:    "row=0 local_input=0 local_output=0 time=100 values=status=true,value=1 result=output",
 				CursorIndexBefore: 0,
 				CursorIndexAfter:  1,
 				CursorAdvanced:    true,
@@ -2154,7 +2171,7 @@ func TestAppendTSSPFileDecodePathSamplesRebasesRecordExecutionSamples(t *testing
 				Type:              "tssp-record-row-step",
 				Action:            "record_row_output",
 				Key:               "sid:8/record/row:1",
-				CandidateValue:    "row=1 local_output=1 time=200 values=status=false,value=2 result=output",
+				CandidateValue:    "row=1 local_input=1 local_output=1 time=200 values=status=false,value=2 result=output",
 				CursorIndexBefore: 1,
 				CursorIndexAfter:  2,
 				CursorAdvanced:    true,
@@ -2175,9 +2192,9 @@ func TestAppendTSSPFileDecodePathSamplesRebasesRecordExecutionSamples(t *testing
 		indexBefore int
 		indexAfter  int
 	}{
-		{"a.tssp", "sid:7/record/row:0", "row=0 local_output=0 time=100 values=status=true,value=1 result=output", 0, 1},
-		{"a.tssp", "sid:7/record/row:1", "row=1 local_output=1 time=200 values=status=false,value=2 result=output", 1, 2},
-		{"b.tssp", "sid:8/record/row:0", "row=0 local_output=0 time=100 values=status=true,value=1 result=output", 2, 3},
+		{"a.tssp", "sid:7/record/row:0", "row=0 local_input=0 local_output=0 time=100 values=status=true,value=1 result=output", 0, 1},
+		{"a.tssp", "sid:7/record/row:1", "row=1 local_input=1 local_output=1 time=200 values=status=false,value=2 result=output", 1, 2},
+		{"b.tssp", "sid:8/record/row:0", "row=0 local_input=0 local_output=0 time=100 values=status=true,value=1 result=output", 2, 3},
 	} {
 		got := dst.RecordExecutionSamples[i]
 		if got.Step != i+1 || got.File != want.file || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
@@ -2623,7 +2640,7 @@ func TestAnalyzeTSSPFieldFilterMatchesFloatBetween(t *testing.T) {
 			Type:              "tssp-record-row-step",
 			Action:            "record_row_output",
 			Key:               "sid:7/record/row:0",
-			CandidateValue:    fmt.Sprintf("row=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1]),
+			CandidateValue:    fmt.Sprintf("row=0 local_input=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1]),
 			CursorIndexBefore: 0,
 			CursorIndexAfter:  1,
 			CursorAdvanced:    true,
@@ -2633,7 +2650,7 @@ func TestAnalyzeTSSPFieldFilterMatchesFloatBetween(t *testing.T) {
 			Type:              "tssp-record-row-step",
 			Action:            "record_row_filter_reject",
 			Key:               "sid:7/record/row:1",
-			CandidateValue:    fmt.Sprintf("row=1 local_output=none time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=filter_reject", times[1], times[0], times[len(times)-1]),
+			CandidateValue:    fmt.Sprintf("row=1 local_input=1 local_output=none time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=filter_reject", times[1], times[0], times[len(times)-1]),
 			CursorIndexBefore: 1,
 			CursorIndexAfter:  2,
 			CursorAdvanced:    true,
@@ -5132,10 +5149,10 @@ func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) 
 		indexBefore int
 		indexAfter  int
 	}{
-		{path1, "record_row_output", "sid:7/record/row:0", fmt.Sprintf("row=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1]), 0, 1},
-		{path1, "record_row_filter_reject", "sid:7/record/row:1", fmt.Sprintf("row=1 local_output=none time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=filter_reject", times[1], times[0], times[len(times)-1]), 1, 2},
-		{path2, "record_row_output", "sid:7/record/row:0", fmt.Sprintf("row=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1]), 2, 3},
-		{path2, "record_row_filter_reject", "sid:7/record/row:1", fmt.Sprintf("row=1 local_output=none time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=filter_reject", times[1], times[0], times[len(times)-1]), 3, 4},
+		{path1, "record_row_output", "sid:7/record/row:0", fmt.Sprintf("row=0 local_input=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1]), 0, 1},
+		{path1, "record_row_filter_reject", "sid:7/record/row:1", fmt.Sprintf("row=1 local_input=1 local_output=none time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=filter_reject", times[1], times[0], times[len(times)-1]), 1, 2},
+		{path2, "record_row_output", "sid:7/record/row:0", fmt.Sprintf("row=0 local_input=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1]), 2, 3},
+		{path2, "record_row_filter_reject", "sid:7/record/row:1", fmt.Sprintf("row=1 local_input=1 local_output=none time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=filter_reject", times[1], times[0], times[len(times)-1]), 3, 4},
 	} {
 		got := decode.RecordExecutionSamples[i]
 		if got.Step != i+1 || got.File != want.file || got.Type != "tssp-record-row-step" || got.Action != want.action || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
