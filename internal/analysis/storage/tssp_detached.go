@@ -2147,7 +2147,7 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 				Type:              "tssp-record-row-step",
 				Action:            "record_row_output",
 				Key:               fmt.Sprintf("%s:%d/record/row:%d", keyPrefix, id, row),
-				CandidateValue:    fmt.Sprintf("row=%d time=%d values=%s result=output", row, timestamp, values),
+				CandidateValue:    fmt.Sprintf("row=%d time=%d columns=%d values=%s result=output", row, timestamp, len(columnNames), values),
 				CursorIndexBefore: row,
 				CursorIndexAfter:  row + 1,
 				CursorAdvanced:    true,

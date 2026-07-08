@@ -1798,11 +1798,11 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 		indexBefore int
 		indexAfter  int
 	}{
-		{"sid:7/record/row:0", "row=0 time=100 values=status=true,value=1 result=output", 0, 1},
-		{"sid:7/record/row:1", "row=1 time=200 values=status=false,value=2 result=output", 1, 2},
-		{"sid:7/record/row:2", "row=2 time=300 values=status=true,value=3 result=output", 2, 3},
-		{"sid:8/record/row:0", "row=0 time=100 values=status=true,value=1 result=output", 3, 4},
-		{"sid:8/record/row:1", "row=1 time=200 values=status=false,value=2 result=output", 4, 5},
+		{"sid:7/record/row:0", "row=0 time=100 columns=2 values=status=true,value=1 result=output", 0, 1},
+		{"sid:7/record/row:1", "row=1 time=200 columns=2 values=status=false,value=2 result=output", 1, 2},
+		{"sid:7/record/row:2", "row=2 time=300 columns=2 values=status=true,value=3 result=output", 2, 3},
+		{"sid:8/record/row:0", "row=0 time=100 columns=2 values=status=true,value=1 result=output", 3, 4},
+		{"sid:8/record/row:1", "row=1 time=200 columns=2 values=status=false,value=2 result=output", 4, 5},
 	} {
 		got := merged[i]
 		if got.Step != i+1 || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
@@ -2393,7 +2393,7 @@ func TestAnalyzeTSSPFieldFilterMatchesFloatBetween(t *testing.T) {
 		Type:              "tssp-record-row-step",
 		Action:            "record_row_output",
 		Key:               "sid:7/record/row:0",
-		CandidateValue:    fmt.Sprintf("row=0 time=%d values=status=true,value=1.25 result=output", times[0]),
+		CandidateValue:    fmt.Sprintf("row=0 time=%d columns=2 values=status=true,value=1.25 result=output", times[0]),
 		CursorIndexBefore: 0,
 		CursorIndexAfter:  1,
 		CursorAdvanced:    true,
@@ -4883,7 +4883,7 @@ func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) 
 		if got.Step != i+1 || got.File != want.file || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
 			t.Fatalf("record execution sample[%d] = %+v, want file=%q key=%q indexes=%d->%d advanced", i, got, want.file, want.key, want.indexBefore, want.indexAfter)
 		}
-		wantValue := fmt.Sprintf("row=0 time=%d values=status=true,value=1.25 result=output", times[0])
+		wantValue := fmt.Sprintf("row=0 time=%d columns=2 values=status=true,value=1.25 result=output", times[0])
 		if got.CandidateValue != wantValue {
 			t.Fatalf("record execution sample[%d] value = %q, want %q", i, got.CandidateValue, wantValue)
 		}
