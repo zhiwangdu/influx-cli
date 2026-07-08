@@ -97,6 +97,8 @@ type mergesetItemPayloadSummary struct {
 	DecodeZSTDFailures            int
 	PlainReadBytes                int64
 	ZSTDReadBytes                 int64
+	PlainDecodedReadBytes         int64
+	ZSTDDecodedReadBytes          int64
 	PlainUncompressedPayloadBytes int64
 	ZSTDUncompressedPayloadBytes  int64
 	ItemsDecoded                  uint64
@@ -968,9 +970,11 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 		switch header.MarshalType {
 		case mergesetMarshalTypePlain:
 			summary.DecodedPlainBlocks++
+			summary.PlainDecodedReadBytes += readBytes
 			summary.PlainUncompressedPayloadBytes += int64(decoded.PayloadBytes)
 		case mergesetMarshalTypeZSTD:
 			summary.DecodedZSTDBlocks++
+			summary.ZSTDDecodedReadBytes += readBytes
 			summary.ZSTDUncompressedPayloadBytes += int64(decoded.PayloadBytes)
 		}
 		beforeItems, afterItems := countMergesetItemsOutsideMetadataRange(decoded.Items, firstItem, lastItem)
@@ -1693,8 +1697,12 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 	report.Extra["item_payload_zstd_decode_failures"] = fmt.Sprint(summary.DecodeZSTDFailures)
 	report.Extra["item_payload_plain_read_bytes"] = fmt.Sprint(summary.PlainReadBytes)
 	report.Extra["item_payload_zstd_read_bytes"] = fmt.Sprint(summary.ZSTDReadBytes)
+	report.Extra["item_payload_plain_decoded_read_bytes"] = fmt.Sprint(summary.PlainDecodedReadBytes)
+	report.Extra["item_payload_zstd_decoded_read_bytes"] = fmt.Sprint(summary.ZSTDDecodedReadBytes)
 	report.Extra["item_payload_plain_uncompressed_bytes"] = fmt.Sprint(summary.PlainUncompressedPayloadBytes)
 	report.Extra["item_payload_zstd_uncompressed_bytes"] = fmt.Sprint(summary.ZSTDUncompressedPayloadBytes)
+	report.Extra["item_payload_plain_uncompressed_minus_decoded_read_bytes"] = fmt.Sprint(summary.PlainUncompressedPayloadBytes - summary.PlainDecodedReadBytes)
+	report.Extra["item_payload_zstd_uncompressed_minus_decoded_read_bytes"] = fmt.Sprint(summary.ZSTDUncompressedPayloadBytes - summary.ZSTDDecodedReadBytes)
 	report.Extra["item_payload_items_decoded"] = fmt.Sprint(summary.ItemsDecoded)
 	report.Extra["item_payload_blocks_before_metadata_range"] = fmt.Sprint(summary.RangeBeforeBlocks)
 	report.Extra["item_payload_blocks_after_metadata_range"] = fmt.Sprint(summary.RangeAfterBlocks)
