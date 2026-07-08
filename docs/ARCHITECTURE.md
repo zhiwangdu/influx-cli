@@ -549,6 +549,8 @@ TSSP 多词 field predicate operator alias 会把 hyphen、space 和 underscore 
 
 TSSP equality word aliases `equals`/`equal` 会归一到本地 decoded-row equality operator，`not-equals`/`not equals`/`not_equals`、`not-equal`/`not equal`/`not_equal`、`not =`/`not ==` 和 `!equals`/`!equal` 会归一到本地 decoded-row inequality operator，并复用同一条 typed comparison、predicate accounting 和 filter execution sample 路径。
 
+显式 `in`/`not-in` 与 `between`/`not-between` operator 会在 CLI field parser 中优先于后续 `=<>!` 符号切分，因此 `key in (a=b,c<>d)` 和 `key between min=1,max>9` 这类值会进入本地 decoded-row set/range predicate，而不是被误解析成 scalar comparison；该规则只影响本地 field predicate 字符串解析，不调用外部 parser。
+
 TSSP record execution diagnostics 会区分本地 materialized record candidate row、output row、query-range reject row、field-filter reject row 与受 sample limit 限制的 execution row samples；record execution sample 的采样额度独立于 record output sample，execution sample 会记录 chunk-local row、file-local `local_input` ordinal、query range context、decoded value-column count 和 output/range-reject/filter-reject result，rejected row 标记为 `local_output=none`，record output sample 与 output execution sample 会记录 local output ordinal，count-only decode path summary 会同时输出 full local range/record/filter row action counts、filter clause action counts、sample-omitted action counts 和 sampled cursor/range/record/filter execution action counts，便于区分单列 value sample、跨列 record materialization、查询窗口、filter 决策、全量本地输入/输出计数与采样顺序。
 
 openGemini detached primary key meta analyzer 覆盖本地 `primary.meta` sidecar：解析 `COLX` public header、主键 schema、time-cluster location、meta block 的 block-id 范围、`primary.idx` offset/length、列 offset 和 IEEE CRC；若同目录存在 `primary.idx`，只做本地文件大小和 range 边界校验，不解码主键 record，不调用 `DetachedPKMetaReader`、OBS/fileops runtime、shard engine、HTTP API 或数据库服务。

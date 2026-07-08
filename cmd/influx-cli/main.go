@@ -527,7 +527,7 @@ func splitStorageFieldFilter(value string) (string, string, string, bool) {
 	}
 	if bestOp != "" {
 		wordKey, wordOp, wordValue, wordIndex, wordOK := splitStorageFieldWordFilter(value)
-		if wordOK && wordIndex < bestIndex && storageFieldWordOperatorCanPrecedeLaterSymbol(wordOp) {
+		if wordOK && wordIndex < bestIndex && storageFieldWordOperatorCanPrecedeLaterSymbol(wordOp, wordValue) {
 			return wordKey, wordOp, wordValue, true
 		}
 		return value[:bestIndex], bestOp, value[bestIndex+len(bestOp):], true
@@ -669,10 +669,13 @@ func splitStorageFieldWordFilter(value string) (string, string, string, int, boo
 	return "", "", "", 0, false
 }
 
-func storageFieldWordOperatorCanPrecedeLaterSymbol(op string) bool {
+func storageFieldWordOperatorCanPrecedeLaterSymbol(op, value string) bool {
 	switch op {
 	case "=", "!=", "=~", "!~", "!>", "!>=", "!<", "!<=", "contains", "not-contains", "icontains", "not-icontains", "like", "not-like", "ilike", "not-ilike", "starts-with", "not-starts-with", "istarts-with", "not-istarts-with", "ends-with", "not-ends-with", "iends-with", "not-iends-with":
 		return true
+	case "in", "not-in", "between", "not-between":
+		value = strings.TrimSpace(value)
+		return strings.HasPrefix(value, "(") || strings.Contains(value, ",")
 	default:
 		return false
 	}

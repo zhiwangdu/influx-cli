@@ -41,6 +41,8 @@ TSSP multi-word field predicate operator alias 会接受 hyphen、space 和 unde
 
 TSSP equality word aliases `equals`/`equal` 会归一到本地 decoded-row equality operator，`not-equals`/`not equals`/`not_equals`、`not-equal`/`not equal`/`not_equal`、`not =`/`not ==` 和 `!equals`/`!equal` 会归一到本地 decoded-row inequality operator；这些 alias 只影响本地已解码 row 的 predicate 解释，不调用外部 query parser、engine 或数据库服务。
 
+TSSP 显式 `in`/`not-in` 与 `between`/`not-between` field predicate 会保留本地 value list/bounds 内的 `=<>!` 字符，避免值内符号被误切成 scalar comparison；该行为只属于本地 decoded-row filter parser。
+
 ## 3. Phase 0: CLI MVP Foundation
 
 建议周期：1 到 2 周。

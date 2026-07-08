@@ -1262,6 +1262,73 @@ func TestTSSPDataBlockFilterRowsMatchesEqualityWordAliases(t *testing.T) {
 	}
 }
 
+func TestTSSPDataBlockFilterRowsMatchesSetAndRangeValuesWithSymbols(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			RowsKnown:  true,
+			Rows:       3,
+			ValueKnown: true,
+			Values:     []string{"100", "200", "300"},
+		},
+		"code": {
+			Type:       "string",
+			RowsKnown:  true,
+			Rows:       3,
+			ValueKnown: true,
+			Values:     []string{"a=b", "c<>d", "z!x"},
+		},
+	}
+	queryRange, err := NewTimeRange(100, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, matches, filterRows, stats, ok := tsspDataBlockFilterRows(
+		blocks,
+		[]FieldFilter{{Key: "code", Op: "in", Value: "(a=b,c<>d)"}, {Key: "code", Op: "between", Value: "a=0,c=z"}},
+		nil,
+		nil,
+		3,
+		tsspTimeRange{Min: 100, Max: 300},
+		queryRange,
+		"sid:7",
+		0,
+		3,
+	)
+	if !ok {
+		t.Fatal("filter rows returned unavailable")
+	}
+	if got, want := rows, []bool{true, true, false}; !equalBools(got, want) {
+		t.Fatalf("matching rows = %v, want %v", got, want)
+	}
+	if got, want := matches, 2; got != want {
+		t.Fatalf("matches = %d, want %d", got, want)
+	}
+	if got, want := filterRows, 3; got != want {
+		t.Fatalf("filter rows = %d, want %d", got, want)
+	}
+	for op, want := range map[string]int{"in": 3, "between": 2} {
+		if got := stats.OperatorEvaluations[op]; got != want {
+			t.Fatalf("%s operator evaluations = %d, want %d", op, got, want)
+		}
+	}
+	wantSamples := []struct {
+		action string
+		value  string
+	}{
+		{"filter_row_match", "row=0 time=100 required=2/2 any=0/0 none=0/0 skips=0/0/0 values=code=a\\=b decisions=required:code:in:(a=b,c<>d):match;required:code:between:a=0,c=z:match result=match"},
+		{"filter_row_match", "row=1 time=200 required=2/2 any=0/0 none=0/0 skips=0/0/0 values=code=c<>d decisions=required:code:in:(a=b,c<>d):match;required:code:between:a=0,c=z:match result=match"},
+		{"filter_row_reject_required", "row=2 time=300 required=0/1 any=0/0 none=0/0 skips=1/0/0 values=code=z!x decisions=required:code:in:(a=b,c<>d):miss result=reject_required"},
+	}
+	for i, want := range wantSamples {
+		got := stats.FilterExecutionSamples[i]
+		if got.Action != want.action || got.CandidateValue != want.value {
+			t.Fatalf("filter execution sample[%d] = %+v, want action=%q value=%q", i, got, want.action, want.value)
+		}
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)
