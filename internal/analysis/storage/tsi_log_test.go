@@ -83,11 +83,38 @@ func TestAnalyzeTSILogMetadata(t *testing.T) {
 	if got, want := file.Index.SeriesIDSetCardinality, int64(1); got != want {
 		t.Fatalf("series id set cardinality = %d, want %d", got, want)
 	}
+	if got, want := uint64PtrValue(file.Index.SeriesIDSetMin), uint64(1); got != want {
+		t.Fatalf("series id set min = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.SeriesIDSetMax), uint64(1); got != want {
+		t.Fatalf("series id set max = %d, want %d", got, want)
+	}
 	if got, want := file.Index.TombstoneSeriesIDSetCardinality, int64(1); got != want {
 		t.Fatalf("tombstone series id set cardinality = %d, want %d", got, want)
 	}
+	if got, want := uint64PtrValue(file.Index.TombstoneSeriesIDSetMin), uint64(2); got != want {
+		t.Fatalf("tombstone series id set min = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.TombstoneSeriesIDSetMax), uint64(2); got != want {
+		t.Fatalf("tombstone series id set max = %d, want %d", got, want)
+	}
+	if details := indexDetailsText(file.Index); !strings.Contains(details, "series_ids=1 range=1:1") || !strings.Contains(details, "series_ids=1 range=2:2") {
+		t.Fatalf("index details = %q, want live and tombstone ranges", details)
+	}
 	if got, want := file.Extra["entry_count"], "5"; got != want {
 		t.Fatalf("entry count extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["series_id_set_min"], "1"; got != want {
+		t.Fatalf("series id set min extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["series_id_set_max"], "1"; got != want {
+		t.Fatalf("series id set max extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["tombstone_series_id_set_min"], "2"; got != want {
+		t.Fatalf("tombstone series id set min extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["tombstone_series_id_set_max"], "2"; got != want {
+		t.Fatalf("tombstone series id set max extra = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["resolved_series_entry_count"], "2"; got != want {
 		t.Fatalf("resolved series entry count extra = %q, want %q", got, want)

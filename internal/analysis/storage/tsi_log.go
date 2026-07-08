@@ -113,6 +113,36 @@ func analyzeTSILog(path string, info os.FileInfo, options Options) (FileReport, 
 	}
 
 	minSeriesID, maxSeriesID := seriesIDMinMax(state.LiveSeries)
+	tombstoneMinSeriesID, tombstoneMaxSeriesID := seriesIDMinMax(state.TombstoneSeries)
+	if len(state.LiveSeries) > 0 {
+		index.SeriesIDSetMin = uint64Ptr(minSeriesID)
+		index.SeriesIDSetMax = uint64Ptr(maxSeriesID)
+	}
+	if len(state.TombstoneSeries) > 0 {
+		index.TombstoneSeriesIDSetMin = uint64Ptr(tombstoneMinSeriesID)
+		index.TombstoneSeriesIDSetMax = uint64Ptr(tombstoneMaxSeriesID)
+	}
+
+	extra := map[string]string{
+		"entry_count":                   fmt.Sprint(entryCount),
+		"valid_bytes":                   fmt.Sprint(validBytes),
+		"series_entry_count":            fmt.Sprint(blocksByType["series"]),
+		"resolved_series_entry_count":   fmt.Sprint(resolvedSeriesEntries),
+		"unresolved_series_entry_count": fmt.Sprint(unresolvedSeriesEntries),
+		"series_tombstone_count":        fmt.Sprint(blocksByType["series-tombstone"]),
+		"measurement_tombstone_count":   fmt.Sprint(blocksByType["measurement-tombstone"]),
+		"tag_key_tombstone_count":       fmt.Sprint(blocksByType["tag-key-tombstone"]),
+		"tag_value_tombstone_count":     fmt.Sprint(blocksByType["tag-value-tombstone"]),
+	}
+	if len(state.LiveSeries) > 0 {
+		extra["series_id_set_min"] = fmt.Sprint(minSeriesID)
+		extra["series_id_set_max"] = fmt.Sprint(maxSeriesID)
+	}
+	if len(state.TombstoneSeries) > 0 {
+		extra["tombstone_series_id_set_min"] = fmt.Sprint(tombstoneMinSeriesID)
+		extra["tombstone_series_id_set_max"] = fmt.Sprint(tombstoneMaxSeriesID)
+	}
+
 	report := FileReport{
 		Path:         path,
 		Format:       FormatTSILog,
@@ -128,18 +158,8 @@ func analyzeTSILog(path string, info os.FileInfo, options Options) (FileReport, 
 			Count:    int64(len(state.LiveSeries)),
 			HasRange: len(state.LiveSeries) > 0,
 		},
-		Index: &index,
-		Extra: map[string]string{
-			"entry_count":                   fmt.Sprint(entryCount),
-			"valid_bytes":                   fmt.Sprint(validBytes),
-			"series_entry_count":            fmt.Sprint(blocksByType["series"]),
-			"resolved_series_entry_count":   fmt.Sprint(resolvedSeriesEntries),
-			"unresolved_series_entry_count": fmt.Sprint(unresolvedSeriesEntries),
-			"series_tombstone_count":        fmt.Sprint(blocksByType["series-tombstone"]),
-			"measurement_tombstone_count":   fmt.Sprint(blocksByType["measurement-tombstone"]),
-			"tag_key_tombstone_count":       fmt.Sprint(blocksByType["tag-key-tombstone"]),
-			"tag_value_tombstone_count":     fmt.Sprint(blocksByType["tag-value-tombstone"]),
-		},
+		Index:   &index,
+		Extra:   extra,
 		Notices: notices,
 	}
 	return report, nil
