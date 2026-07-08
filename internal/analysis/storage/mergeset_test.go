@@ -3165,6 +3165,23 @@ func TestAnalyzeMergesetFileSetQueryKeySearch(t *testing.T) {
 	if got, want := len(report.Files), 2; got != want {
 		t.Fatalf("file count = %d, want %d", got, want)
 	}
+	if got, want := report.Summary.QueryOverlapFiles, 2; got != want {
+		t.Fatalf("summary query overlap files = %d, want %d", got, want)
+	}
+	if got, want := report.Summary.QueryOverlapBlocks, 2; got != want {
+		t.Fatalf("summary query overlap blocks = %d, want %d", got, want)
+	}
+	tableResult := report.Result()
+	aggregateRow := tableResult.Table.Rows[len(tableResult.Table.Rows)-1]
+	if got, want := aggregateRow[tableColumnIndex(t, tableResult.Table.Columns, "file")], "<file-set>"; got != want {
+		t.Fatalf("aggregate file = %v, want %v", got, want)
+	}
+	if got, want := aggregateRow[tableColumnIndex(t, tableResult.Table.Columns, "query_blocks")], 2; got != want {
+		t.Fatalf("aggregate query blocks = %v, want %v", got, want)
+	}
+	if details := aggregateRow[tableColumnIndex(t, tableResult.Table.Columns, "details")].(string); !strings.Contains(details, "query_files=2") {
+		t.Fatalf("aggregate details = %q, want query file count", details)
+	}
 	decode := report.DecodePath
 	if decode == nil {
 		t.Fatal("expected top-level decode path")

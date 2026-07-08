@@ -78,7 +78,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 		for _, notice := range fileReport.Notices {
 			report.Notices = append(report.Notices, fmt.Sprintf("%s: %s", path, notice))
 		}
-		accumulateSummary(&report.Summary, fileReport, options.QueryRange)
+		accumulateSummary(&report.Summary, fileReport, options)
 	}
 	if options.QueryRange.Set {
 		decodePath, err := buildTSMFileStoreDecodePathSummary(report.Files, options)
@@ -656,7 +656,7 @@ func isTSILogPath(path string) bool {
 	return strings.HasSuffix(strings.ToLower(filepath.Base(path)), ".tsl")
 }
 
-func accumulateSummary(summary *Summary, file FileReport, queryRange TimeRange) {
+func accumulateSummary(summary *Summary, file FileReport, options Options) {
 	summary.TotalSizeBytes += file.SizeBytes
 	summary.KeyCount += file.KeyCount
 	summary.BlockCount += file.BlockCount
@@ -673,10 +673,23 @@ func accumulateSummary(summary *Summary, file FileReport, queryRange TimeRange) 
 	if file.Tombstones.Exists {
 		summary.TombstoneFiles++
 	}
-	if queryRange.Set {
+	if optionsHasQueryTarget(options) {
 		if file.QueryOverlapsFile {
 			summary.QueryOverlapFiles++
 		}
 		summary.QueryOverlapBlocks += file.QueryOverlapBlocks
 	}
+}
+
+func optionsHasQueryTarget(options Options) bool {
+	return options.QueryRange.Set ||
+		len(options.QueryKeys) > 0 ||
+		len(options.QuerySeriesIDs) > 0 ||
+		len(options.QueryMetaIndexIDs) > 0 ||
+		len(options.QueryColumns) > 0 ||
+		len(options.QueryFields) > 0 ||
+		len(options.QueryAnyFields) > 0 ||
+		len(options.QueryNoneFields) > 0 ||
+		len(options.QueryMeasurements) > 0 ||
+		len(options.QueryTags) > 0
 }

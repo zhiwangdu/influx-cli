@@ -788,15 +788,17 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 func TestAccumulateSummaryIncludesBlockTypes(t *testing.T) {
 	var summary Summary
 	accumulateSummary(&summary, FileReport{
-		SizeBytes:  100,
-		KeyCount:   2,
-		BlockCount: 4,
+		SizeBytes:          100,
+		KeyCount:           2,
+		BlockCount:         4,
+		QueryOverlapsFile:  true,
+		QueryOverlapBlocks: 2,
 		BlocksByType: map[string]int{
 			"float":   2,
 			"integer": 1,
 			"ignored": 0,
 		},
-	}, TimeRange{})
+	}, Options{})
 	accumulateSummary(&summary, FileReport{
 		SizeBytes:  50,
 		KeyCount:   1,
@@ -805,7 +807,7 @@ func TestAccumulateSummaryIncludesBlockTypes(t *testing.T) {
 			"float":   3,
 			"ignored": -1,
 		},
-	}, TimeRange{})
+	}, Options{})
 
 	if got, want := summary.TotalSizeBytes, int64(150); got != want {
 		t.Fatalf("total size = %d, want %d", got, want)
@@ -824,6 +826,12 @@ func TestAccumulateSummaryIncludesBlockTypes(t *testing.T) {
 	}
 	if got := summary.BlocksByType["ignored"]; got != 0 {
 		t.Fatalf("ignored blocks = %d, want omitted", got)
+	}
+	if got := summary.QueryOverlapFiles; got != 0 {
+		t.Fatalf("query overlap files = %d, want omitted without query target", got)
+	}
+	if got := summary.QueryOverlapBlocks; got != 0 {
+		t.Fatalf("query overlap blocks = %d, want omitted without query target", got)
 	}
 }
 
