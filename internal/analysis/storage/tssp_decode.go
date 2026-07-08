@@ -195,6 +195,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 	}
 	summary.CursorWindowCount = summary.LocationBlocks
 	markLastTSSPCursorExecutionSampleExhausted(summary, cursorIndex)
+	populateDecodePathTotalExecutionActionCounts(summary)
 	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = tsspDecodeRecommendations(summary)
 	return summary
@@ -271,6 +272,8 @@ func buildTSSPFileSetDecodePathSummary(files []FileReport, options Options) *Dec
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
 	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
+	populateDecodePathTotalExecutionActionCounts(summary)
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = tsspDecodeRecommendations(summary)
 	return summary
 }
@@ -338,6 +341,8 @@ func buildTSSPDetachedFileSetDecodePathSummary(files []FileReport, options Optio
 		summary.Amplification = float64(summary.LocationBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
 	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
+	populateDecodePathTotalExecutionActionCounts(summary)
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = tsspDetachedFileSetRecommendations(summary)
 	return summary
 }

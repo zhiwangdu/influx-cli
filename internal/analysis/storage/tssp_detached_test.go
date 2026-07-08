@@ -999,6 +999,9 @@ func TestTSSPDetachedChunkDecodePathSummarizesRecordExecutionActions(t *testing.
 		QueryRange:       queryRange,
 		BlockSampleLimit: 4,
 	}, nil, &tsspDetachedDataProbe{
+		RecordRows:          3,
+		RecordOutputs:       2,
+		RecordFilterRejects: 1,
 		recordExecutionSamples: []DecodePathCursorStep{
 			{Step: 1, Type: "tssp-record-row-step", Action: "record_row_output"},
 			{Step: 2, Type: "tssp-record-row-step", Action: "record_row_filter_reject"},
@@ -1019,6 +1022,15 @@ func TestTSSPDetachedChunkDecodePathSummarizesRecordExecutionActions(t *testing.
 	}
 	if got, want := summary.RecordExecutionActions["record_row_filter_reject"], 1; got != want {
 		t.Fatalf("record_row_filter_reject action count = %d, want %d", got, want)
+	}
+	if got, want := len(summary.RecordExecutionTotalActions), 2; got != want {
+		t.Fatalf("record execution total action count entries = %d, want %d: %+v", got, want, summary.RecordExecutionTotalActions)
+	}
+	if got, want := summary.RecordExecutionTotalActions["record_row_output"], 2; got != want {
+		t.Fatalf("total record_row_output action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionTotalActions["record_row_filter_reject"], 1; got != want {
+		t.Fatalf("total record_row_filter_reject action count = %d, want %d", got, want)
 	}
 	text := decodePathText(summary)
 	want := "record_actions record_row_filter_reject:1 record_row_output:2"
@@ -1082,6 +1094,57 @@ func TestTSSPDetachedChunkFileSetCursorExecutionSamplesUseLocationBlockIndex(t *
 	}
 	if got := fileSet.CursorExecutionSamples[1]; got.Step != 2 || got.CursorIndexBefore != 1 || got.CursorIndexAfter != 2 || got.File != "segment-b/segment.idx" || !got.CursorExhausted {
 		t.Fatalf("file-set cursor execution sample[1] = %+v, want final aggregate location step", got)
+	}
+}
+
+func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing.T) {
+	queryRange, err := NewTimeRange(100, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := buildTSSPDetachedFileSetDecodePathSummary([]FileReport{
+		{
+			Path:   "segment-a/segment.idx",
+			Format: FormatTSSPDetachedIndex,
+			DecodePath: &DecodePathSummary{
+				DataBlockProbeRangeRows:           5,
+				DataBlockProbeRangeMatches:        3,
+				DataBlockProbeRangeRejects:        2,
+				DataBlockProbeRecordRows:          4,
+				DataBlockProbeRecordOutputs:       1,
+				DataBlockProbeRecordRangeRejects:  2,
+				DataBlockProbeRecordFilterRejects: 1,
+			},
+		},
+		{
+			Path:   "segment-b/segment.idx",
+			Format: FormatTSSPDetachedIndex,
+			DecodePath: &DecodePathSummary{
+				DataBlockProbeRangeRows:           1,
+				DataBlockProbeRangeMatches:        1,
+				DataBlockProbeRecordRows:          2,
+				DataBlockProbeRecordOutputs:       2,
+				DataBlockProbeRecordFilterRejects: 0,
+			},
+		},
+	}, Options{QueryRange: queryRange})
+	if summary == nil {
+		t.Fatal("detached file-set decode path is nil")
+	}
+	if got, want := summary.RangeExecutionTotalActions["range_row_match"], 4; got != want {
+		t.Fatalf("total range_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RangeExecutionTotalActions["range_row_reject"], 2; got != want {
+		t.Fatalf("total range_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionTotalActions["record_row_output"], 3; got != want {
+		t.Fatalf("total record_row_output action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionTotalActions["record_row_range_reject"], 2; got != want {
+		t.Fatalf("total record_row_range_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionTotalActions["record_row_filter_reject"], 1; got != want {
+		t.Fatalf("total record_row_filter_reject action count = %d, want %d", got, want)
 	}
 }
 
@@ -1871,6 +1934,15 @@ func TestAnalyzeTSSPDetachedDataProbeFiltersDecodedRowsByQueryRange(t *testing.T
 	}
 	if got, want := decode.RangeExecutionActions["range_row_match"], 1; got != want {
 		t.Fatalf("range_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.RangeExecutionTotalActions), 2; got != want {
+		t.Fatalf("range execution total action count entries = %d, want %d: %+v", got, want, decode.RangeExecutionTotalActions)
+	}
+	if got, want := decode.RangeExecutionTotalActions["range_row_reject"], 2; got != want {
+		t.Fatalf("total range_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := decode.RangeExecutionTotalActions["range_row_match"], 1; got != want {
+		t.Fatalf("total range_row_match action count = %d, want %d", got, want)
 	}
 	for i, want := range []DecodePathCursorStep{
 		{

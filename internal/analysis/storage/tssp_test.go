@@ -625,6 +625,15 @@ func TestAnalyzeTSSPDataProbeFiltersDecodedRowsByQueryRange(t *testing.T) {
 	if got, want := decode.RangeExecutionActions["range_row_match"], 1; got != want {
 		t.Fatalf("range_row_match action count = %d, want %d", got, want)
 	}
+	if got, want := len(decode.RangeExecutionTotalActions), 2; got != want {
+		t.Fatalf("range execution total action count entries = %d, want %d: %+v", got, want, decode.RangeExecutionTotalActions)
+	}
+	if got, want := decode.RangeExecutionTotalActions["range_row_reject"], 2; got != want {
+		t.Fatalf("total range_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := decode.RangeExecutionTotalActions["range_row_match"], 1; got != want {
+		t.Fatalf("total range_row_match action count = %d, want %d", got, want)
+	}
 	for i, want := range []DecodePathCursorStep{
 		{
 			Step:              1,
@@ -856,6 +865,12 @@ func TestAnalyzeTSSPRecordOutputOrdinalsContinueAcrossChunks(t *testing.T) {
 	}
 	if got, want := decode.RecordExecutionActions["record_row_output"], 4; got != want {
 		t.Fatalf("record_row_output action count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.RecordExecutionTotalActions), 1; got != want {
+		t.Fatalf("record execution total action count entries = %d, want %d: %+v", got, want, decode.RecordExecutionTotalActions)
+	}
+	if got, want := decode.RecordExecutionTotalActions["record_row_output"], 4; got != want {
+		t.Fatalf("total record_row_output action count = %d, want %d", got, want)
 	}
 	for i, want := range []struct {
 		key   string
@@ -5121,6 +5136,57 @@ func TestAnalyzeTSSPFileSetDecodePathAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestTSSPFileSetDecodePathSummarizesTotalExecutionActions(t *testing.T) {
+	queryRange, err := NewTimeRange(100, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := buildTSSPFileSetDecodePathSummary([]FileReport{
+		{
+			Path:   "a.tssp",
+			Format: FormatTSSP,
+			DecodePath: &DecodePathSummary{
+				DataBlockProbeRangeRows:           3,
+				DataBlockProbeRangeMatches:        1,
+				DataBlockProbeRangeRejects:        2,
+				DataBlockProbeRecordRows:          4,
+				DataBlockProbeRecordOutputs:       2,
+				DataBlockProbeRecordRangeRejects:  1,
+				DataBlockProbeRecordFilterRejects: 1,
+			},
+		},
+		{
+			Path:   "b.tssp",
+			Format: FormatTSSP,
+			DecodePath: &DecodePathSummary{
+				DataBlockProbeRangeRows:          2,
+				DataBlockProbeRangeMatches:       2,
+				DataBlockProbeRecordRows:         1,
+				DataBlockProbeRecordOutputs:      1,
+				DataBlockProbeRecordRangeRejects: 0,
+			},
+		},
+	}, Options{QueryRange: queryRange})
+	if summary == nil {
+		t.Fatal("file-set decode path is nil")
+	}
+	if got, want := summary.RangeExecutionTotalActions["range_row_match"], 3; got != want {
+		t.Fatalf("total range_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RangeExecutionTotalActions["range_row_reject"], 2; got != want {
+		t.Fatalf("total range_row_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionTotalActions["record_row_output"], 3; got != want {
+		t.Fatalf("total record_row_output action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionTotalActions["record_row_range_reject"], 1; got != want {
+		t.Fatalf("total record_row_range_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionTotalActions["record_row_filter_reject"], 1; got != want {
+		t.Fatalf("total record_row_filter_reject action count = %d, want %d", got, want)
+	}
+}
+
 func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "00000001-0001-00000000.tssp")
@@ -5209,6 +5275,15 @@ func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) 
 	}
 	if got, want := decode.RecordExecutionActions["record_row_filter_reject"], 2; got != want {
 		t.Fatalf("record_row_filter_reject action count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.RecordExecutionTotalActions), 2; got != want {
+		t.Fatalf("record execution total action count entries = %d, want %d: %+v", got, want, decode.RecordExecutionTotalActions)
+	}
+	if got, want := decode.RecordExecutionTotalActions["record_row_output"], 2; got != want {
+		t.Fatalf("total record_row_output action count = %d, want %d", got, want)
+	}
+	if got, want := decode.RecordExecutionTotalActions["record_row_filter_reject"], 2; got != want {
+		t.Fatalf("total record_row_filter_reject action count = %d, want %d", got, want)
 	}
 	for i, want := range []struct {
 		file        string

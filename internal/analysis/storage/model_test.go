@@ -130,22 +130,31 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 				DataBlockProbeRecordOutputs:       2,
 				DataBlockProbeRecordRangeRejects:  1,
 				DataBlockProbeRecordFilterRejects: 2,
-				QueryFields:                       []FieldFilter{{Key: "missing", Value: "x"}, {Key: "value", Op: ">", Value: "1.0"}},
-				MatchedFields:                     []FieldFilter{{Key: "value", Op: ">", Value: "1.0"}},
-				MissingFields:                     []FieldFilter{{Key: "missing", Value: "x"}},
-				QueryAnyFields:                    []FieldFilter{{Key: "status", Value: "false"}, {Key: "zone", Value: "west"}},
-				MatchedAnyFields:                  []FieldFilter{{Key: "status", Value: "false"}},
-				MissingAnyFields:                  []FieldFilter{{Key: "zone", Value: "west"}},
-				QueryNoneFields:                   []FieldFilter{{Key: "deleted", Value: "true"}},
-				MatchedNoneFields:                 []FieldFilter{{Key: "deleted", Value: "true"}},
-				DataBlockProbeFilterRows:          5,
-				DataBlockProbeFilterMatches:       3,
-				DataBlockProbeFilterRejects:       2,
-				DataBlockProbeRangeRows:           7,
-				DataBlockProbeRangeMatches:        5,
-				DataBlockProbeRangeRejects:        2,
-				DataBlockProbeFilterSkips:         4,
-				DataBlockProbeAnySkips:            4,
+				RecordExecutionTotalActions: map[string]int{
+					"record_row_output":        2,
+					"record_row_range_reject":  1,
+					"record_row_filter_reject": 2,
+				},
+				QueryFields:                 []FieldFilter{{Key: "missing", Value: "x"}, {Key: "value", Op: ">", Value: "1.0"}},
+				MatchedFields:               []FieldFilter{{Key: "value", Op: ">", Value: "1.0"}},
+				MissingFields:               []FieldFilter{{Key: "missing", Value: "x"}},
+				QueryAnyFields:              []FieldFilter{{Key: "status", Value: "false"}, {Key: "zone", Value: "west"}},
+				MatchedAnyFields:            []FieldFilter{{Key: "status", Value: "false"}},
+				MissingAnyFields:            []FieldFilter{{Key: "zone", Value: "west"}},
+				QueryNoneFields:             []FieldFilter{{Key: "deleted", Value: "true"}},
+				MatchedNoneFields:           []FieldFilter{{Key: "deleted", Value: "true"}},
+				DataBlockProbeFilterRows:    5,
+				DataBlockProbeFilterMatches: 3,
+				DataBlockProbeFilterRejects: 2,
+				DataBlockProbeRangeRows:     7,
+				DataBlockProbeRangeMatches:  5,
+				DataBlockProbeRangeRejects:  2,
+				RangeExecutionTotalActions: map[string]int{
+					"range_row_match":  5,
+					"range_row_reject": 2,
+				},
+				DataBlockProbeFilterSkips: 4,
+				DataBlockProbeAnySkips:    4,
 				DataBlockProbeFilterOps: map[string]int{
 					"between":     2,
 					"not-between": 1,
@@ -178,7 +187,7 @@ func TestReportResultIncludesTSSPDecodePathSummary(t *testing.T) {
 		"iterator_cost files=1 blocks=3 bytes=273",
 		"value_output points=6->2 compared=2 unavailable_blocks=1 mismatches=1",
 		"cursor_output points=6->2 samples=2 final_samples=1",
-		"execution windows cursor=2 sampled=1 merge=1 merge_blocks=2 merge_keys=1 samples decisions=1 cursor_steps=1 cursor_actions push:1 filter_steps=1 filter_actions match:1 amplification=2.50x",
+		"execution windows cursor=2 sampled=1 merge=1 merge_blocks=2 merge_keys=1 samples range_total_actions range_row_match:5 range_row_reject:2 record_total_actions record_row_filter_reject:2 record_row_output:2 record_row_range_reject:1 decisions=1 cursor_steps=1 cursor_actions push:1 filter_steps=1 filter_actions match:1 amplification=2.50x",
 		"data_probe blocks=4 bytes=256 valid=3 failures=4 crc_mismatches=1 short=1 unknown_types=1 read_errors=1 row_blocks=3 row_unknowns=1 row_mismatches=1 output_points=2 value_blocks=2 value_unknowns=1 nulls=3 record_samples=1 record_outputs=2",
 		"data_probe_failure_reasons segment_overlap_data_crc_unavailable:1 segment_overlap_data_header_unavailable:1 segment_overlap_data_read_unavailable:1",
 		"data_probe_types float-full:2 integer-full:1",
@@ -613,8 +622,17 @@ func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
 		RangeExecutionActions: map[string]int{
 			"range_row_match": 1,
 		},
+		RangeExecutionTotalActions: map[string]int{
+			"range_row_match":  5,
+			"range_row_reject": 2,
+		},
 		RecordExecutionActions: map[string]int{
 			"record_row_output":        2,
+			"record_row_filter_reject": 1,
+		},
+		RecordExecutionTotalActions: map[string]int{
+			"record_row_output":        6,
+			"record_row_range_reject":  2,
 			"record_row_filter_reject": 1,
 		},
 		FilterExecutionActions: map[string]int{
@@ -622,7 +640,7 @@ func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
 		},
 	}
 	text := decodePathText(&summary)
-	want := "execution samples cursor_actions read_segments:2 range_actions range_row_match:1 record_actions record_row_filter_reject:1 record_row_output:2 filter_actions filter_row_match:1"
+	want := "execution samples range_total_actions range_row_match:5 range_row_reject:2 record_total_actions record_row_filter_reject:1 record_row_output:6 record_row_range_reject:2 cursor_actions read_segments:2 range_actions range_row_match:1 record_actions record_row_filter_reject:1 record_row_output:2 filter_actions filter_row_match:1"
 	if !strings.Contains(text, want) {
 		t.Fatalf("decode path text = %q, want %q", text, want)
 	}
@@ -632,10 +650,12 @@ func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded struct {
-		CursorExecutionActions map[string]int `json:"cursor_execution_action_counts"`
-		RangeExecutionActions  map[string]int `json:"range_execution_action_counts"`
-		RecordExecutionActions map[string]int `json:"record_execution_action_counts"`
-		FilterExecutionActions map[string]int `json:"filter_execution_action_counts"`
+		CursorExecutionActions      map[string]int `json:"cursor_execution_action_counts"`
+		RangeExecutionActions       map[string]int `json:"range_execution_action_counts"`
+		RangeExecutionTotalActions  map[string]int `json:"range_execution_total_action_counts"`
+		RecordExecutionActions      map[string]int `json:"record_execution_action_counts"`
+		RecordExecutionTotalActions map[string]int `json:"record_execution_total_action_counts"`
+		FilterExecutionActions      map[string]int `json:"filter_execution_action_counts"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
@@ -646,6 +666,9 @@ func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
 	if got, want := decoded.RangeExecutionActions["range_row_match"], 1; got != want {
 		t.Fatalf("range_row_match count = %d, want %d", got, want)
 	}
+	if got, want := decoded.RangeExecutionTotalActions["range_row_reject"], 2; got != want {
+		t.Fatalf("total range_row_reject count = %d, want %d", got, want)
+	}
 	if got, want := len(decoded.RecordExecutionActions), 2; got != want {
 		t.Fatalf("record execution action count entries = %d, want %d: %s", got, want, data)
 	}
@@ -654,6 +677,9 @@ func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
 	}
 	if got, want := decoded.RecordExecutionActions["record_row_filter_reject"], 1; got != want {
 		t.Fatalf("record_row_filter_reject count = %d, want %d", got, want)
+	}
+	if got, want := decoded.RecordExecutionTotalActions["record_row_range_reject"], 2; got != want {
+		t.Fatalf("total record_row_range_reject count = %d, want %d", got, want)
 	}
 	if got, want := decoded.FilterExecutionActions["filter_row_match"], 1; got != want {
 		t.Fatalf("filter_row_match count = %d, want %d", got, want)

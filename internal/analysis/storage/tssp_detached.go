@@ -2470,6 +2470,7 @@ func buildTSSPDetachedChunkDecodePathSummary(metaIndexes []tsspMetaIndex, chunks
 	}
 	populateTSSPDetachedChunkMetaBatches(summary, selectedMetas, overlapMetas, options)
 	markLastTSSPCursorExecutionSampleExhausted(summary, summary.LocationBlocks)
+	populateDecodePathTotalExecutionActionCounts(summary)
 	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = tsspDetachedChunkDecodeRecommendations(summary)
 	return summary
