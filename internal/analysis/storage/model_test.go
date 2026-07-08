@@ -691,6 +691,7 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 				KeyCount:           2,
 				BlockCount:         3,
 				QueryOverlapBlocks: 1,
+				Notices:            []string{"secret file-level diagnostic"},
 			},
 			{
 				Path:               "00000002-0001-00000000.tssp",
@@ -739,6 +740,10 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 				"final TSSP file-set output samples include locally deduplicated rows",
 			},
 		},
+		Notices: []string{
+			"00000001-0001-00000000.tssp: secret file-level diagnostic",
+			"00000002-0001-00000000.tssp: secret aggregate diagnostic",
+		},
 	}
 
 	result := report.Result()
@@ -747,6 +752,17 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	}
 	if got, want := result.Metadata.RowCount, 3; got != want {
 		t.Fatalf("metadata row count = %d, want %d", got, want)
+	}
+	fileDetails := result.Table.Rows[0][tableColumnIndex(t, result.Table.Columns, "details")].(string)
+	if !strings.Contains(fileDetails, "notices=1") {
+		t.Fatalf("file details = %q, want notice count", fileDetails)
+	}
+	if strings.Contains(fileDetails, "secret") {
+		t.Fatalf("file details = %q, want count-only notice summary", fileDetails)
+	}
+	secondFileDetails := result.Table.Rows[1][tableColumnIndex(t, result.Table.Columns, "details")].(string)
+	if strings.Contains(secondFileDetails, "notices=") {
+		t.Fatalf("second file details = %q, want no zero notice summary", secondFileDetails)
 	}
 	row := result.Table.Rows[2]
 	if got, want := row[tableColumnIndex(t, result.Table.Columns, "file")], "<file-set>"; got != want {
@@ -770,7 +786,7 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	if got, want := row[tableColumnIndex(t, result.Table.Columns, "tombstone")], "1 files"; got != want {
 		t.Fatalf("aggregate tombstone = %v, want %v", got, want)
 	}
-	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2; query_files=2; tombstone_files=1; block_types chunk-meta:2 data:6"; got != want {
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2; query_files=2; tombstone_files=1; notices=2; block_types chunk-meta:2 data:6"; got != want {
 		t.Fatalf("aggregate details = %v, want %v", got, want)
 	}
 	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)

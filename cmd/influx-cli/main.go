@@ -323,8 +323,8 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 				if strings.TrimSpace(output) != "" {
 					fmt.Fprintln(cmd.OutOrStdout(), output)
 				}
-				for _, notice := range report.Notices {
-					fmt.Fprintln(cmd.ErrOrStderr(), "warning:", notice)
+				if len(report.Notices) > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: storage analyzer produced %d notice(s); use --format json for notice details\n", len(report.Notices))
 				}
 			default:
 				return fmt.Errorf("storage analyze supports table or json output, got %q", normalized)

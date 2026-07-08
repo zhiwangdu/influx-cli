@@ -626,7 +626,7 @@ func (r Report) Result() result.Result {
 			r.Summary.BlockCount,
 			r.Summary.QueryOverlapBlocks,
 			tombstone,
-			summaryDetailsText(r.Summary, len(r.Files)),
+			summaryDetailsText(r.Summary, len(r.Files), len(r.Notices)),
 			"",
 			decodePathText(r.DecodePath),
 			joinSamples(decodePathRecommendations(r.DecodePath)),
@@ -660,16 +660,22 @@ func fileDetailsText(file FileReport) string {
 	if file.SecondaryIndex != nil {
 		parts = append(parts, secondaryIndexDetailsText(file.SecondaryIndex))
 	}
+	if len(file.Notices) > 0 {
+		parts = append(parts, fmt.Sprintf("notices=%d", len(file.Notices)))
+	}
 	return strings.Join(nonEmptyStrings(parts), "; ")
 }
 
-func summaryDetailsText(summary Summary, fileCount int) string {
+func summaryDetailsText(summary Summary, fileCount, noticeCount int) string {
 	parts := []string{fmt.Sprintf("files=%d", fileCount)}
 	if summary.QueryOverlapFiles > 0 {
 		parts = append(parts, fmt.Sprintf("query_files=%d", summary.QueryOverlapFiles))
 	}
 	if summary.TombstoneFiles > 0 {
 		parts = append(parts, fmt.Sprintf("tombstone_files=%d", summary.TombstoneFiles))
+	}
+	if noticeCount > 0 {
+		parts = append(parts, fmt.Sprintf("notices=%d", noticeCount))
 	}
 	if blocksByType := countMapText(summary.BlocksByType); blocksByType != "" {
 		parts = append(parts, "block_types "+blocksByType)

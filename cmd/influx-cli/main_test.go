@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -435,5 +438,34 @@ func TestStorageAnalyzeNoneFieldRequiresRange(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--field-none requires --from and --to") {
 		t.Fatalf("error = %v, want NOT field range requirement", err)
+	}
+}
+
+func TestStorageAnalyzeTableWarningsAreCountOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fields.idxl")
+	if err := os.WriteFile(path, []byte{1}, 0o600); err != nil {
+		t.Fatalf("write fields index log: %v", err)
+	}
+
+	cmd := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--width", "240", "storage", "analyze", "--storage-format", "fields-index", path})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if got := stdout.String(); !strings.Contains(got, "notices=1") {
+		t.Fatalf("stdout = %q, want notice count in table details", got)
+	}
+	warning := stderr.String()
+	if !strings.Contains(warning, "storage analyzer produced 1 notice(s)") {
+		t.Fatalf("stderr = %q, want count-only warning", warning)
+	}
+	for _, notWant := range []string{path, "offset"} {
+		if strings.Contains(warning, notWant) {
+			t.Fatalf("stderr = %q, want no raw notice detail %q", warning, notWant)
+		}
 	}
 }
