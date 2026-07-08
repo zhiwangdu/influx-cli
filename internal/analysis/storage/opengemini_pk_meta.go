@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -77,6 +78,13 @@ type opengeminiPKMetaAnalysis struct {
 func analyzeOpenGeminiPKMeta(path string, info os.FileInfo, options Options) (FileReport, error) {
 	if info.IsDir() {
 		return FileReport{}, fmt.Errorf("opengemini-pk-meta format requires a primary.meta file")
+	}
+	base := filepath.Base(path)
+	if strings.EqualFold(base, opengeminiPKDataFileName) {
+		return FileReport{}, fmt.Errorf("primary.idx is detached primary-key data; analyze primary.meta with opengemini-pk-meta")
+	}
+	if !strings.EqualFold(base, opengeminiPKMetaFileName) {
+		return FileReport{}, fmt.Errorf("opengemini-pk-meta format requires a primary.meta file, got %s", base)
 	}
 
 	data, err := os.ReadFile(path)

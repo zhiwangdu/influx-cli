@@ -375,6 +375,48 @@ func TestAnalyzeOpenGeminiPKMetaRejectsInvalidMagic(t *testing.T) {
 	}
 }
 
+func TestAnalyzeOpenGeminiPKMetaRejectsDetachedPrimaryData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), opengeminiPKDataFileName)
+	if err := os.WriteFile(path, []byte("detached primary key data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatOpenGeminiPKMeta})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsOpenGeminiPKNotice(report.Notices, "primary.idx is detached primary-key data") {
+		t.Fatalf("notices = %v, want detached primary.idx warning", report.Notices)
+	}
+}
+
+func TestAnalyzeOpenGeminiPKMetaRejectsAttachedIndexName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "0000-0000-0001.idx")
+	if err := os.WriteFile(path, encodeTestOpenGeminiPKIndex(
+		[]testOpenGeminiPKColumn{{Name: "time", Type: 1}},
+		1,
+		-1,
+		nil,
+		[]int{8},
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatOpenGeminiPKMeta})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsOpenGeminiPKNotice(report.Notices, "opengemini-pk-meta format requires a primary.meta file") {
+		t.Fatalf("notices = %v, want primary.meta filename warning", report.Notices)
+	}
+}
+
 func encodeTestOpenGeminiPKMeta(columns []testOpenGeminiPKColumn, tcLocation int8, blocks []testOpenGeminiPKMetaBlock) []byte {
 	nameBytes := []byte{}
 	for _, column := range columns {
