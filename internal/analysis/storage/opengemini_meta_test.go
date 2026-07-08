@@ -142,6 +142,95 @@ func TestAnalyzeOpenGeminiMetaTopologyJSON(t *testing.T) {
 	}
 }
 
+func TestAnalyzeOpenGeminiMetaTopologyDataOpsWrapper(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opengemini-meta.pb")
+	if err := os.WriteFile(path, testOpenGeminiMetaDataOpsProto(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatOpenGeminiMeta,
+		KeySampleLimit:   4,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	for key, want := range map[string]string{
+		"encoding":                  "protobuf-dataops",
+		"snapshot_wrapper":          "DataOps",
+		"snapshot_op_count":         "2",
+		"snapshot_new_index":        "101",
+		"snapshot_max_cq_change_id": "7",
+		"snapshot_get_op_state":     "1",
+		"index":                     "99",
+		"cluster_id":                "12345",
+		"databases":                 "1",
+		"data_nodes":                "1",
+		"sql_nodes":                 "1",
+	} {
+		if got := file.Extra[key]; got != want {
+			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
+		}
+	}
+	if got, want := file.KeySamples, []string{
+		"db:metrics",
+		"rp:metrics/autogen",
+		"data-node:2@store:8400",
+		"sql-node:3@sql:8400",
+	}; !equalStrings(got, want) {
+		t.Fatalf("key samples = %v, want %v", got, want)
+	}
+}
+
+func TestAnalyzeOpenGeminiMetaTopologyAllClearDataOpsWrapper(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opengemini-meta.pb")
+	if err := os.WriteFile(path, testOpenGeminiMetaAllClearDataOpsProto(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatOpenGeminiMeta,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 2,
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["encoding"], "protobuf-dataops"; got != want {
+		t.Fatalf("encoding = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["snapshot_get_op_state"], "0"; got != want {
+		t.Fatalf("snapshot get op state = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["snapshot_op_count"], "0"; got != want {
+		t.Fatalf("snapshot op count = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["index"], "99"; got != want {
+		t.Fatalf("index = %q, want embedded Data index %q", got, want)
+	}
+}
+
+func TestAnalyzeOpenGeminiMetaDataOpsWithoutEmbeddedData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opengemini-meta.pb")
+	if err := os.WriteFile(path, testOpenGeminiMetaDataOpsProtoWithoutData(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatOpenGeminiMeta})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(report.Files) != 0 {
+		t.Fatalf("files = %d, want 0", len(report.Files))
+	}
+	if !containsString(report.Notices, "openGemini DataOps snapshot has no embedded Data topology") {
+		t.Fatalf("notices = %v, want DataOps missing Data notice", report.Notices)
+	}
+}
+
 func TestOpenGeminiMetaAutoDetectNames(t *testing.T) {
 	trueNames := []string{
 		"meta.pb",
@@ -191,6 +280,7 @@ func testOpenGeminiMetaProto() []byte {
 		testProtoVarintField(1, 4),
 		testProtoVarintField(2, 99),
 		testProtoVarintField(3, 12345),
+		testProtoBytesField(4, testOpenGeminiMetaNodeProto(9, "node:8400", "node:8401", "node", 1)),
 		testProtoBytesField(5, testOpenGeminiMetaDatabaseProto()),
 		testProtoBytesField(10, testOpenGeminiMetaDataNodeProto(2, "store:8400", "store:8401", "store", 1)),
 		testProtoBytesField(11, testOpenGeminiMetaNodeProto(1, "meta:8400", "meta:8401", "meta", 1)),
@@ -199,6 +289,35 @@ func testOpenGeminiMetaProto() []byte {
 		testProtoVarintField(16, 2),
 		testProtoBytesField(28, testOpenGeminiMetaReplicaGroupEntryProto()),
 		testProtoBytesField(33, testOpenGeminiMetaDataNodeProto(3, "sql:8400", "sql:8401", "sql", 1)),
+	)
+}
+
+func testOpenGeminiMetaDataOpsProto() []byte {
+	return testProtoMessage(
+		testProtoBytesField(1, []byte("op-a")),
+		testProtoBytesField(1, []byte("op-b")),
+		testProtoVarintField(2, 101),
+		testProtoVarintField(3, 7),
+		testProtoVarintField(4, 1),
+		testProtoBytesField(5, testOpenGeminiMetaProto()),
+	)
+}
+
+func testOpenGeminiMetaAllClearDataOpsProto() []byte {
+	return testProtoMessage(
+		testProtoVarintField(2, 99),
+		testProtoVarintField(3, 0),
+		testProtoVarintField(4, 0),
+		testProtoBytesField(5, testOpenGeminiMetaProto()),
+	)
+}
+
+func testOpenGeminiMetaDataOpsProtoWithoutData() []byte {
+	return testProtoMessage(
+		testProtoBytesField(1, []byte("op-a")),
+		testProtoVarintField(2, 101),
+		testProtoVarintField(3, 7),
+		testProtoVarintField(4, 2),
 	)
 }
 

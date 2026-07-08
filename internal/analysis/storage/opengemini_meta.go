@@ -11,19 +11,24 @@ import (
 )
 
 type openGeminiMetaTopology struct {
-	Term            uint64
-	Index           uint64
-	ClusterID       uint64
-	ClusterPtNum    uint64
-	PtNumPerNode    uint64
-	IsSQLiteEnabled bool
-	DataNodes       []openGeminiMetaNode
-	MetaNodes       []openGeminiMetaNode
-	SQLNodes        []openGeminiMetaNode
-	Databases       []openGeminiMetaDatabase
-	PtView          map[string][]openGeminiMetaPtInfo
-	ReplicaGroups   map[string]int
-	Encoding        string
+	Term                  uint64
+	Index                 uint64
+	ClusterID             uint64
+	ClusterPtNum          uint64
+	PtNumPerNode          uint64
+	IsSQLiteEnabled       bool
+	DataNodes             []openGeminiMetaNode
+	MetaNodes             []openGeminiMetaNode
+	SQLNodes              []openGeminiMetaNode
+	Databases             []openGeminiMetaDatabase
+	PtView                map[string][]openGeminiMetaPtInfo
+	ReplicaGroups         map[string]int
+	Encoding              string
+	SnapshotWrapper       string
+	SnapshotOpCount       int
+	SnapshotNewIndex      uint64
+	SnapshotMaxCQChangeID uint64
+	SnapshotGetOpState    uint64
 }
 
 type openGeminiMetaNode struct {
@@ -108,6 +113,13 @@ func analyzeOpenGeminiMeta(path string, info os.FileInfo, options Options) (File
 			"pts":                fmt.Sprint(ptCount),
 			"replica_groups":     fmt.Sprint(rgCount),
 		},
+	}
+	if topology.SnapshotWrapper != "" {
+		report.Extra["snapshot_wrapper"] = topology.SnapshotWrapper
+		report.Extra["snapshot_op_count"] = fmt.Sprint(topology.SnapshotOpCount)
+		report.Extra["snapshot_new_index"] = fmt.Sprint(topology.SnapshotNewIndex)
+		report.Extra["snapshot_max_cq_change_id"] = fmt.Sprint(topology.SnapshotMaxCQChangeID)
+		report.Extra["snapshot_get_op_state"] = fmt.Sprint(topology.SnapshotGetOpState)
 	}
 	if dbCount > 0 {
 		report.BlocksByType["database"] = dbCount
@@ -250,11 +262,83 @@ func parseOpenGeminiMetaTopology(data []byte) (openGeminiMetaTopology, error) {
 	if err != nil {
 		return openGeminiMetaTopology{}, err
 	}
-	topology.Encoding = "protobuf"
 	return topology, nil
 }
 
 func parseOpenGeminiMetaProto(data []byte) (openGeminiMetaTopology, error) {
+	if topology, ok, err := parseOpenGeminiMetaDataOpsProto(data); ok || err != nil {
+		return topology, err
+	}
+	topology, err := parseOpenGeminiMetaDataProto(data)
+	if err != nil {
+		return openGeminiMetaTopology{}, err
+	}
+	topology.Encoding = "protobuf"
+	return topology, nil
+}
+
+func parseOpenGeminiMetaDataOpsProto(data []byte) (openGeminiMetaTopology, bool, error) {
+	var dataPayload []byte
+	var opCount int
+	var newIndex uint64
+	var maxCQChangeID uint64
+	var getOpState uint64
+	sawWrapperField := false
+	sawGetOpState := false
+	err := forEachProtoField(data, func(field int, wire int, value uint64, payload []byte) error {
+		switch field {
+		case 1:
+			if wire == protoWireBytes {
+				sawWrapperField = true
+				opCount++
+			}
+		case 2:
+			if wire == protoWireVarint {
+				sawWrapperField = true
+				newIndex = value
+			}
+		case 3:
+			if wire == protoWireVarint {
+				sawWrapperField = true
+				maxCQChangeID = value
+			}
+		case 4:
+			if wire == protoWireVarint {
+				sawWrapperField = true
+				sawGetOpState = true
+				getOpState = value
+			}
+		case 5:
+			if wire == protoWireBytes {
+				sawWrapperField = true
+				dataPayload = append(dataPayload[:0], payload...)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return openGeminiMetaTopology{}, false, err
+	}
+	if !sawWrapperField || !sawGetOpState {
+		return openGeminiMetaTopology{}, false, nil
+	}
+	if len(dataPayload) == 0 {
+		return openGeminiMetaTopology{}, true, fmt.Errorf("openGemini DataOps snapshot has no embedded Data topology")
+	}
+	topology, err := parseOpenGeminiMetaDataProto(dataPayload)
+	if err != nil {
+		return openGeminiMetaTopology{}, true, fmt.Errorf("decode openGemini DataOps embedded Data: %w", err)
+	}
+	topology.Encoding = "protobuf-dataops"
+	topology.SnapshotWrapper = "DataOps"
+	topology.SnapshotOpCount = opCount
+	topology.SnapshotNewIndex = newIndex
+	topology.SnapshotMaxCQChangeID = maxCQChangeID
+	topology.SnapshotGetOpState = getOpState
+	return topology, true, nil
+}
+
+func parseOpenGeminiMetaDataProto(data []byte) (openGeminiMetaTopology, error) {
 	var topology openGeminiMetaTopology
 	topology.PtView = map[string][]openGeminiMetaPtInfo{}
 	topology.ReplicaGroups = map[string]int{}

@@ -569,7 +569,7 @@ mergeset item payload byte accounting 只来自当前 part 的本地 `items.bin`
 
 mergeset cursor window、output 和 heap execution samples 会在 sampled item 含不可打印二进制字节时附带 hex 字段，保留原始 string 字段兼容性，同时让真实 openGemini index item 可读、可比对。
 
-openGemini meta topology analyzer 只读取本地 meta snapshot/export 文件，格式名为 `opengemini-meta`。它用轻量 protobuf/JSON reader 提取 database、retention policy、meta/data/sql node、PT view 和 replica group summary，不连接 meta service、HTTP API、raft runtime 或 storage engine runtime。
+openGemini meta topology analyzer 只读取本地 meta snapshot/export 文件，格式名为 `opengemini-meta`。它用轻量 protobuf/JSON reader 提取 database、retention policy、meta/data/sql node、PT view 和 replica group summary；protobuf 输入支持直接的 `Data` snapshot，也支持 SnapshotV2 `DataOps` wrapper 中嵌入的本地 `Data`。它不连接 meta service、HTTP API、raft runtime 或 storage engine runtime。
 
 ## 12. Plugin System
 
