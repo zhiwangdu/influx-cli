@@ -3165,6 +3165,28 @@ func TestAnalyzeTSSPDetachedFieldFilterMatchesNullPredicates(t *testing.T) {
 			wantValueOutCount: 2,
 		},
 		{
+			name:             "exists",
+			filter:           FieldFilter{Key: "value", Op: "exists"},
+			wantFilter:       FieldFilter{Key: "value", Op: "exists"},
+			wantOutputPoints: "2",
+			wantMatches:      "2",
+			wantRejects:      "1",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "meta-index-id:42/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},
+				{Key: "meta-index-id:42/value", Time: 555, Type: "float", OptimizedValue: "3.75", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+		{
+			name:              "not-exists",
+			filter:            FieldFilter{Key: "value", Op: "not-exists"},
+			wantFilter:        FieldFilter{Key: "value", Op: "not-exists"},
+			wantOutputPoints:  "1",
+			wantMatches:       "1",
+			wantRejects:       "2",
+			wantValueOutCount: 1,
+		},
+		{
 			name:             "is-not-null",
 			filter:           FieldFilter{Key: "value", Op: "is-not", Value: "null"},
 			wantFilter:       FieldFilter{Key: "value", Op: "!=", Value: "null"},

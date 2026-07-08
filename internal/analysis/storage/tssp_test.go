@@ -925,6 +925,22 @@ func TestAnalyzeTSSPFieldFilterMatchesNullPredicates(t *testing.T) {
 			wantValueOutCount: 2,
 		},
 		{
+			name:             "exists",
+			filter:           FieldFilter{Key: "value", Op: "exists"},
+			wantOutputPoints: "2",
+			wantSamples: []DecodePathCursorOutput{
+				{Key: "sid:7/value", Time: 333, Type: "float", OptimizedValue: "1.25", Matches: true},
+				{Key: "sid:7/value", Time: 555, Type: "float", OptimizedValue: "3.75", Matches: true},
+			},
+			wantValueOutCount: 2,
+		},
+		{
+			name:              "not-exists",
+			filter:            FieldFilter{Key: "value", Op: "not-exists"},
+			wantOutputPoints:  "1",
+			wantValueOutCount: 1,
+		},
+		{
 			name:             "angle-not-null",
 			filter:           FieldFilter{Key: "value", Op: "<>", Value: "null"},
 			wantOutputPoints: "2",
@@ -998,6 +1014,116 @@ func TestAnalyzeTSSPFieldFilterMatchesNullPredicates(t *testing.T) {
 			}
 			if !decode.Samples[0].ValueOutputAvailable {
 				t.Fatal("expected null predicate result to remain available")
+			}
+		})
+	}
+}
+
+func TestTSSPDataBlockFilterRowsMatchesMissingExistencePredicates(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"value": {
+			Type:         "string",
+			RowsKnown:    true,
+			Rows:         2,
+			ValueKnown:   true,
+			Values:       []string{"alpha", ""},
+			ValuePresent: []bool{true, false},
+		},
+	}
+	for _, tc := range []struct {
+		name        string
+		required    []FieldFilter
+		any         []FieldFilter
+		none        []FieldFilter
+		wantMatch   int
+		wantOp      string
+		wantOps     int
+		wantSamples int
+	}{
+		{
+			name:        "missing-required-exists",
+			required:    []FieldFilter{{Key: "missing", Op: "exists"}},
+			wantMatch:   0,
+			wantOp:      "exists",
+			wantOps:     2,
+			wantSamples: 2,
+		},
+		{
+			name:        "missing-required-not-exists",
+			required:    []FieldFilter{{Key: "missing", Op: "not-exists"}},
+			wantMatch:   2,
+			wantOp:      "not-exists",
+			wantOps:     2,
+			wantSamples: 2,
+		},
+		{
+			name:        "missing-any-not-exists",
+			any:         []FieldFilter{{Key: "missing", Op: "!exists"}},
+			wantMatch:   2,
+			wantOp:      "not-exists",
+			wantOps:     2,
+			wantSamples: 2,
+		},
+		{
+			name:        "missing-any-exists",
+			any:         []FieldFilter{{Key: "missing", Op: "exists"}},
+			wantMatch:   0,
+			wantOp:      "exists",
+			wantOps:     2,
+			wantSamples: 2,
+		},
+		{
+			name:        "missing-none-not-exists",
+			none:        []FieldFilter{{Key: "missing", Op: "not exists"}},
+			wantMatch:   0,
+			wantOp:      "not-exists",
+			wantOps:     2,
+			wantSamples: 2,
+		},
+		{
+			name:        "missing-none-exists",
+			none:        []FieldFilter{{Key: "missing", Op: "exists"}},
+			wantMatch:   2,
+			wantOp:      "exists",
+			wantOps:     2,
+			wantSamples: 2,
+		},
+		{
+			name:        "present-any-not-exists",
+			any:         []FieldFilter{{Key: "value", Op: "not-exists"}},
+			wantMatch:   1,
+			wantOp:      "not-exists",
+			wantOps:     2,
+			wantSamples: 2,
+		},
+		{
+			name:        "present-none-exists",
+			none:        []FieldFilter{{Key: "value", Op: "exists"}},
+			wantMatch:   1,
+			wantOp:      "exists",
+			wantOps:     2,
+			wantSamples: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, matches, filterRows, stats, ok := tsspDataBlockFilterRows(blocks, tc.required, tc.any, tc.none, 2, tsspTimeRange{}, TimeRange{}, "sid:7", 0, 8)
+			if !ok {
+				t.Fatal("filter rows returned unavailable")
+			}
+			if got, want := len(rows), 2; got != want {
+				t.Fatalf("matching rows length = %d, want %d", got, want)
+			}
+			if got := matches; got != tc.wantMatch {
+				t.Fatalf("matches = %d, want %d", got, tc.wantMatch)
+			}
+			if got, want := filterRows, 2; got != want {
+				t.Fatalf("filter rows = %d, want %d", got, want)
+			}
+			if got := stats.OperatorEvaluations[tc.wantOp]; got != tc.wantOps {
+				t.Fatalf("%s operator evaluations = %d, want %d", tc.wantOp, got, tc.wantOps)
+			}
+			if got := len(stats.FilterExecutionSamples); got != tc.wantSamples {
+				t.Fatalf("filter execution samples = %d, want %d", got, tc.wantSamples)
 			}
 		})
 	}
@@ -6001,6 +6127,36 @@ func TestAnalyzeQueryFieldsNormalizesSymbolOperatorAliases(t *testing.T) {
 	}
 	if got, want := fieldFilterOperator(FieldFilter{Key: "state", Op: "is_not", Value: "null"}), "!="; got != want {
 		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+}
+
+func TestAnalyzeQueryFieldsNormalizesExistenceOperators(t *testing.T) {
+	filters := normalizeFieldFilters([]FieldFilter{
+		{Key: " value ", Op: "exists", Value: " "},
+		{Key: "deleted", Op: "!exists"},
+		{Key: "missing", Op: "not exists"},
+		{Key: "evicted", Op: "not_exists"},
+	})
+	want := []FieldFilter{
+		{Key: "deleted", Op: "not-exists"},
+		{Key: "evicted", Op: "not-exists"},
+		{Key: "missing", Op: "not-exists"},
+		{Key: "value", Op: "exists"},
+	}
+	if !equalFieldFilters(filters, want) {
+		t.Fatalf("filters = %v, want %v", filters, want)
+	}
+	if err := validateFieldFilters(filters); err != nil {
+		t.Fatalf("validate field filters: %v", err)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "value", Op: "exists"}), "exists"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "deleted", Op: "!exists"}), "not-exists"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if err := validateFieldFilters([]FieldFilter{{Key: "value", Op: "exists", Value: "true"}}); err == nil || !strings.Contains(err.Error(), "does not take a value") {
+		t.Fatalf("exists validation error = %v, want value rejection", err)
 	}
 }
 

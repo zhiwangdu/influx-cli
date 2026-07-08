@@ -249,6 +249,8 @@ func normalizeFieldFilterOperator(op string) string {
 		return "=~"
 	case "!matches", "!match", "!regex", "!regexp", "not matches", "not match", "not regex", "not regexp", "not-matches", "not-match", "not-regex", "not-regexp":
 		return "!~"
+	case "!exists", "not exists", "not-exists":
+		return "not-exists"
 	case "starts with", "starts-with":
 		return "starts-with"
 	case "!starts-with", "not starts with", "not-starts-with":
@@ -274,7 +276,7 @@ func fieldFilterOperator(filter FieldFilter) string {
 
 func validFieldFilterOperator(op string) bool {
 	switch normalizeFieldFilterOperator(op) {
-	case "", "!=", ">", ">=", "<", "<=", "in", "not-in", "between", "not-between", "contains", "not-contains", "like", "not-like", "starts-with", "not-starts-with", "ends-with", "not-ends-with", "=~", "!~":
+	case "", "!=", ">", ">=", "<", "<=", "in", "not-in", "between", "not-between", "contains", "not-contains", "like", "not-like", "starts-with", "not-starts-with", "ends-with", "not-ends-with", "=~", "!~", "exists", "not-exists":
 		return true
 	default:
 		return false
@@ -287,6 +289,12 @@ func validateFieldFilters(filters []FieldFilter) error {
 			return fmt.Errorf("query field filter %q has unsupported operator %q", filter.Key, filter.Op)
 		}
 		op := fieldFilterOperator(filter)
+		if op == "exists" || op == "not-exists" {
+			if strings.TrimSpace(filter.Value) != "" {
+				return fmt.Errorf("query field filter %q does not take a value for operator %q", filter.Key, op)
+			}
+			continue
+		}
 		if op == "in" || op == "not-in" {
 			if len(fieldFilterSetValues(filter.Value)) == 0 {
 				return fmt.Errorf("query field filter %q requires at least one value for operator %q", filter.Key, op)

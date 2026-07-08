@@ -597,7 +597,7 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		decision := ""
 		var rowStats tsspDataBlockFilterRowStats
 		for i, filterBlock := range filterBlocks {
-			predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+			predicateMatch := tsspDataBlockFilterMatches(filterBlock, row)
 			decision = tsspDataBlockFilterDecision(filterBlock.filter, "required", predicateMatch)
 			stats.observe(filterBlock.filter, "required", predicateMatch)
 			rowStats.observe("required", predicateMatch)
@@ -620,7 +620,7 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 			match = false
 			result = "reject_any"
 			for i, filterBlock := range anyFilterBlocks {
-				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+				predicateMatch := tsspDataBlockFilterMatches(filterBlock, row)
 				decision = tsspDataBlockFilterDecision(filterBlock.filter, "any", predicateMatch)
 				stats.observe(filterBlock.filter, "any", predicateMatch)
 				rowStats.observe("any", predicateMatch)
@@ -641,7 +641,7 @@ func tsspDataBlockFilterRows(blocks map[string]tsspDetachedDataBlockInfo, filter
 		}
 		if match && len(noneFilterBlocks) > 0 {
 			for i, filterBlock := range noneFilterBlocks {
-				predicateMatch := tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+				predicateMatch := tsspDataBlockFilterMatches(filterBlock, row)
 				decision = tsspDataBlockFilterDecision(filterBlock.filter, "none", predicateMatch)
 				stats.observe(filterBlock.filter, "none", predicateMatch)
 				rowStats.observe("none", predicateMatch)
@@ -761,8 +761,9 @@ func tsspDataBlockQueryRangeRows(blocks map[string]tsspDetachedDataBlockInfo, ti
 }
 
 type tsspDataBlockFieldFilterBlock struct {
-	filter FieldFilter
-	block  tsspDetachedDataBlockInfo
+	filter  FieldFilter
+	block   tsspDetachedDataBlockInfo
+	missing bool
 }
 
 func tsspDataBlockRequiredFilterBlocks(blocks map[string]tsspDetachedDataBlockInfo, filters []FieldFilter, rows int) ([]tsspDataBlockFieldFilterBlock, bool) {
@@ -770,6 +771,10 @@ func tsspDataBlockRequiredFilterBlocks(blocks map[string]tsspDetachedDataBlockIn
 	for _, filter := range filters {
 		block, ok := blocks[filter.Key]
 		if !ok {
+			if fieldFilterOperator(filter) == "exists" || fieldFilterOperator(filter) == "not-exists" {
+				filterBlocks = append(filterBlocks, tsspDataBlockFieldFilterBlock{filter: filter, missing: true})
+				continue
+			}
 			return nil, true
 		}
 		if !block.RowsKnown || !block.ValueKnown || block.Rows != rows {
@@ -788,6 +793,9 @@ func tsspDataBlockAnyFilterBlocks(blocks map[string]tsspDetachedDataBlockInfo, f
 	for _, filter := range filters {
 		block, ok := blocks[filter.Key]
 		if !ok {
+			if fieldFilterOperator(filter) == "exists" || fieldFilterOperator(filter) == "not-exists" {
+				filterBlocks = append(filterBlocks, tsspDataBlockFieldFilterBlock{filter: filter, missing: true})
+			}
 			continue
 		}
 		if !block.RowsKnown || !block.ValueKnown || block.Rows != rows {
@@ -799,6 +807,32 @@ func tsspDataBlockAnyFilterBlocks(blocks map[string]tsspDetachedDataBlockInfo, f
 		filterBlocks = append(filterBlocks, tsspDataBlockFieldFilterBlock{filter: filter, block: block})
 	}
 	return filterBlocks, true
+}
+
+func tsspDataBlockFilterMatches(filterBlock tsspDataBlockFieldFilterBlock, row int) bool {
+	op := fieldFilterOperator(filterBlock.filter)
+	if filterBlock.missing {
+		return op == "not-exists"
+	}
+	if op == "exists" {
+		return tsspDataBlockValueExists(filterBlock.block, row)
+	}
+	if op == "not-exists" {
+		return !tsspDataBlockValueExists(filterBlock.block, row)
+	}
+	return tsspDataBlockValueMatches(filterBlock.block, row, filterBlock.filter)
+}
+
+func tsspDataBlockValueExists(block tsspDetachedDataBlockInfo, row int) bool {
+	if block.ValueNull {
+		return false
+	}
+	if len(block.ValuePresent) > 0 {
+		if row >= len(block.ValuePresent) || !block.ValuePresent[row] {
+			return false
+		}
+	}
+	return row >= 0 && row < len(block.Values)
 }
 
 func tsspDataBlockValueMatches(block tsspDetachedDataBlockInfo, row int, filter FieldFilter) bool {
