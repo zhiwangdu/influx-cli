@@ -157,6 +157,46 @@ func TestAnalyzeTSSPDetachedMetaIndex(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPDetachedMetaIndexFilterMissDoesNotOverlapFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, tsspDetachedMetaIndexFileName)
+	if err := writeTestTSSPDetachedMetaIndex(path, []tsspMetaIndex{
+		{ID: 10, MinTime: 100, MaxTime: 150, Offset: 64, Size: 40},
+		{ID: 11, MinTime: 200, MaxTime: 260, Offset: 104, Size: 80},
+		{ID: 12, MinTime: 400, MaxTime: 450, Offset: 184, Size: 60},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(180, 220)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:            FormatTSSPDetachedIndex,
+		QueryRange:        queryRange,
+		QueryMetaIndexIDs: []uint64{12},
+		KeySampleLimit:    4,
+		BlockSampleLimit:  4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got := file.QueryOverlapBlocks; got != 0 {
+		t.Fatalf("query overlap blocks = %d, want none", got)
+	}
+	if file.QueryOverlapsFile {
+		t.Fatal("query overlaps file = true, want false for meta-index-id miss")
+	}
+	if got := report.Summary.QueryOverlapFiles; got != 0 {
+		t.Fatalf("summary query overlap files = %d, want none", got)
+	}
+	if got := report.Summary.QueryOverlapBlocks; got != 0 {
+		t.Fatalf("summary query overlap blocks = %d, want none", got)
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexFileSetDecodePathAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "segment-a", tsspDetachedMetaIndexFileName)
@@ -516,6 +556,12 @@ func TestAnalyzeTSSPDetachedMetaIndexDescendingAndIDFilter(t *testing.T) {
 	if got, want := file.QueryOverlapBlocks, 1; got != want {
 		t.Fatalf("query overlap blocks = %d, want %d", got, want)
 	}
+	if !file.QueryOverlapsFile {
+		t.Fatal("query overlaps file = false, want true for meta-index-id hit")
+	}
+	if got, want := report.Summary.QueryOverlapFiles, 1; got != want {
+		t.Fatalf("summary query overlap files = %d, want %d", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("decode path is nil")
@@ -834,6 +880,55 @@ func TestAnalyzeTSSPDetachedMetaIndexExpandsChunkMetaSidecar(t *testing.T) {
 	}
 	if !containsString(decode.Recommendations, "detached TSSP cursor execution samples") {
 		t.Fatalf("recommendations = %v, want detached cursor execution recommendation", decode.Recommendations)
+	}
+
+	hitReport, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:            FormatTSSPDetachedIndex,
+		BlockSampleLimit:  4,
+		QueryRange:        queryRange,
+		QueryMetaIndexIDs: []uint64{11},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hitFile := hitReport.Files[0]
+	if got, want := hitFile.Extra["chunk_meta_expanded"], "true"; got != want {
+		t.Fatalf("hit chunk metadata expanded = %q, want %q", got, want)
+	}
+	if got, want := hitFile.QueryOverlapBlocks, 1; got != want {
+		t.Fatalf("hit query overlap blocks = %d, want %d", got, want)
+	}
+	if !hitFile.QueryOverlapsFile {
+		t.Fatal("hit query overlaps file = false, want true for expanded meta-index-id hit")
+	}
+	if got, want := hitReport.Summary.QueryOverlapFiles, 1; got != want {
+		t.Fatalf("hit summary query overlap files = %d, want %d", got, want)
+	}
+
+	missReport, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:            FormatTSSPDetachedIndex,
+		BlockSampleLimit:  4,
+		QueryRange:        queryRange,
+		QueryMetaIndexIDs: []uint64{99},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missFile := missReport.Files[0]
+	if got, want := missFile.Extra["chunk_meta_expanded"], "true"; got != want {
+		t.Fatalf("miss chunk metadata expanded = %q, want %q", got, want)
+	}
+	if got := missFile.QueryOverlapBlocks; got != 0 {
+		t.Fatalf("miss query overlap blocks = %d, want none", got)
+	}
+	if missFile.QueryOverlapsFile {
+		t.Fatal("miss query overlaps file = true, want false for expanded meta-index-id miss")
+	}
+	if got := missReport.Summary.QueryOverlapFiles; got != 0 {
+		t.Fatalf("miss summary query overlap files = %d, want none", got)
+	}
+	if got := missReport.Summary.QueryOverlapBlocks; got != 0 {
+		t.Fatalf("miss summary query overlap blocks = %d, want none", got)
 	}
 }
 

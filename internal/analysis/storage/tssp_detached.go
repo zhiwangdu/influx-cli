@@ -195,9 +195,15 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			report.Extra["query_overlap_precision"] = "detached-chunk-meta"
 		}
 		populateTSSPDetachedChunkReports(&report, chunkMetas, options)
+		if len(options.QueryMetaIndexIDs) > 0 {
+			report.QueryOverlapsFile = report.QueryOverlapBlocks > 0
+		}
 		report.DecodePath = buildTSSPDetachedChunkDecodePathSummary(metaIndexes, chunkMetas, options, dataValidation, dataProbe)
 	} else {
 		populateTSSPDetachedMetaIndexReports(&report, metaIndexes, options)
+		if len(options.QueryMetaIndexIDs) > 0 {
+			report.QueryOverlapsFile = report.QueryOverlapBlocks > 0
+		}
 		report.DecodePath = buildTSSPDetachedMetaIndexDecodePathSummary(metaIndexes, options)
 	}
 	return report, nil

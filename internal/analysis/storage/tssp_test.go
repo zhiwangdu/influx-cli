@@ -3783,6 +3783,12 @@ func TestAnalyzeTSSPDecodePathSeriesIDFilter(t *testing.T) {
 	if got, want := file.QueryOverlapBlocks, 2; got != want {
 		t.Fatalf("query overlap blocks = %d, want %d", got, want)
 	}
+	if !file.QueryOverlapsFile {
+		t.Fatal("query overlaps file = false, want true for series-id hit")
+	}
+	if got, want := report.Summary.QueryOverlapFiles, 1; got != want {
+		t.Fatalf("summary query overlap files = %d, want %d", got, want)
+	}
 	decode := file.DecodePath
 	if decode == nil {
 		t.Fatal("expected TSSP decode path summary")
@@ -3807,6 +3813,41 @@ func TestAnalyzeTSSPDecodePathSeriesIDFilter(t *testing.T) {
 	}
 	if got, want := decode.SkippedAfterRangeBlocks, 0; got != want {
 		t.Fatalf("skipped after range blocks = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeTSSPSeriesIDFilterMissDoesNotOverlapFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSP(path); err != nil {
+		t.Fatal(err)
+	}
+
+	queryRange, err := NewTimeRange(300, 350)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSSP,
+		QueryRange:       queryRange,
+		QuerySeriesIDs:   []uint64{42},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got := file.QueryOverlapBlocks; got != 0 {
+		t.Fatalf("query overlap blocks = %d, want none", got)
+	}
+	if file.QueryOverlapsFile {
+		t.Fatal("query overlaps file = true, want false for series-id miss")
+	}
+	if got := report.Summary.QueryOverlapFiles; got != 0 {
+		t.Fatalf("summary query overlap files = %d, want none", got)
+	}
+	if got := report.Summary.QueryOverlapBlocks; got != 0 {
+		t.Fatalf("summary query overlap blocks = %d, want none", got)
 	}
 }
 

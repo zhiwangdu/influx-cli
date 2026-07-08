@@ -200,6 +200,9 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 	} else {
 		populateTSSPMetaIndexReports(&report, metaIndexes, options)
 	}
+	if len(options.QuerySeriesIDs) > 0 {
+		report.QueryOverlapsFile = report.QueryOverlapBlocks > 0
+	}
 	var dataProbe *tsspAttachedDataProbe
 	if expanded {
 		var dataProbed bool
