@@ -545,9 +545,18 @@ func tsspDataBlockFilterDecision(filter FieldFilter, clause string, matched bool
 		tsspDataBlockFilterDecisionField(clause),
 		tsspDataBlockFilterDecisionField(filter.Key),
 		tsspDataBlockFilterDecisionField(fieldFilterOperator(filter)),
-		tsspDataBlockFilterDecisionField(strings.TrimSpace(filter.Value)),
+		tsspDataBlockFilterDecisionField(tsspDataBlockFilterDecisionValue(filter)),
 		tsspDataBlockFilterDecisionField(result),
 	}, ":")
+}
+
+func tsspDataBlockFilterDecisionValue(filter FieldFilter) string {
+	switch fieldFilterOperator(filter) {
+	case "in", "not-in", "between", "not-between":
+		return strings.TrimSpace(filter.Value)
+	default:
+		return fieldFilterScalarValue(filter.Value)
+	}
 }
 
 func tsspDataBlockFilterDecisionList(decisions []string) string {

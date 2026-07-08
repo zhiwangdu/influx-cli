@@ -1329,6 +1329,72 @@ func TestTSSPDataBlockFilterRowsMatchesSetAndRangeValuesWithSymbols(t *testing.T
 	}
 }
 
+func TestTSSPDataBlockFilterRowsReportsUnquotedScalarDecisionValues(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			RowsKnown:  true,
+			Rows:       2,
+			ValueKnown: true,
+			Values:     []string{"100", "200"},
+		},
+		"status": {
+			Type:       "string",
+			RowsKnown:  true,
+			Rows:       2,
+			ValueKnown: true,
+			Values:     []string{"ok value", "debug:trace;1"},
+		},
+	}
+	queryRange, err := NewTimeRange(100, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, matches, filterRows, stats, ok := tsspDataBlockFilterRows(
+		blocks,
+		[]FieldFilter{{Key: "status", Op: "equals", Value: `"ok value"`}},
+		[]FieldFilter{{Key: "status", Op: "=~", Value: `"ok.*"`}},
+		[]FieldFilter{{Key: "status", Op: "contains", Value: `"debug:trace;1"`}},
+		2,
+		tsspTimeRange{Min: 100, Max: 200},
+		queryRange,
+		"sid:7",
+		0,
+		2,
+	)
+	if !ok {
+		t.Fatal("filter rows returned unavailable")
+	}
+	if got, want := rows, []bool{true, false}; !equalBools(got, want) {
+		t.Fatalf("matching rows = %v, want %v", got, want)
+	}
+	if got, want := matches, 1; got != want {
+		t.Fatalf("matches = %d, want %d", got, want)
+	}
+	if got, want := filterRows, 2; got != want {
+		t.Fatalf("filter rows = %d, want %d", got, want)
+	}
+	for op, want := range map[string]int{"=": 2, "=~": 1, "contains": 1} {
+		if got := stats.OperatorEvaluations[op]; got != want {
+			t.Fatalf("%s operator evaluations = %d, want %d", op, got, want)
+		}
+	}
+	wantSamples := []struct {
+		action string
+		value  string
+	}{
+		{"filter_row_match", "row=0 time=100 required=1/1 any=1/1 none=0/1 skips=0/0/0 values=status=ok\\svalue decisions=required:status:=:ok\\svalue:match;any:status:=~:ok.*:match;none:status:contains:debug\\:trace\\;1:miss result=match"},
+		{"filter_row_reject_required", "row=1 time=200 required=0/1 any=0/0 none=0/0 skips=0/1/1 values=status=debug:trace;1 decisions=required:status:=:ok\\svalue:miss result=reject_required"},
+	}
+	for i, want := range wantSamples {
+		got := stats.FilterExecutionSamples[i]
+		if got.Action != want.action || got.CandidateValue != want.value {
+			t.Fatalf("filter execution sample[%d] = %+v, want action=%q value=%q", i, got, want.action, want.value)
+		}
+	}
+}
+
 func TestAnalyzeTSSPFieldFilterMaterializesMatchingAttachedRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	times, err := writeTestTSSPWithMultiColumnRecordData(path)

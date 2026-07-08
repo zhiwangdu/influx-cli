@@ -43,6 +43,8 @@ TSSP equality word aliases `equals`/`equal` 会归一到本地 decoded-row equal
 
 TSSP 显式 `in`/`not-in` 与 `between`/`not-between` field predicate 会保留本地 value list/bounds 内的 `=<>!` 字符，避免值内符号被误切成 scalar comparison；该行为只属于本地 decoded-row filter parser。
 
+TSSP filter execution decisions 会对 scalar、string-only 和 regex predicate value 输出本地 quoted-literal unescape 后的比较值，set/range predicate 继续输出原始本地 list/bounds 文本，便于把 sampled decision 和实际本地 predicate evaluation 对齐。
+
 ## 3. Phase 0: CLI MVP Foundation
 
 建议周期：1 到 2 周。
