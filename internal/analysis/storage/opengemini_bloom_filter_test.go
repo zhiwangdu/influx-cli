@@ -149,6 +149,31 @@ func TestAnalyzeOpenGeminiBloomFilterDetachedVerticalEmpty(t *testing.T) {
 	}
 }
 
+func TestAnalyzeOpenGeminiBloomFilterDetachedVerticalExplicitFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bloomfilter_content.idx")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatOpenGeminiBloom})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(report.Files), 1; got != want {
+		t.Fatalf("file count = %d, want %d", got, want)
+	}
+	file := report.Files[0]
+	if got, want := file.Format, FormatOpenGeminiBloom; got != want {
+		t.Fatalf("format = %q, want %q", got, want)
+	}
+	if got, want := file.SecondaryIndex.Layout, opengeminiBloomFilterLayoutVertical; got != want {
+		t.Fatalf("layout = %q, want %q", got, want)
+	}
+	if got, want := file.SecondaryIndex.Field, "content"; got != want {
+		t.Fatalf("field = %q, want %q", got, want)
+	}
+}
+
 func TestAnalyzeOpenGeminiBloomFilterDetachedVertical(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bloomfilter_content.idx")
@@ -243,6 +268,28 @@ func TestAnalyzeOpenGeminiBloomFilterOlderSizeNotice(t *testing.T) {
 	}
 	if !containsOpenGeminiBloomNotice(file.Notices, "older logstore filter size") {
 		t.Fatalf("notices = %v, want older size notice", file.Notices)
+	}
+}
+
+func TestAnalyzeOpenGeminiBloomFilterRejectsNonBloomSidecarName(t *testing.T) {
+	for _, name := range []string{"0000-0000-0001.idx", "mergeset.bf", "00000001_mergeset.bf"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(path, make([]byte, opengeminiBloomFilterBlockSize), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := Analyze(context.Background(), []string{path}, Options{Format: FormatOpenGeminiBloom})
+			if err != nil {
+				t.Fatalf("Analyze() error = %v", err)
+			}
+			if len(report.Files) != 0 {
+				t.Fatalf("files = %d, want 0", len(report.Files))
+			}
+			if !containsOpenGeminiBloomNotice(report.Notices, "does not match opengemini-bloom-filter sidecar naming") {
+				t.Fatalf("notices = %v, want sidecar naming warning", report.Notices)
+			}
+		})
 	}
 }
 

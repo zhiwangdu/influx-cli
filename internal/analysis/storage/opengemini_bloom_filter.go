@@ -54,6 +54,9 @@ func analyzeOpenGeminiBloomFilter(path string, info os.FileInfo, options Options
 	if info.IsDir() {
 		return FileReport{}, fmt.Errorf("opengemini-bloom-filter format requires a bloom filter index file")
 	}
+	if !isOpenGeminiBloomFilterPath(path) {
+		return FileReport{}, fmt.Errorf("%s does not match opengemini-bloom-filter sidecar naming; expected .bf other than mergeset.bf/*_mergeset.bf or bloomfilter_*.idx", filepath.Base(path))
+	}
 
 	pathInfo := openGeminiBloomFilterPathInfo(path)
 	analysis, err := parseOpenGeminiBloomFilterFile(path, info.Size(), pathInfo)
