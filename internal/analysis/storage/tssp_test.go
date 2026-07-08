@@ -830,6 +830,12 @@ func TestAnalyzeTSSPRecordOutputOrdinalsContinueAcrossChunks(t *testing.T) {
 	if got, want := len(decode.RecordExecutionSamples), 4; got != want {
 		t.Fatalf("record execution samples = %d, want %d", got, want)
 	}
+	if got, want := len(decode.RecordExecutionActions), 1; got != want {
+		t.Fatalf("record execution action count entries = %d, want %d: %+v", got, want, decode.RecordExecutionActions)
+	}
+	if got, want := decode.RecordExecutionActions["record_row_output"], 4; got != want {
+		t.Fatalf("record_row_output action count = %d, want %d", got, want)
+	}
 	for i, want := range []struct {
 		key   string
 		value string
@@ -2184,6 +2190,12 @@ func TestAppendTSSPFileDecodePathSamplesRebasesRecordExecutionSamples(t *testing
 
 	if got, want := len(dst.RecordExecutionSamples), 3; got != want {
 		t.Fatalf("record execution samples = %d, want sample limit %d", got, want)
+	}
+	if got, want := len(dst.RecordExecutionActions), 1; got != want {
+		t.Fatalf("record execution action count entries = %d, want %d: %+v", got, want, dst.RecordExecutionActions)
+	}
+	if got, want := dst.RecordExecutionActions["record_row_output"], 3; got != want {
+		t.Fatalf("record_row_output action count = %d, want %d", got, want)
 	}
 	for i, want := range []struct {
 		file        string
@@ -5140,6 +5152,15 @@ func TestAnalyzeTSSPFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) 
 	}
 	if got, want := len(decode.RecordExecutionSamples), 4; got != want {
 		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	if got, want := len(decode.RecordExecutionActions), 2; got != want {
+		t.Fatalf("record execution action count entries = %d, want %d: %+v", got, want, decode.RecordExecutionActions)
+	}
+	if got, want := decode.RecordExecutionActions["record_row_output"], 2; got != want {
+		t.Fatalf("record_row_output action count = %d, want %d", got, want)
+	}
+	if got, want := decode.RecordExecutionActions["record_row_filter_reject"], 2; got != want {
+		t.Fatalf("record_row_filter_reject action count = %d, want %d", got, want)
 	}
 	for i, want := range []struct {
 		file        string

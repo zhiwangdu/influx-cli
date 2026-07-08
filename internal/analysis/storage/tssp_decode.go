@@ -181,6 +181,7 @@ func buildTSSPDecodePathSummary(metaIndexes []tsspMetaIndex, chunks []tsspChunkM
 		summary.CursorOutputSamples = append(summary.CursorOutputSamples, dataProbe.valueSamples...)
 		summary.RangeExecutionSamples = append(summary.RangeExecutionSamples, dataProbe.rangeExecutionSamples...)
 		summary.RecordExecutionSamples = append(summary.RecordExecutionSamples, dataProbe.recordExecutionSamples...)
+		summary.RecordExecutionActions = cursorStepActionCounts(summary.RecordExecutionSamples)
 		summary.FilterExecutionSamples = append(summary.FilterExecutionSamples, dataProbe.filterExecutionSamples...)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -586,6 +587,7 @@ func appendTSSPFileDecodePathSamples(dst, src *DecodePathSummary, path string, s
 		sample.CursorExhausted = false
 		dst.RecordExecutionSamples = append(dst.RecordExecutionSamples, sample)
 	}
+	dst.RecordExecutionActions = cursorStepActionCounts(dst.RecordExecutionSamples)
 	filterIndexBase := 0
 	if len(dst.FilterExecutionSamples) > 0 {
 		filterIndexBase = dst.FilterExecutionSamples[len(dst.FilterExecutionSamples)-1].CursorIndexAfter

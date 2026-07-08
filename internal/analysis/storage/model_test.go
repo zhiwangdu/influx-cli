@@ -605,6 +605,40 @@ func TestDecodePathTextIncludesExecutionDiagnosticsCountsOnly(t *testing.T) {
 	}
 }
 
+func TestDecodePathTextUsesRecordExecutionActionCounts(t *testing.T) {
+	summary := DecodePathSummary{
+		RecordExecutionActions: map[string]int{
+			"record_row_output":        2,
+			"record_row_filter_reject": 1,
+		},
+	}
+	text := decodePathText(&summary)
+	want := "execution samples record_actions record_row_filter_reject:1 record_row_output:2"
+	if !strings.Contains(text, want) {
+		t.Fatalf("decode path text = %q, want %q", text, want)
+	}
+
+	data, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		RecordExecutionActions map[string]int `json:"record_execution_action_counts"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(decoded.RecordExecutionActions), 2; got != want {
+		t.Fatalf("record execution action count entries = %d, want %d: %s", got, want, data)
+	}
+	if got, want := decoded.RecordExecutionActions["record_row_output"], 2; got != want {
+		t.Fatalf("record_row_output count = %d, want %d", got, want)
+	}
+	if got, want := decoded.RecordExecutionActions["record_row_filter_reject"], 1; got != want {
+		t.Fatalf("record_row_filter_reject count = %d, want %d", got, want)
+	}
+}
+
 func TestDecodePathTextIncludesSparseExecutionDiagnostics(t *testing.T) {
 	text := decodePathText(&DecodePathSummary{
 		CursorWindows: []DecodePathCursorWindow{

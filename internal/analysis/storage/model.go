@@ -445,6 +445,7 @@ type DecodePathSummary struct {
 	CursorFinalOutputSamples          []DecodePathCursorOutput  `json:"cursor_final_output_samples,omitempty"`
 	RangeExecutionSamples             []DecodePathCursorStep    `json:"range_execution_samples,omitempty"`
 	RecordExecutionSamples            []DecodePathCursorStep    `json:"record_execution_samples,omitempty"`
+	RecordExecutionActions            map[string]int            `json:"record_execution_action_counts,omitempty"`
 	FilterExecutionSamples            []DecodePathCursorStep    `json:"filter_execution_samples,omitempty"`
 	CursorExecutionSamples            []DecodePathCursorStep    `json:"cursor_execution_samples,omitempty"`
 	Recommendations                   []string                  `json:"recommendations,omitempty"`
@@ -1234,21 +1235,28 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 	if len(windowParts) > 0 {
 		parts = append(parts, "windows "+strings.Join(windowParts, " "))
 	}
-	if len(summary.Samples) > 0 || len(summary.CursorExecutionSamples) > 0 || len(summary.RangeExecutionSamples) > 0 || len(summary.RecordExecutionSamples) > 0 || len(summary.FilterExecutionSamples) > 0 {
-		sampleParts := []string{
-			fmt.Sprintf("decisions=%d", len(summary.Samples)),
-			fmt.Sprintf("cursor_steps=%d", len(summary.CursorExecutionSamples)),
-		}
-		if len(summary.RangeExecutionSamples) > 0 {
-			sampleParts = append(sampleParts, fmt.Sprintf("range_steps=%d", len(summary.RangeExecutionSamples)))
-		}
-		if len(summary.RecordExecutionSamples) > 0 {
-			sampleParts = append(sampleParts, fmt.Sprintf("record_steps=%d", len(summary.RecordExecutionSamples)))
-			if actions := cursorStepActionSummaryText(summary.RecordExecutionSamples); actions != "" {
-				sampleParts = append(sampleParts, "record_actions "+actions)
+	recordActionText := countMapText(decodePathRecordExecutionActions(summary))
+	hasExecutionSamples := len(summary.Samples) > 0 || len(summary.CursorExecutionSamples) > 0 || len(summary.RangeExecutionSamples) > 0 || len(summary.RecordExecutionSamples) > 0 || len(summary.FilterExecutionSamples) > 0
+	if hasExecutionSamples || recordActionText != "" {
+		sampleParts := []string{}
+		if hasExecutionSamples {
+			sampleParts = append(sampleParts,
+				fmt.Sprintf("decisions=%d", len(summary.Samples)),
+				fmt.Sprintf("cursor_steps=%d", len(summary.CursorExecutionSamples)),
+			)
+			if len(summary.RangeExecutionSamples) > 0 {
+				sampleParts = append(sampleParts, fmt.Sprintf("range_steps=%d", len(summary.RangeExecutionSamples)))
+			}
+			if len(summary.RecordExecutionSamples) > 0 {
+				sampleParts = append(sampleParts, fmt.Sprintf("record_steps=%d", len(summary.RecordExecutionSamples)))
 			}
 		}
-		sampleParts = append(sampleParts, fmt.Sprintf("filter_steps=%d", len(summary.FilterExecutionSamples)))
+		if recordActionText != "" {
+			sampleParts = append(sampleParts, "record_actions "+recordActionText)
+		}
+		if hasExecutionSamples {
+			sampleParts = append(sampleParts, fmt.Sprintf("filter_steps=%d", len(summary.FilterExecutionSamples)))
+		}
 		parts = append(parts, "samples "+strings.Join(sampleParts, " "))
 	}
 	if summary.Amplification > 0 {
@@ -1262,10 +1270,17 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 	return "execution " + strings.Join(parts, " ")
 }
 
-func cursorStepActionSummaryText(samples []DecodePathCursorStep) string {
-	if len(samples) == 0 {
-		return ""
+func decodePathRecordExecutionActions(summary *DecodePathSummary) map[string]int {
+	if summary == nil {
+		return nil
 	}
+	if len(summary.RecordExecutionActions) > 0 {
+		return summary.RecordExecutionActions
+	}
+	return cursorStepActionCounts(summary.RecordExecutionSamples)
+}
+
+func cursorStepActionCounts(samples []DecodePathCursorStep) map[string]int {
 	counts := make(map[string]int, len(samples))
 	for _, sample := range samples {
 		if sample.Action == "" {
@@ -1273,7 +1288,10 @@ func cursorStepActionSummaryText(samples []DecodePathCursorStep) string {
 		}
 		counts[sample.Action]++
 	}
-	return countMapText(counts)
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 func queryTargetSummaryText(summary *DecodePathSummary) string {

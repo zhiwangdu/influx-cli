@@ -980,6 +980,47 @@ func TestTSSPDetachedCursorExecutionSamplesFollowDescendingOrder(t *testing.T) {
 	}
 }
 
+func TestTSSPDetachedChunkDecodePathSummarizesRecordExecutionActions(t *testing.T) {
+	queryRange, err := NewTimeRange(100, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := buildTSSPDetachedChunkDecodePathSummary([]tsspMetaIndex{
+		{ID: 42, MinTime: 100, MaxTime: 200, Offset: 64, Size: 80},
+	}, []tsspChunkMeta{
+		{SID: 42, TimeRanges: []tsspTimeRange{{Min: 100, Max: 200}}},
+	}, Options{
+		QueryRange:       queryRange,
+		BlockSampleLimit: 4,
+	}, nil, &tsspDetachedDataProbe{
+		recordExecutionSamples: []DecodePathCursorStep{
+			{Step: 1, Type: "tssp-record-row-step", Action: "record_row_output"},
+			{Step: 2, Type: "tssp-record-row-step", Action: "record_row_filter_reject"},
+			{Step: 3, Type: "tssp-record-row-step", Action: "record_row_output"},
+		},
+	})
+	if summary == nil {
+		t.Fatal("detached chunk decode path is nil")
+	}
+	if got, want := len(summary.RecordExecutionSamples), 3; got != want {
+		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	if got, want := len(summary.RecordExecutionActions), 2; got != want {
+		t.Fatalf("record execution action count entries = %d, want %d: %+v", got, want, summary.RecordExecutionActions)
+	}
+	if got, want := summary.RecordExecutionActions["record_row_output"], 2; got != want {
+		t.Fatalf("record_row_output action count = %d, want %d", got, want)
+	}
+	if got, want := summary.RecordExecutionActions["record_row_filter_reject"], 1; got != want {
+		t.Fatalf("record_row_filter_reject action count = %d, want %d", got, want)
+	}
+	text := decodePathText(summary)
+	want := "record_actions record_row_filter_reject:1 record_row_output:2"
+	if !strings.Contains(text, want) {
+		t.Fatalf("decode path text = %q, want %q", text, want)
+	}
+}
+
 func TestTSSPDetachedChunkFileSetCursorExecutionSamplesUseLocationBlockIndex(t *testing.T) {
 	queryRange, err := NewTimeRange(210, 220)
 	if err != nil {
