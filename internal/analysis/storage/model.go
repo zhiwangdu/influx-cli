@@ -222,9 +222,10 @@ type FieldIndexFieldReport struct {
 }
 
 type SeriesIDSummary struct {
-	Min   uint64 `json:"min,omitempty"`
-	Max   uint64 `json:"max,omitempty"`
-	Count int64  `json:"count,omitempty"`
+	Min      uint64 `json:"min,omitempty"`
+	Max      uint64 `json:"max,omitempty"`
+	Count    int64  `json:"count,omitempty"`
+	HasRange bool   `json:"-"`
 }
 
 type TombstoneSummary struct {
@@ -261,8 +262,12 @@ type IndexSummary struct {
 	DeletedTagValueCount            int                      `json:"deleted_tag_value_count,omitempty"`
 	SeriesIDSetBytes                int64                    `json:"series_id_set_bytes,omitempty"`
 	SeriesIDSetCardinality          int64                    `json:"series_id_set_cardinality,omitempty"`
+	SeriesIDSetMin                  *uint64                  `json:"series_id_set_min,omitempty"`
+	SeriesIDSetMax                  *uint64                  `json:"series_id_set_max,omitempty"`
 	TombstoneSeriesSetBytes         int64                    `json:"tombstone_series_set_bytes,omitempty"`
 	TombstoneSeriesIDSetCardinality int64                    `json:"tombstone_series_id_set_cardinality,omitempty"`
+	TombstoneSeriesIDSetMin         *uint64                  `json:"tombstone_series_id_set_min,omitempty"`
+	TombstoneSeriesIDSetMax         *uint64                  `json:"tombstone_series_id_set_max,omitempty"`
 	SeriesSketchBytes               int64                    `json:"series_sketch_bytes,omitempty"`
 	TombstoneSketchBytes            int64                    `json:"tombstone_sketch_bytes,omitempty"`
 	MeasurementSamples              []IndexMeasurementReport `json:"measurement_samples,omitempty"`
@@ -729,7 +734,7 @@ func seriesIDDetailsText(label string, summary SeriesIDSummary) string {
 	if summary.Count > 0 {
 		parts = append(parts, fmt.Sprintf("count=%d", summary.Count))
 	}
-	if summary.Min > 0 || summary.Max > 0 {
+	if summary.HasRange || summary.Min > 0 || summary.Max > 0 {
 		parts = append(parts, fmt.Sprintf("range=%d..%d", summary.Min, summary.Max))
 	}
 	if len(parts) == 0 {
@@ -776,13 +781,21 @@ func indexDetailsText(summary *IndexSummary) string {
 		parts = append(parts, fmt.Sprintf("series_refs=%d", summary.SeriesRefs))
 	}
 	if summary.SeriesIDSetCardinality > 0 {
-		parts = append(parts, fmt.Sprintf("series_ids=%d", summary.SeriesIDSetCardinality))
+		value := fmt.Sprintf("series_ids=%d", summary.SeriesIDSetCardinality)
+		if summary.SeriesIDSetMin != nil && summary.SeriesIDSetMax != nil {
+			value += fmt.Sprintf(" range=%d:%d", *summary.SeriesIDSetMin, *summary.SeriesIDSetMax)
+		}
+		parts = append(parts, value)
 	}
 	if summary.TagKeyCount > 0 || summary.TagValueCount > 0 {
 		parts = append(parts, fmt.Sprintf("tags=%d values=%d", summary.TagKeyCount, summary.TagValueCount))
 	}
 	if summary.DeletedMeasurementCount > 0 || summary.DeletedTagKeyCount > 0 || summary.DeletedTagValueCount > 0 || summary.TombstoneSeriesIDSetCardinality > 0 {
-		parts = append(parts, fmt.Sprintf("deleted measurements=%d tag_keys=%d tag_values=%d series_ids=%d", summary.DeletedMeasurementCount, summary.DeletedTagKeyCount, summary.DeletedTagValueCount, summary.TombstoneSeriesIDSetCardinality))
+		value := fmt.Sprintf("deleted measurements=%d tag_keys=%d tag_values=%d series_ids=%d", summary.DeletedMeasurementCount, summary.DeletedTagKeyCount, summary.DeletedTagValueCount, summary.TombstoneSeriesIDSetCardinality)
+		if summary.TombstoneSeriesIDSetMin != nil && summary.TombstoneSeriesIDSetMax != nil {
+			value += fmt.Sprintf(" range=%d:%d", *summary.TombstoneSeriesIDSetMin, *summary.TombstoneSeriesIDSetMax)
+		}
+		parts = append(parts, value)
 	}
 	if query := indexQueryDetailsText(summary.Query); query != "" {
 		parts = append(parts, query)

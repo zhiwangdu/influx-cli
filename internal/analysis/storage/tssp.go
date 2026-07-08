@@ -160,9 +160,10 @@ func analyzeTSSP(path string, info os.FileInfo, options Options) (FileReport, er
 			"meta-index": len(metaIndexes),
 		},
 		SeriesID: SeriesIDSummary{
-			Min:   trailer.MinID,
-			Max:   trailer.MaxID,
-			Count: trailer.IDCount,
+			Min:      trailer.MinID,
+			Max:      trailer.MaxID,
+			Count:    trailer.IDCount,
+			HasRange: trailer.IDCount > 0,
 		},
 		QueryOverlapsFile: options.QueryRange.Overlaps(trailer.MinTime, trailer.MaxTime),
 		Extra: map[string]string{

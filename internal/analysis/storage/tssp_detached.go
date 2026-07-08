@@ -82,9 +82,10 @@ func analyzeTSSPDetachedMetaIndex(path string, info os.FileInfo, options Options
 			"detached-meta-index": len(metaIndexes),
 		},
 		MetaIndexID: SeriesIDSummary{
-			Min:   minID,
-			Max:   maxID,
-			Count: int64(len(metaIndexes)),
+			Min:      minID,
+			Max:      maxID,
+			Count:    int64(len(metaIndexes)),
+			HasRange: len(metaIndexes) > 0,
 		},
 		QueryOverlapsFile: len(metaIndexes) > 0 && options.QueryRange.Overlaps(minTime, maxTime),
 		Extra: map[string]string{

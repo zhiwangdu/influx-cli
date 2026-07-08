@@ -190,9 +190,10 @@ func analyzeSeriesFile(path string, info os.FileInfo, options Options) (FileRepo
 		BlocksByType: blocksByType,
 		Blocks:       seriesFileBlockSamples(segmentAnalyses, options.BlockSampleLimit),
 		SeriesID: SeriesIDSummary{
-			Min:   minSeriesID,
-			Max:   maxLiveSeriesID,
-			Count: int64(len(state.Live)),
+			Min:      minSeriesID,
+			Max:      maxLiveSeriesID,
+			Count:    int64(len(state.Live)),
+			HasRange: len(state.Live) > 0,
 		},
 		Index:   &index,
 		Extra:   extra,

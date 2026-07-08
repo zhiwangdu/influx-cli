@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,6 +38,12 @@ func TestAnalyzeTSIMetadata(t *testing.T) {
 	if got, want := file.SeriesID.Count, int64(3); got != want {
 		t.Fatalf("series refs = %d, want %d", got, want)
 	}
+	if got, want := file.SeriesID.Min, uint64(1); got != want {
+		t.Fatalf("series id min = %d, want %d", got, want)
+	}
+	if got, want := file.SeriesID.Max, uint64(3); got != want {
+		t.Fatalf("series id max = %d, want %d", got, want)
+	}
 	if got, want := file.BlocksByType["measurement"], 2; got != want {
 		t.Fatalf("measurement blocks = %d, want %d", got, want)
 	}
@@ -64,8 +71,20 @@ func TestAnalyzeTSIMetadata(t *testing.T) {
 	if got, want := file.Index.SeriesIDSetCardinality, int64(3); got != want {
 		t.Fatalf("series id set cardinality = %d, want %d", got, want)
 	}
+	if got, want := uint64PtrValue(file.Index.SeriesIDSetMin), uint64(1); got != want {
+		t.Fatalf("series id set min = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.SeriesIDSetMax), uint64(3); got != want {
+		t.Fatalf("series id set max = %d, want %d", got, want)
+	}
 	if got, want := file.Index.TombstoneSeriesIDSetCardinality, int64(1); got != want {
 		t.Fatalf("tombstone series id set cardinality = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.TombstoneSeriesIDSetMin), uint64(4); got != want {
+		t.Fatalf("tombstone series id set min = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.TombstoneSeriesIDSetMax), uint64(4); got != want {
+		t.Fatalf("tombstone series id set max = %d, want %d", got, want)
 	}
 	if got, want := len(file.Index.MeasurementSamples), 2; got != want {
 		t.Fatalf("measurement samples = %d, want %d", got, want)
@@ -76,8 +95,20 @@ func TestAnalyzeTSIMetadata(t *testing.T) {
 	if got, want := file.Extra["series_id_set_cardinality"], "3"; got != want {
 		t.Fatalf("series id set cardinality extra = %q, want %q", got, want)
 	}
+	if got, want := file.Extra["series_id_set_min"], "1"; got != want {
+		t.Fatalf("series id set min extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["series_id_set_max"], "3"; got != want {
+		t.Fatalf("series id set max extra = %q, want %q", got, want)
+	}
 	if got, want := file.Extra["tombstone_series_id_set_cardinality"], "1"; got != want {
 		t.Fatalf("tombstone series id set cardinality extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["tombstone_series_id_set_min"], "4"; got != want {
+		t.Fatalf("tombstone series id set min extra = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["tombstone_series_id_set_max"], "4"; got != want {
+		t.Fatalf("tombstone series id set max extra = %q, want %q", got, want)
 	}
 	if got, want := file.Extra["measurement_block_size"], "113"; got != want {
 		t.Fatalf("measurement block size = %q, want %q", got, want)
@@ -105,8 +136,26 @@ func TestAnalyzeTSINoticesCorruptSeriesIDSetCardinality(t *testing.T) {
 	if got, want := file.Index.SeriesIDSetCardinality, int64(0); got != want {
 		t.Fatalf("series id set cardinality = %d, want %d", got, want)
 	}
+	if file.Index.SeriesIDSetMin != nil {
+		t.Fatalf("series id set min = %d, want nil", *file.Index.SeriesIDSetMin)
+	}
+	if file.Index.SeriesIDSetMax != nil {
+		t.Fatalf("series id set max = %d, want nil", *file.Index.SeriesIDSetMax)
+	}
 	if got, want := file.Index.TombstoneSeriesIDSetCardinality, int64(1); got != want {
 		t.Fatalf("tombstone series id set cardinality = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.TombstoneSeriesIDSetMin), uint64(4); got != want {
+		t.Fatalf("tombstone series id set min = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.TombstoneSeriesIDSetMax), uint64(4); got != want {
+		t.Fatalf("tombstone series id set max = %d, want %d", got, want)
+	}
+	if _, ok := file.Extra["series_id_set_min"]; ok {
+		t.Fatalf("series id set min extra present for corrupt bitmap: %v", file.Extra)
+	}
+	if _, ok := file.Extra["series_id_set_max"]; ok {
+		t.Fatalf("series id set max extra present for corrupt bitmap: %v", file.Extra)
 	}
 	if len(file.Notices) != 1 {
 		t.Fatalf("notices = %v, want one notice", file.Notices)
@@ -116,6 +165,81 @@ func TestAnalyzeTSINoticesCorruptSeriesIDSetCardinality(t *testing.T) {
 	}
 	if len(report.Notices) != 1 {
 		t.Fatalf("report notices = %v, want one propagated notice", report.Notices)
+	}
+}
+
+func TestAnalyzeTSICorruptSeriesIDSetSingleRefDoesNotInferRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSIWithSingleSeriesRef(path, []byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSI,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.SeriesID.Count, int64(1); got != want {
+		t.Fatalf("series id count fallback = %d, want %d", got, want)
+	}
+	if file.SeriesID.HasRange {
+		t.Fatalf("series id range = %d..%d, want unavailable", file.SeriesID.Min, file.SeriesID.Max)
+	}
+	if got, want := seriesIDDetailsText("series_id", file.SeriesID), "series_id count=1"; got != want {
+		t.Fatalf("series id details = %q, want %q", got, want)
+	}
+	if file.Index.SeriesIDSetMin != nil || file.Index.SeriesIDSetMax != nil {
+		t.Fatalf("series id set range = %v..%v, want nil", file.Index.SeriesIDSetMin, file.Index.SeriesIDSetMax)
+	}
+}
+
+func TestAnalyzeTSISeriesIDSetRangeIncludesZero(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSIWithSeriesIDSets(path, writeTestTSIRoaringSeriesIDSet(0, 2), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSI,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.SeriesID.Min, uint64(0); got != want {
+		t.Fatalf("series id min = %d, want %d", got, want)
+	}
+	if got, want := file.SeriesID.Max, uint64(2); got != want {
+		t.Fatalf("series id max = %d, want %d", got, want)
+	}
+	if !file.SeriesID.HasRange {
+		t.Fatal("series id range unavailable")
+	}
+	if got, want := seriesIDDetailsText("series_id", file.SeriesID), "series_id count=2 range=0..2"; got != want {
+		t.Fatalf("series id details = %q, want %q", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.SeriesIDSetMin), uint64(0); got != want {
+		t.Fatalf("series id set min = %d, want %d", got, want)
+	}
+	if got, want := uint64PtrValue(file.Index.SeriesIDSetMax), uint64(2); got != want {
+		t.Fatalf("series id set max = %d, want %d", got, want)
+	}
+	if got, want := file.Extra["series_id_set_min"], "0"; got != want {
+		t.Fatalf("series id set min extra = %q, want %q", got, want)
+	}
+
+	encoded, err := json.Marshal(file.Index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"series_id_set_min":0`)) {
+		t.Fatalf("index JSON = %s, want explicit zero min", encoded)
 	}
 }
 
@@ -163,34 +287,45 @@ func TestTSIRoaringCardinalityRunContainer(t *testing.T) {
 	data.WriteByte(0x01)
 	writeTSILittleUint16(&data, 0)
 	writeTSILittleUint16(&data, 4)
-	writeTSILittleUint16(&data, 1)
+	writeTSILittleUint16(&data, 2)
 	writeTSILittleUint16(&data, 10)
-	writeTSILittleUint16(&data, 4)
+	writeTSILittleUint16(&data, 2)
+	writeTSILittleUint16(&data, 20)
+	writeTSILittleUint16(&data, 1)
 
-	cardinality, err := tsiRoaringCardinality(data.Bytes())
+	stats, err := tsiRoaringStats(data.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := cardinality, uint64(5); got != want {
+	if got, want := stats.Cardinality, uint64(5); got != want {
 		t.Fatalf("cardinality = %d, want %d", got, want)
 	}
 	ids, err := tsiRoaringSeriesIDs(data.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ids, []uint64{10, 11, 12, 13, 14}; !equalUint64s(got, want) {
+	if got, want := ids, []uint64{10, 11, 12, 20, 21}; !equalUint64s(got, want) {
 		t.Fatalf("series ids = %v, want %v", got, want)
+	}
+	if !stats.HasRange {
+		t.Fatal("stats range unavailable")
+	}
+	if got, want := stats.Min, uint64(10); got != want {
+		t.Fatalf("stats min = %d, want %d", got, want)
+	}
+	if got, want := stats.Max, uint64(21); got != want {
+		t.Fatalf("stats max = %d, want %d", got, want)
 	}
 }
 
 func TestTSIRoaringCardinalityNoRunMultipleContainers(t *testing.T) {
 	data := writeTestTSIRoaringSeriesIDSet(1, 1<<16+2, 2<<16+3)
 
-	cardinality, err := tsiRoaringCardinality(data)
+	stats, err := tsiRoaringStats(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := cardinality, uint64(3); got != want {
+	if got, want := stats.Cardinality, uint64(3); got != want {
 		t.Fatalf("cardinality = %d, want %d", got, want)
 	}
 	ids, err := tsiRoaringSeriesIDs(data)
@@ -199,6 +334,15 @@ func TestTSIRoaringCardinalityNoRunMultipleContainers(t *testing.T) {
 	}
 	if got, want := ids, []uint64{1, 1<<16 + 2, 2<<16 + 3}; !equalUint64s(got, want) {
 		t.Fatalf("series ids = %v, want %v", got, want)
+	}
+	if !stats.HasRange {
+		t.Fatal("stats range unavailable")
+	}
+	if got, want := stats.Min, uint64(1); got != want {
+		t.Fatalf("stats min = %d, want %d", got, want)
+	}
+	if got, want := stats.Max, uint64(2<<16+3); got != want {
+		t.Fatalf("stats max = %d, want %d", got, want)
 	}
 }
 
@@ -215,11 +359,11 @@ func TestTSIRoaringSeriesIDsBitmapContainer(t *testing.T) {
 	}
 	data.Write(bitmap)
 
-	cardinality, err := tsiRoaringCardinality(data.Bytes())
+	stats, err := tsiRoaringStats(data.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := cardinality, uint64(4097); got != want {
+	if got, want := stats.Cardinality, uint64(4097); got != want {
 		t.Fatalf("cardinality = %d, want %d", got, want)
 	}
 	ids, err := tsiRoaringSeriesIDs(data.Bytes())
@@ -234,6 +378,15 @@ func TestTSIRoaringSeriesIDsBitmapContainer(t *testing.T) {
 	}
 	if got, want := ids[len(ids)-1], uint64(4096); got != want {
 		t.Fatalf("last series id = %d, want %d", got, want)
+	}
+	if !stats.HasRange {
+		t.Fatal("stats range unavailable")
+	}
+	if got, want := stats.Min, uint64(0); got != want {
+		t.Fatalf("stats min = %d, want %d", got, want)
+	}
+	if got, want := stats.Max, uint64(4096); got != want {
+		t.Fatalf("stats max = %d, want %d", got, want)
 	}
 }
 
@@ -466,6 +619,56 @@ func writeTestTSIWithSeriesIDSets(path string, seriesIDSet, tombstoneSeriesIDSet
 		TombstoneSeriesIDSet: tsiRange{
 			Offset: tombstoneSeriesIDSetOffset,
 			Size:   int64(len(tombstoneSeriesIDSet)),
+		},
+		SeriesSketch: tsiRange{
+			Offset: int64(buf.Len()),
+			Size:   0,
+		},
+		TombstoneSeriesSketch: tsiRange{
+			Offset: int64(buf.Len()),
+			Size:   0,
+		},
+	})
+
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSIWithSingleSeriesRef(path string, seriesIDSet []byte) error {
+	var buf bytes.Buffer
+	buf.WriteString(tsiMagic)
+
+	cpuTags := writeTestTSITagBlock([]testTSITagKey{{
+		name: "host",
+		values: []testTSITagValue{
+			{name: "a", seriesIDs: []uint64{1}},
+		},
+	}})
+	cpuTagOffset := int64(buf.Len())
+	buf.Write(cpuTags)
+
+	measurementBlock := writeTestTSIMeasurementBlock([]testTSIMeasurement{
+		{name: "cpu", tagOffset: cpuTagOffset, tagSize: int64(len(cpuTags)), seriesCount: 1},
+	})
+	measurementBlockOffset := int64(buf.Len())
+	buf.Write(measurementBlock)
+
+	seriesIDSetOffset := int64(buf.Len())
+	buf.Write(seriesIDSet)
+	tombstoneSeriesIDSetOffset := int64(buf.Len())
+
+	writeTestTSIIndexTrailer(&buf, tsiIndexTrailer{
+		Version: tsiIndexFileVersion,
+		MeasurementBlock: tsiRange{
+			Offset: measurementBlockOffset,
+			Size:   int64(len(measurementBlock)),
+		},
+		SeriesIDSet: tsiRange{
+			Offset: seriesIDSetOffset,
+			Size:   int64(len(seriesIDSet)),
+		},
+		TombstoneSeriesIDSet: tsiRange{
+			Offset: tombstoneSeriesIDSetOffset,
+			Size:   0,
 		},
 		SeriesSketch: tsiRange{
 			Offset: int64(buf.Len()),
@@ -757,6 +960,13 @@ func uniqueSortedUint64s(values []uint64) []uint64 {
 		prev = value
 	}
 	return out
+}
+
+func uint64PtrValue(value *uint64) uint64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func writeTestTSIIndexTrailer(buf *bytes.Buffer, trailer tsiIndexTrailer) {

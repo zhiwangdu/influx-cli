@@ -1434,8 +1434,30 @@ func TestSeriesIDDetailsTextOmitsUnknownRange(t *testing.T) {
 	if got, want := seriesIDDetailsText("series_id", SeriesIDSummary{Count: 7}), "series_id count=7"; got != want {
 		t.Fatalf("details = %q, want %q", got, want)
 	}
+	if got, want := seriesIDDetailsText("series_id", SeriesIDSummary{Count: 1}), "series_id count=1"; got != want {
+		t.Fatalf("unknown single-id details = %q, want %q", got, want)
+	}
+	if got, want := seriesIDDetailsText("series_id", SeriesIDSummary{Count: 1, HasRange: true}), "series_id count=1 range=0..0"; got != want {
+		t.Fatalf("zero-id details = %q, want %q", got, want)
+	}
 	if got := seriesIDDetailsText("series_id", SeriesIDSummary{}); got != "" {
 		t.Fatalf("details = %q, want empty", got)
+	}
+}
+
+func TestIndexDetailsTextIncludesTombstoneSeriesIDRange(t *testing.T) {
+	details := indexDetailsText(&IndexSummary{
+		MeasurementCount:                1,
+		SeriesIDSetCardinality:          1,
+		SeriesIDSetMin:                  uint64Ptr(0),
+		SeriesIDSetMax:                  uint64Ptr(0),
+		TombstoneSeriesIDSetCardinality: 1,
+		TombstoneSeriesIDSetMin:         uint64Ptr(0),
+		TombstoneSeriesIDSetMax:         uint64Ptr(0),
+	})
+	want := "index measurements=1 series_ids=1 range=0:0 deleted measurements=0 tag_keys=0 tag_values=0 series_ids=1 range=0:0"
+	if details != want {
+		t.Fatalf("details = %q, want %q", details, want)
 	}
 }
 

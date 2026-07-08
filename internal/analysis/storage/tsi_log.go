@@ -123,9 +123,10 @@ func analyzeTSILog(path string, info os.FileInfo, options Options) (FileReport, 
 		BlockCount:   entryCount,
 		BlocksByType: blocksByType,
 		SeriesID: SeriesIDSummary{
-			Min:   minSeriesID,
-			Max:   maxSeriesID,
-			Count: int64(len(state.LiveSeries)),
+			Min:      minSeriesID,
+			Max:      maxSeriesID,
+			Count:    int64(len(state.LiveSeries)),
+			HasRange: len(state.LiveSeries) > 0,
 		},
 		Index: &index,
 		Extra: map[string]string{
