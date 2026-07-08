@@ -333,6 +333,8 @@ influx-cli ingest out-of-order --ratio 0.1
 | mergeset | 已有 part metadata、metaindex row、index block-header、metaindex row index.bin range out-of-bounds/overlap/gap/order validation/sample、items/lens block header range out-of-bounds/overlap/gap/order validation/sample、metaindex row first-item 与首个 block header first-item consistency validation、common-prefix/first-item consistency validation、index header metadata range anomaly accounting、plain/zstd item payload summary/read/decode/range-skip/success-failure accounting、metadata range before/after block-item anomaly accounting、openGemini TSI/tag namespace item summary、openGemini field-index namespace item summary、openGemini CLV text-index item summary、payload-backed part/file-set table scan summary、ascending/descending part/file-set item search exact-match/exact-miss seek window simulation、ascending block-gap cursor advance accounting、TableSearch seek/heap cursor simulation、heap output part provenance、heap insert/pop/cursor-advance execution accounting、scan/search heap execution step samples、multi-part table scan heap cursor execution、part-level exact search final output samples、final deduped scan/search output samples 和 duplicate item merge-window/dedup summary；后续补充更多真实 mergeset part 编码样本 |
 | meta/store/sql topology | 已有本地 openGemini meta topology snapshot protobuf/JSON 解析，输出 database、retention policy、meta/data/sql node、PT view 和 replica group summary；不连接 meta service、HTTP API 或 runtime |
 
+mergeset payload accounting 还会按 plain/zstd 分别报告本地 `items.bin`/`lens.bin` 读入字节，以及 decode 成功后的未压缩 payload 字节；decode 失败只保留读入字节和失败计数。
+
 ## 9. Phase 6: Plugin Ecosystem 和 Dashboard
 
 建议周期：长期。

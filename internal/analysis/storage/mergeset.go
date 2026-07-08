@@ -86,27 +86,31 @@ type mergesetIndexSummary struct {
 }
 
 type mergesetItemPayloadSummary struct {
-	Blocks              int
-	DecodedBlocks       int
-	DecodedPlainBlocks  int
-	DecodedZSTDBlocks   int
-	RangeSkippedBlocks  int
-	ReadFailures        int
-	DecodeFailures      int
-	DecodePlainFailures int
-	DecodeZSTDFailures  int
-	ItemsDecoded        uint64
-	RangeBeforeBlocks   int
-	RangeAfterBlocks    int
-	RangeBeforeItems    uint64
-	RangeAfterItems     uint64
-	FirstItem           []byte
-	LastItem            []byte
-	Samples             [][]byte
-	TSIIndex            mergesetTSIIndexSummary
-	FieldIndex          mergesetFieldIndexSummary
-	CLVText             mergesetCLVTextIndexSummary
-	DecodePath          *DecodePathSummary
+	Blocks                        int
+	DecodedBlocks                 int
+	DecodedPlainBlocks            int
+	DecodedZSTDBlocks             int
+	RangeSkippedBlocks            int
+	ReadFailures                  int
+	DecodeFailures                int
+	DecodePlainFailures           int
+	DecodeZSTDFailures            int
+	PlainReadBytes                int64
+	ZSTDReadBytes                 int64
+	PlainUncompressedPayloadBytes int64
+	ZSTDUncompressedPayloadBytes  int64
+	ItemsDecoded                  uint64
+	RangeBeforeBlocks             int
+	RangeAfterBlocks              int
+	RangeBeforeItems              uint64
+	RangeAfterItems               uint64
+	FirstItem                     []byte
+	LastItem                      []byte
+	Samples                       [][]byte
+	TSIIndex                      mergesetTSIIndexSummary
+	FieldIndex                    mergesetFieldIndexSummary
+	CLVText                       mergesetCLVTextIndexSummary
+	DecodePath                    *DecodePathSummary
 }
 
 type mergesetTSIIndexSummary struct {
@@ -934,6 +938,13 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 			notices = append(notices, fmt.Sprintf("mergeset item payload decode unavailable at block=%d lens_offset=%d lens_size=%d: %v", i+1, header.LensBlockOffset, header.LensBlockSize, err))
 			continue
 		}
+		readBytes := int64(len(itemsData) + len(lensData))
+		switch header.MarshalType {
+		case mergesetMarshalTypePlain:
+			summary.PlainReadBytes += readBytes
+		case mergesetMarshalTypeZSTD:
+			summary.ZSTDReadBytes += readBytes
+		}
 		payloadSampleLimit := options.KeySampleLimit - len(summary.Samples)
 		decodeSampleLimit := payloadSampleLimit
 		if scan.DecodePath != nil {
@@ -957,8 +968,10 @@ func readMergesetItemPayloads(path string, headers []mergesetBlockHeader, compon
 		switch header.MarshalType {
 		case mergesetMarshalTypePlain:
 			summary.DecodedPlainBlocks++
+			summary.PlainUncompressedPayloadBytes += int64(decoded.PayloadBytes)
 		case mergesetMarshalTypeZSTD:
 			summary.DecodedZSTDBlocks++
+			summary.ZSTDUncompressedPayloadBytes += int64(decoded.PayloadBytes)
 		}
 		beforeItems, afterItems := countMergesetItemsOutsideMetadataRange(decoded.Items, firstItem, lastItem)
 		if beforeItems > 0 {
@@ -1013,14 +1026,15 @@ func countMergesetItemsOutsideMetadataRange(items [][]byte, metadataFirstItem, m
 }
 
 type mergesetDecodedBlockItems struct {
-	Count       uint64
-	FirstItem   []byte
-	LastItem    []byte
-	Samples     [][]byte
-	Items       [][]byte
-	QueryKeys   []string
-	Descending  bool
-	SeekResults map[string]mergesetSeekResult
+	Count        uint64
+	PayloadBytes int
+	FirstItem    []byte
+	LastItem     []byte
+	Samples      [][]byte
+	Items        [][]byte
+	QueryKeys    []string
+	Descending   bool
+	SeekResults  map[string]mergesetSeekResult
 }
 
 type mergesetSeekResult struct {
@@ -1081,6 +1095,7 @@ func decodeMergesetPlainBlockItems(header mergesetBlockHeader, itemsData, lensDa
 	if len(itemsTail) > 0 {
 		return mergesetDecodedBlockItems{}, fmt.Errorf("unexpected tail left after itemsData with len %d", len(itemsTail))
 	}
+	decoded.PayloadBytes = len(itemsData) + len(lensData)
 	return decoded, nil
 }
 
@@ -1155,6 +1170,7 @@ func decodeMergesetZSTDBlockItems(header mergesetBlockHeader, itemsData, lensDat
 	if len(itemsTail) > 0 {
 		return mergesetDecodedBlockItems{}, fmt.Errorf("unexpected tail left after itemsData with len %d", len(itemsTail))
 	}
+	decoded.PayloadBytes = len(itemsPayload) + len(lensPayload)
 	return decoded, nil
 }
 
@@ -1649,6 +1665,10 @@ func addMergesetItemPayloadSummary(report *FileReport, summary mergesetItemPaylo
 	report.Extra["item_payload_decode_failures"] = fmt.Sprint(summary.DecodeFailures)
 	report.Extra["item_payload_plain_decode_failures"] = fmt.Sprint(summary.DecodePlainFailures)
 	report.Extra["item_payload_zstd_decode_failures"] = fmt.Sprint(summary.DecodeZSTDFailures)
+	report.Extra["item_payload_plain_read_bytes"] = fmt.Sprint(summary.PlainReadBytes)
+	report.Extra["item_payload_zstd_read_bytes"] = fmt.Sprint(summary.ZSTDReadBytes)
+	report.Extra["item_payload_plain_uncompressed_bytes"] = fmt.Sprint(summary.PlainUncompressedPayloadBytes)
+	report.Extra["item_payload_zstd_uncompressed_bytes"] = fmt.Sprint(summary.ZSTDUncompressedPayloadBytes)
 	report.Extra["item_payload_items_decoded"] = fmt.Sprint(summary.ItemsDecoded)
 	report.Extra["item_payload_blocks_before_metadata_range"] = fmt.Sprint(summary.RangeBeforeBlocks)
 	report.Extra["item_payload_blocks_after_metadata_range"] = fmt.Sprint(summary.RangeAfterBlocks)
