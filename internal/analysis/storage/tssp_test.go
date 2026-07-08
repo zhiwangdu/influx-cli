@@ -1896,6 +1896,63 @@ func TestTSSPRecordExecutionSamplesLimitAndRebase(t *testing.T) {
 	}
 }
 
+func TestTSSPRecordExecutionSamplesDoNotRequireOutputSampleBudget(t *testing.T) {
+	blocks := map[string]tsspDetachedDataBlockInfo{
+		"time": {
+			Type:       "integer",
+			Rows:       2,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"100", "200"},
+		},
+		"status": {
+			Type:       "boolean-full",
+			Rows:       2,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"true", "false"},
+		},
+		"value": {
+			Type:       "integer",
+			Rows:       2,
+			RowsKnown:  true,
+			ValueKnown: true,
+			Values:     []string{"1", "2"},
+		},
+	}
+	queryRange, err := NewTimeRange(100, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outputs := []DecodePathCursorOutput{{Key: "existing"}}
+	outputs, steps, stats := appendTSSPDataProbeRecordSamples(outputs, "sid", 7, tsspTimeRange{Min: 100, Max: 200}, blocks, nil, queryRange, 1, 2, 9)
+	if got, want := len(outputs), 1; got != want {
+		t.Fatalf("record output samples = %d, want unchanged cap %d", got, want)
+	}
+	if got, want := stats.Samples, 0; got != want {
+		t.Fatalf("record output sample count = %d, want %d", got, want)
+	}
+	if got, want := stats.Outputs, 2; got != want {
+		t.Fatalf("record outputs = %d, want %d", got, want)
+	}
+	if got, want := len(steps), 2; got != want {
+		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		key   string
+		value string
+	}{
+		{"sid:7/record/row:0", "row=0 local_output=9 time=100 range=100:200 columns=2 values=status=true,value=1 result=output"},
+		{"sid:7/record/row:1", "row=1 local_output=10 time=200 range=100:200 columns=2 values=status=false,value=2 result=output"},
+	} {
+		got := steps[i]
+		if got.Step != i+1 || got.Type != "tssp-record-row-step" || got.Action != "record_row_output" || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != i || got.CursorIndexAfter != i+1 || !got.CursorAdvanced {
+			t.Fatalf("record execution sample[%d] = %+v, want key=%q value=%q indexes=%d->%d advanced", i, got, want.key, want.value, i, i+1)
+		}
+	}
+}
+
 func TestTSSPRecordMaterializationStatsCountRangeAndFilterRejects(t *testing.T) {
 	blocks := map[string]tsspDetachedDataBlockInfo{
 		"time": {

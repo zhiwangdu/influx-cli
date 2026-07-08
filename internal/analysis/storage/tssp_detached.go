@@ -2167,20 +2167,23 @@ func appendTSSPDataProbeRecordSamples(samples []DecodePathCursorOutput, keyPrefi
 			}
 			continue
 		}
-		sampled := sampleLimit > 0 && len(samples) < sampleLimit
-		if sampled {
+		sampleOutput := sampleLimit > 0 && len(samples) < sampleLimit
+		sampleStep := recordStepLimit > 0 && len(recordSteps) < recordStepLimit
+		if sampleOutput || sampleStep {
 			values := tsspDataProbeRecordValues(blocks, columnNames, row)
 			outputOrdinal := outputOrdinalBase + stats.Outputs
-			samples = append(samples, DecodePathCursorOutput{
-				Key:            fmt.Sprintf("%s:%d/record", keyPrefix, id),
-				Time:           timestamp,
-				Type:           "record",
-				OptimizedValue: values,
-				OutputOrdinal:  outputOrdinal,
-				Matches:        true,
-			})
-			stats.Samples++
-			if recordStepLimit > 0 && len(recordSteps) < recordStepLimit {
+			if sampleOutput {
+				samples = append(samples, DecodePathCursorOutput{
+					Key:            fmt.Sprintf("%s:%d/record", keyPrefix, id),
+					Time:           timestamp,
+					Type:           "record",
+					OptimizedValue: values,
+					OutputOrdinal:  outputOrdinal,
+					Matches:        true,
+				})
+				stats.Samples++
+			}
+			if sampleStep {
 				recordSteps = append(recordSteps, DecodePathCursorStep{
 					Step:              len(recordSteps) + 1,
 					Type:              "tssp-record-row-step",
