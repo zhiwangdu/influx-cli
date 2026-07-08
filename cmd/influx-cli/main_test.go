@@ -684,6 +684,35 @@ func TestStorageAnalyzeColumnFlagRegistered(t *testing.T) {
 	}
 }
 
+func TestStorageAnalyzeFieldFlagHelpMentionsBangAliases(t *testing.T) {
+	cmd := newRootCommand()
+	found, _, err := cmd.Find([]string{"storage", "analyze"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := found.Flags().Lookup("field")
+	if flag == nil {
+		t.Fatal("storage analyze --field flag is not registered")
+	}
+	usage := flag.Usage
+	for _, want := range []string{
+		"key not-in/!in (value1,value2)",
+		"key not-between/!between (lower,upper)",
+		"key not-contains/!contains",
+		"not-icontains/!icontains",
+		"key not-like/!like",
+		"not-ilike/!ilike",
+		"key not-starts-with/!starts-with",
+		"not-istarts-with/!istarts-with",
+		"key not-ends-with/!ends-with",
+		"not-iends-with/!iends-with",
+	} {
+		if !strings.Contains(usage, want) {
+			t.Fatalf("--field usage = %q, want %q", usage, want)
+		}
+	}
+}
+
 func TestStorageAnalyzeKeyRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--key", "cpu value", "missing.tsm"})
