@@ -87,14 +87,18 @@ type Report struct {
 }
 
 type Summary struct {
-	FileCount          int            `json:"file_count"`
-	TotalSizeBytes     int64          `json:"total_size_bytes"`
-	KeyCount           int            `json:"key_count"`
-	BlockCount         int            `json:"block_count"`
-	BlocksByType       map[string]int `json:"blocks_by_type,omitempty"`
-	QueryOverlapFiles  int            `json:"query_overlap_files,omitempty"`
-	QueryOverlapBlocks int            `json:"query_overlap_blocks,omitempty"`
-	TombstoneFiles     int            `json:"tombstone_files,omitempty"`
+	FileCount                   int            `json:"file_count"`
+	TotalSizeBytes              int64          `json:"total_size_bytes"`
+	KeyCount                    int            `json:"key_count"`
+	BlockCount                  int            `json:"block_count"`
+	BlocksByType                map[string]int `json:"blocks_by_type,omitempty"`
+	QueryOverlapFiles           int            `json:"query_overlap_files,omitempty"`
+	QueryOverlapBlocks          int            `json:"query_overlap_blocks,omitempty"`
+	TombstoneFiles              int            `json:"tombstone_files,omitempty"`
+	TombstoneSizeBytes          int64          `json:"tombstone_size_bytes,omitempty"`
+	TombstoneRanges             int            `json:"tombstone_ranges,omitempty"`
+	TombstoneQueryOverlapRanges int            `json:"tombstone_query_overlap_ranges,omitempty"`
+	TombstoneAffectedBlocks     int            `json:"tombstone_affected_blocks,omitempty"`
 }
 
 type FileReport struct {
@@ -601,10 +605,6 @@ func (r Report) Result() result.Result {
 		)
 	}
 	if r.DecodePath != nil {
-		tombstone := ""
-		if r.Summary.TombstoneFiles > 0 {
-			tombstone = fmt.Sprintf("%d files", r.Summary.TombstoneFiles)
-		}
 		table.AddRow(
 			"<file-set>",
 			"file-set",
@@ -614,7 +614,7 @@ func (r Report) Result() result.Result {
 			r.Summary.KeyCount,
 			r.Summary.BlockCount,
 			r.Summary.QueryOverlapBlocks,
-			tombstone,
+			fileSetTombstoneText(r.Summary),
 			summaryDetailsText(r.Summary, len(r.Files), len(r.Notices)),
 			"",
 			decodePathText(r.DecodePath),
@@ -650,6 +650,26 @@ func tombstoneText(summary TombstoneSummary) string {
 		parts = append(parts, fmt.Sprintf("%d blocks", summary.AffectedBlocks))
 	}
 	return "yes (" + strings.Join(parts, ", ") + ")"
+}
+
+func fileSetTombstoneText(summary Summary) string {
+	if summary.TombstoneFiles == 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("%d files", summary.TombstoneFiles)}
+	if summary.TombstoneSizeBytes > 0 {
+		parts = append(parts, fmt.Sprintf("%d bytes", summary.TombstoneSizeBytes))
+	}
+	if summary.TombstoneRanges > 0 {
+		parts = append(parts, fmt.Sprintf("%d ranges", summary.TombstoneRanges))
+	}
+	if summary.TombstoneQueryOverlapRanges > 0 {
+		parts = append(parts, fmt.Sprintf("query_ranges=%d", summary.TombstoneQueryOverlapRanges))
+	}
+	if summary.TombstoneAffectedBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("%d blocks", summary.TombstoneAffectedBlocks))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func fileDetailsText(file FileReport) string {
@@ -702,6 +722,18 @@ func summaryDetailsText(summary Summary, fileCount, noticeCount int) string {
 	}
 	if summary.TombstoneFiles > 0 {
 		parts = append(parts, fmt.Sprintf("tombstone_files=%d", summary.TombstoneFiles))
+	}
+	if summary.TombstoneSizeBytes > 0 {
+		parts = append(parts, fmt.Sprintf("tombstone_bytes=%d", summary.TombstoneSizeBytes))
+	}
+	if summary.TombstoneRanges > 0 {
+		parts = append(parts, fmt.Sprintf("tombstone_ranges=%d", summary.TombstoneRanges))
+	}
+	if summary.TombstoneQueryOverlapRanges > 0 {
+		parts = append(parts, fmt.Sprintf("tombstone_query_ranges=%d", summary.TombstoneQueryOverlapRanges))
+	}
+	if summary.TombstoneAffectedBlocks > 0 {
+		parts = append(parts, fmt.Sprintf("tombstone_blocks=%d", summary.TombstoneAffectedBlocks))
 	}
 	if noticeCount > 0 {
 		parts = append(parts, fmt.Sprintf("notices=%d", noticeCount))

@@ -746,13 +746,17 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 			},
 		},
 		Summary: Summary{
-			TotalSizeBytes:     300,
-			KeyCount:           6,
-			BlockCount:         8,
-			BlocksByType:       map[string]int{"chunk-meta": 2, "data": 6},
-			QueryOverlapFiles:  2,
-			QueryOverlapBlocks: 3,
-			TombstoneFiles:     1,
+			TotalSizeBytes:              300,
+			KeyCount:                    6,
+			BlockCount:                  8,
+			BlocksByType:                map[string]int{"chunk-meta": 2, "data": 6},
+			QueryOverlapFiles:           2,
+			QueryOverlapBlocks:          3,
+			TombstoneFiles:              1,
+			TombstoneSizeBytes:          64,
+			TombstoneRanges:             3,
+			TombstoneQueryOverlapRanges: 1,
+			TombstoneAffectedBlocks:     2,
 		},
 		DecodePath: &DecodePathSummary{
 			Mode:                       "tssp-file-set-location-cursor-ascending",
@@ -826,10 +830,10 @@ func TestReportResultIncludesReportLevelDecodePathSummary(t *testing.T) {
 	if got, want := row[tableColumnIndex(t, result.Table.Columns, "query_blocks")], 3; got != want {
 		t.Fatalf("aggregate query blocks = %v, want %v", got, want)
 	}
-	if got, want := row[tableColumnIndex(t, result.Table.Columns, "tombstone")], "1 files"; got != want {
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "tombstone")], "1 files, 64 bytes, 3 ranges, query_ranges=1, 2 blocks"; got != want {
 		t.Fatalf("aggregate tombstone = %v, want %v", got, want)
 	}
-	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2; query_files=2; tombstone_files=1; notices=2; block_types chunk-meta:2 data:6"; got != want {
+	if got, want := row[tableColumnIndex(t, result.Table.Columns, "details")], "files=2; query_files=2; tombstone_files=1; tombstone_bytes=64; tombstone_ranges=3; tombstone_query_ranges=1; tombstone_blocks=2; notices=2; block_types chunk-meta:2 data:6"; got != want {
 		t.Fatalf("aggregate details = %v, want %v", got, want)
 	}
 	decodeText := row[tableColumnIndex(t, result.Table.Columns, "decode_path")].(string)
@@ -866,6 +870,13 @@ func TestAccumulateSummaryIncludesBlockTypes(t *testing.T) {
 			"integer": 1,
 			"ignored": 0,
 		},
+		Tombstones: TombstoneSummary{
+			Exists:             true,
+			SizeBytes:          64,
+			RangeCount:         3,
+			QueryOverlapRanges: 1,
+			AffectedBlocks:     2,
+		},
 	}, Options{})
 	accumulateSummary(&summary, FileReport{
 		SizeBytes:  50,
@@ -874,6 +885,13 @@ func TestAccumulateSummaryIncludesBlockTypes(t *testing.T) {
 		BlocksByType: map[string]int{
 			"float":   3,
 			"ignored": -1,
+		},
+		Tombstones: TombstoneSummary{
+			Exists:             true,
+			SizeBytes:          16,
+			RangeCount:         1,
+			QueryOverlapRanges: 2,
+			AffectedBlocks:     3,
 		},
 	}, Options{})
 
@@ -900,6 +918,21 @@ func TestAccumulateSummaryIncludesBlockTypes(t *testing.T) {
 	}
 	if got := summary.QueryOverlapBlocks; got != 0 {
 		t.Fatalf("query overlap blocks = %d, want omitted without query target", got)
+	}
+	if got, want := summary.TombstoneFiles, 2; got != want {
+		t.Fatalf("tombstone files = %d, want %d", got, want)
+	}
+	if got, want := summary.TombstoneSizeBytes, int64(80); got != want {
+		t.Fatalf("tombstone size bytes = %d, want %d", got, want)
+	}
+	if got, want := summary.TombstoneRanges, 4; got != want {
+		t.Fatalf("tombstone ranges = %d, want %d", got, want)
+	}
+	if got, want := summary.TombstoneQueryOverlapRanges, 3; got != want {
+		t.Fatalf("tombstone query overlap ranges = %d, want %d", got, want)
+	}
+	if got, want := summary.TombstoneAffectedBlocks, 5; got != want {
+		t.Fatalf("tombstone affected blocks = %d, want %d", got, want)
 	}
 }
 

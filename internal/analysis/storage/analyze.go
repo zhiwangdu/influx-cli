@@ -672,6 +672,10 @@ func accumulateSummary(summary *Summary, file FileReport, options Options) {
 	}
 	if file.Tombstones.Exists {
 		summary.TombstoneFiles++
+		summary.TombstoneSizeBytes += file.Tombstones.SizeBytes
+		summary.TombstoneRanges += file.Tombstones.RangeCount
+		summary.TombstoneQueryOverlapRanges += file.Tombstones.QueryOverlapRanges
+		summary.TombstoneAffectedBlocks += file.Tombstones.AffectedBlocks
 	}
 	if optionsHasQueryTarget(options) {
 		if file.QueryOverlapsFile {
