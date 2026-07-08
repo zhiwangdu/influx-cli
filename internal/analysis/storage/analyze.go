@@ -46,7 +46,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	if len(options.QueryKeys) > 0 && !options.QueryRange.Set && options.Format != FormatMergeset {
 		return Report{}, fmt.Errorf("query key filter requires query range")
 	}
-	if len(options.QuerySeriesIDs) > 0 && !options.QueryRange.Set && options.Format != FormatSeriesFile {
+	if len(options.QuerySeriesIDs) > 0 && !options.QueryRange.Set && SeriesIDFilterRequiresQueryRange(paths, options.Format) {
 		return Report{}, fmt.Errorf("query series id filter requires query range")
 	}
 	if len(options.QueryMetaIndexIDs) > 0 && !options.QueryRange.Set {
@@ -101,6 +101,29 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	}
 	report.Summary.FileCount = len(report.Files)
 	return report, nil
+}
+
+// SeriesIDFilterRequiresQueryRange reports whether --series-id needs a query
+// time range for the requested storage format and local input paths.
+func SeriesIDFilterRequiresQueryRange(paths []string, format Format) bool {
+	if format == FormatSeriesFile {
+		return false
+	}
+	if format != FormatAuto {
+		return true
+	}
+	checked := false
+	for _, input := range paths {
+		path := strings.TrimSpace(input)
+		if path == "" {
+			continue
+		}
+		checked = true
+		if !isSeriesFilePath(filepath.Clean(path)) {
+			return true
+		}
+	}
+	return !checked
 }
 
 func normalizeQueryKeys(values []string) []string {

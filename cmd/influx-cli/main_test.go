@@ -743,6 +743,28 @@ func TestStorageAnalyzeSeriesIDRequiresRange(t *testing.T) {
 	}
 }
 
+func TestStorageAnalyzeAutoSeriesFileSeriesIDDoesNotRequireRange(t *testing.T) {
+	seriesDir := filepath.Join(t.TempDir(), "_series")
+	if err := os.Mkdir(seriesDir, 0o700); err != nil {
+		t.Fatalf("mkdir _series: %v", err)
+	}
+
+	cmd := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--format", "json", "storage", "analyze", "--series-id", "9", seriesDir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "series-file") {
+		t.Fatalf("stdout = %q, want series-file output", got)
+	}
+	if got := stderr.String(); strings.Contains(got, "--series-id requires --from and --to") {
+		t.Fatalf("stderr = %q, want no range requirement", got)
+	}
+}
+
 func TestStorageAnalyzeMetaIndexIDRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--meta-index-id", "9", "missing.tssp"})

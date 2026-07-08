@@ -231,7 +231,7 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(seriesIDs) > 0 && !queryRange.Set && storageFormat != storage.FormatSeriesFile {
+			if len(seriesIDs) > 0 && !queryRange.Set && storage.SeriesIDFilterRequiresQueryRange(args, storageFormat) {
 				return fmt.Errorf("--series-id requires --from and --to because decode-path planning needs a query range")
 			}
 			metaIndexIDs, err := parseStorageMetaIndexIDs(analyzeFlags.metaIndexIDs)
