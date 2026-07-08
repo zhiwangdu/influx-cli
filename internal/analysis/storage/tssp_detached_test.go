@@ -1209,6 +1209,123 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 	}
 }
 
+func TestAnalyzeTSSPDetachedFileSetOutputSamplesIncludeFilesAndFinalDedup(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "segment-a", tsspDetachedMetaIndexFileName)
+	path2 := filepath.Join(dir, "segment-b", tsspDetachedMetaIndexFileName)
+	times, err := writeTestTSSPDetachedMultiColumnRecordData(filepath.Dir(path1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeTestTSSPDetachedMultiColumnRecordData(filepath.Dir(path2)); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(times[0], times[len(times)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{dir}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		Recursive:        true,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "status", Value: "true"}},
+		BlockSampleLimit: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := report.DecodePath
+	if decode == nil {
+		t.Fatal("expected report-level detached TSSP decode path summary")
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 2; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordSamples, 2; got != want {
+		t.Fatalf("data block probe record samples = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeRecordOutputs, 2; got != want {
+		t.Fatalf("data block probe record outputs = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRows, 4; got != want {
+		t.Fatalf("data block probe filter rows = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterMatches, 2; got != want {
+		t.Fatalf("data block probe filter matches = %d, want %d", got, want)
+	}
+	if got, want := decode.DataBlockProbeFilterRejects, 2; got != want {
+		t.Fatalf("data block probe filter rejects = %d, want %d", got, want)
+	}
+	if got, want := len(decode.FilterExecutionSamples), 4; got != want {
+		t.Fatalf("filter execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		file        string
+		action      string
+		indexBefore int
+		indexAfter  int
+	}{
+		{path1, "filter_row_match", 0, 1},
+		{path1, "filter_row_reject_required", 1, 2},
+		{path2, "filter_row_match", 2, 3},
+		{path2, "filter_row_reject_required", 3, 4},
+	} {
+		got := decode.FilterExecutionSamples[i]
+		if got.Step != i+1 || got.File != want.file || got.Action != want.action || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
+			t.Fatalf("filter execution sample[%d] = %+v, want file=%q action=%q indexes=%d->%d advanced", i, got, want.file, want.action, want.indexBefore, want.indexAfter)
+		}
+	}
+	if got, want := len(decode.RecordExecutionSamples), 4; got != want {
+		t.Fatalf("record execution samples = %d, want %d", got, want)
+	}
+	for i, want := range []struct {
+		file        string
+		action      string
+		key         string
+		value       string
+		indexBefore int
+		indexAfter  int
+	}{
+		{path1, "record_row_output", "meta-index-id:42/record/row:0", fmt.Sprintf("row=0 local_input=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1]), 0, 1},
+		{path1, "record_row_filter_reject", "meta-index-id:42/record/row:1", fmt.Sprintf("row=1 local_input=1 local_output=none time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=filter_reject", times[1], times[0], times[len(times)-1]), 1, 2},
+		{path2, "record_row_output", "meta-index-id:42/record/row:0", fmt.Sprintf("row=0 local_input=0 local_output=0 time=%d range=%d:%d columns=2 values=status=true,value=1.25 result=output", times[0], times[0], times[len(times)-1]), 2, 3},
+		{path2, "record_row_filter_reject", "meta-index-id:42/record/row:1", fmt.Sprintf("row=1 local_input=1 local_output=none time=%d range=%d:%d columns=2 values=status=false,value=2.5 result=filter_reject", times[1], times[0], times[len(times)-1]), 3, 4},
+	} {
+		got := decode.RecordExecutionSamples[i]
+		if got.Step != i+1 || got.File != want.file || got.Type != "tssp-record-row-step" || got.Action != want.action || got.Key != want.key || got.CandidateValue != want.value || got.CursorIndexBefore != want.indexBefore || got.CursorIndexAfter != want.indexAfter || !got.CursorAdvanced {
+			t.Fatalf("record execution sample[%d] = %+v, want file=%q action=%q key=%q value=%q indexes=%d->%d advanced", i, got, want.file, want.action, want.key, want.value, want.indexBefore, want.indexAfter)
+		}
+	}
+	if got, want := len(decode.CursorOutputSamples), 6; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	for i, wantFile := range []string{path1, path1, path1, path2, path2, path2} {
+		if got := decode.CursorOutputSamples[i].File; got != wantFile {
+			t.Fatalf("cursor output sample[%d] file = %q, want %q", i, got, wantFile)
+		}
+		if !decode.CursorOutputSamples[i].Matches {
+			t.Fatalf("cursor output sample[%d] should match", i)
+		}
+	}
+	if got, want := len(decode.CursorFinalOutputSamples), 3; got != want {
+		t.Fatalf("cursor final output samples = %d, want %d", got, want)
+	}
+	for i, want := range []DecodePathCursorOutput{
+		{Key: "meta-index-id:42/record", Time: times[0], Type: "record", File: path1, OptimizedValue: "status=true,value=1.25", Matches: true, RequiresDedup: true, RequiresMerge: true, MergeFiles: newDecodePathStringList([]string{path1, path2})},
+		{Key: "meta-index-id:42/status", Time: times[0], Type: "boolean-full", File: path1, OptimizedValue: "true", Matches: true, RequiresDedup: true, RequiresMerge: true, MergeFiles: newDecodePathStringList([]string{path1, path2})},
+		{Key: "meta-index-id:42/value", Time: times[0], Type: "float-full", File: path1, OptimizedValue: "1.25", Matches: true, RequiresDedup: true, RequiresMerge: true, MergeFiles: newDecodePathStringList([]string{path1, path2})},
+	} {
+		got := decode.CursorFinalOutputSamples[i]
+		if got != want {
+			t.Fatalf("cursor final output sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+	if !containsStringWithPrefix(decode.Recommendations, "final TSSP file-set output samples") {
+		t.Fatalf("recommendations = %v, want final file-set output recommendation", decode.Recommendations)
+	}
+}
+
 func TestAnalyzeTSSPDetachedMetaIndexSamplesOneRowValueBlocks(t *testing.T) {
 	dir := t.TempDir()
 	chunks := []testTSSPChunkSpec{
@@ -4253,6 +4370,106 @@ func writeTestTSSPDetachedChunkMeta(path string, chunks []testTSSPChunkSpec) ([]
 		})
 	}
 	return metaIndexes, os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPDetachedMultiColumnChunkMeta(path string, chunks []testTSSPMultiColumnChunkSpec) ([]tsspMetaIndex, error) {
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+	metaIndexes := make([]tsspMetaIndex, 0, len(chunks))
+	for _, chunk := range chunks {
+		offset := int64(buf.Len())
+		var payload bytes.Buffer
+		writeUint64(&payload, chunk.sid)
+		chunkOffset := int64(0)
+		chunkSize := uint32(0)
+		if len(chunk.columns) > 0 {
+			chunkOffset = chunk.columns[0].offset
+		}
+		for _, column := range chunk.columns {
+			chunkSize += column.size
+		}
+		writeGeminiInt64(&payload, chunkOffset)
+		writeUint32(&payload, chunkSize)
+		writeUint32(&payload, uint32(len(chunk.columns)))
+		writeUint32(&payload, 1)
+		writeGeminiInt64(&payload, chunk.minTime)
+		writeGeminiInt64(&payload, chunk.maxTime)
+		for _, column := range chunk.columns {
+			writeTestTSSPColumnMeta(&payload, column.name, column.typ, column.offset, column.size)
+		}
+		payload.Write([]byte{0xa5, 0x5a})
+		payloadBytes := payload.Bytes()
+		var crc [4]byte
+		binary.BigEndian.PutUint32(crc[:], crc32.ChecksumIEEE(payloadBytes))
+		buf.Write(crc[:])
+		buf.Write(payloadBytes)
+		metaIndexes = append(metaIndexes, tsspMetaIndex{
+			ID:      chunk.sid,
+			MinTime: chunk.minTime,
+			MaxTime: chunk.maxTime,
+			Offset:  offset,
+			Size:    uint32(len(crc) + len(payloadBytes)),
+		})
+	}
+	return metaIndexes, os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSSPDetachedMultiColumnRecordData(dir string) ([]int64, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	times := []int64{333, 444}
+
+	valuePayload, err := testTSSPFloatFullPayload([]float64{1.25, 2.5}, 0)
+	if err != nil {
+		return nil, err
+	}
+	statusPayload := testTSSPBooleanFullPayload([]bool{true, false})
+	timePayload := testTSSPIntegerFullPayload(times)
+
+	valueOffset := int64(1200)
+	valueSize := uint32(crc32.Size + len(valuePayload))
+	statusOffset := valueOffset + int64(valueSize)
+	statusSize := uint32(crc32.Size + len(statusPayload))
+	timeOffset := statusOffset + int64(statusSize)
+	timeSize := uint32(crc32.Size + len(timePayload))
+	chunks := []testTSSPMultiColumnChunkSpec{{
+		sid:     42,
+		minTime: times[0],
+		maxTime: times[1],
+		columns: []testTSSPColumnSpec{
+			{name: "value", typ: 1, offset: valueOffset, size: valueSize},
+			{name: "status", typ: 5, offset: statusOffset, size: statusSize},
+			{name: "time", typ: 0, offset: timeOffset, size: timeSize},
+		},
+	}}
+	metaIndexes, err := writeTestTSSPDetachedMultiColumnChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		return nil, err
+	}
+
+	size := int(timeOffset + int64(timeSize) + 64)
+	var buf bytes.Buffer
+	buf.WriteString(tsspMagic)
+	writeUint64(&buf, 2)
+	for buf.Len() < size {
+		buf.WriteByte(0)
+	}
+	data := buf.Bytes()
+	if err := writeTestTSSPDetachedPayloadBlock(data, valueOffset, valueSize, valuePayload); err != nil {
+		return nil, err
+	}
+	if err := writeTestTSSPDetachedPayloadBlock(data, statusOffset, statusSize, statusPayload); err != nil {
+		return nil, err
+	}
+	if err := writeTestTSSPDetachedPayloadBlock(data, timeOffset, timeSize, timePayload); err != nil {
+		return nil, err
+	}
+	return times, os.WriteFile(filepath.Join(dir, tsspDetachedDataFileName), data, 0o600)
 }
 
 func writeTestTSSPDetachedData(path string, size int, chunks ...testTSSPChunkSpec) error {

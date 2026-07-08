@@ -721,10 +721,16 @@ func tsspDetachedFileSetRecommendations(summary *DecodePathSummary) []string {
 	if summary == nil {
 		return nil
 	}
+	var recommendations []string
 	if summary.LocationBlocksByType["detached-chunk-meta"] == 0 && summary.DecodeBlocksByType["detached-chunk-meta"] == 0 {
-		return tsspDetachedMetaIndexRecommendations(summary)
+		recommendations = tsspDetachedMetaIndexRecommendations(summary)
+	} else {
+		recommendations = tsspDetachedChunkDecodeRecommendations(summary)
 	}
-	return tsspDetachedChunkDecodeRecommendations(summary)
+	if len(summary.CursorFinalOutputSamples) > 0 {
+		recommendations = append(recommendations, "final TSSP file-set output samples include local exact-dedup status")
+	}
+	return recommendations
 }
 
 func appendTSSPMetaIndexDecodeSample(summary *DecodePathSummary, meta tsspMetaIndex, sampleLimit int) {
