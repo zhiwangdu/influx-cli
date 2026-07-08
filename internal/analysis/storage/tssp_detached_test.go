@@ -1114,6 +1114,9 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 				DataBlockProbeRecordOutputs:       1,
 				DataBlockProbeRecordRangeRejects:  2,
 				DataBlockProbeRecordFilterRejects: 1,
+				DataBlockProbeFilterRows:          4,
+				DataBlockProbeFilterMatches:       1,
+				DataBlockProbeFilterRejects:       3,
 			},
 		},
 		{
@@ -1125,6 +1128,8 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 				DataBlockProbeRecordRows:          2,
 				DataBlockProbeRecordOutputs:       2,
 				DataBlockProbeRecordFilterRejects: 0,
+				DataBlockProbeFilterRows:          2,
+				DataBlockProbeFilterMatches:       2,
 			},
 		},
 	}, Options{QueryRange: queryRange})
@@ -1145,6 +1150,12 @@ func TestTSSPDetachedFileSetDecodePathSummarizesTotalExecutionActions(t *testing
 	}
 	if got, want := summary.RecordExecutionTotalActions["record_row_filter_reject"], 1; got != want {
 		t.Fatalf("total record_row_filter_reject action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterExecutionTotalActions["filter_row_match"], 3; got != want {
+		t.Fatalf("total filter_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := summary.FilterExecutionTotalActions["filter_row_reject"], 3; got != want {
+		t.Fatalf("total filter_row_reject action count = %d, want %d", got, want)
 	}
 }
 
@@ -2142,6 +2153,12 @@ func TestAnalyzeTSSPDetachedAnyFieldFilterMatchesEitherPredicate(t *testing.T) {
 	}
 	if got, want := decode.FilterExecutionActions["filter_row_match"], 1; got != want {
 		t.Fatalf("filter_row_match action count = %d, want %d", got, want)
+	}
+	if got, want := len(decode.FilterExecutionTotalActions), 1; got != want {
+		t.Fatalf("filter execution total action count entries = %d, want %d: %+v", got, want, decode.FilterExecutionTotalActions)
+	}
+	if got, want := decode.FilterExecutionTotalActions["filter_row_match"], 1; got != want {
+		t.Fatalf("total filter_row_match action count = %d, want %d", got, want)
 	}
 	wantFilterStep := DecodePathCursorStep{
 		Step:              1,

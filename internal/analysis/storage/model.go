@@ -450,6 +450,7 @@ type DecodePathSummary struct {
 	RecordExecutionTotalActions       map[string]int            `json:"record_execution_total_action_counts,omitempty"`
 	RecordExecutionActions            map[string]int            `json:"record_execution_action_counts,omitempty"`
 	FilterExecutionSamples            []DecodePathCursorStep    `json:"filter_execution_samples,omitempty"`
+	FilterExecutionTotalActions       map[string]int            `json:"filter_execution_total_action_counts,omitempty"`
 	FilterExecutionActions            map[string]int            `json:"filter_execution_action_counts,omitempty"`
 	CursorExecutionSamples            []DecodePathCursorStep    `json:"cursor_execution_samples,omitempty"`
 	CursorExecutionActions            map[string]int            `json:"cursor_execution_action_counts,omitempty"`
@@ -1246,9 +1247,10 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 	filterActionText := countMapText(decodePathExecutionActions(summary.FilterExecutionActions, summary.FilterExecutionSamples))
 	rangeTotalActionText := countMapText(summary.RangeExecutionTotalActions)
 	recordTotalActionText := countMapText(summary.RecordExecutionTotalActions)
+	filterTotalActionText := countMapText(summary.FilterExecutionTotalActions)
 	hasExecutionSamples := len(summary.Samples) > 0 || len(summary.CursorExecutionSamples) > 0 || len(summary.RangeExecutionSamples) > 0 || len(summary.RecordExecutionSamples) > 0 || len(summary.FilterExecutionSamples) > 0
 	hasExecutionActions := cursorActionText != "" || rangeActionText != "" || recordActionText != "" || filterActionText != ""
-	hasExecutionTotalActions := rangeTotalActionText != "" || recordTotalActionText != ""
+	hasExecutionTotalActions := rangeTotalActionText != "" || recordTotalActionText != "" || filterTotalActionText != ""
 	if hasExecutionSamples || hasExecutionActions || hasExecutionTotalActions {
 		sampleParts := []string{}
 		if rangeTotalActionText != "" {
@@ -1256,6 +1258,9 @@ func executionDiagnosticsSummaryText(summary *DecodePathSummary) string {
 		}
 		if recordTotalActionText != "" {
 			sampleParts = append(sampleParts, "record_total_actions "+recordTotalActionText)
+		}
+		if filterTotalActionText != "" {
+			sampleParts = append(sampleParts, "filter_total_actions "+filterTotalActionText)
 		}
 		if hasExecutionSamples {
 			sampleParts = append(sampleParts,
@@ -1332,6 +1337,10 @@ func populateDecodePathTotalExecutionActionCounts(summary *DecodePathSummary) {
 		"record_row_output":        summary.DataBlockProbeRecordOutputs,
 		"record_row_range_reject":  summary.DataBlockProbeRecordRangeRejects,
 		"record_row_filter_reject": summary.DataBlockProbeRecordFilterRejects,
+	})
+	summary.FilterExecutionTotalActions = positiveCountMap(map[string]int{
+		"filter_row_match":  summary.DataBlockProbeFilterMatches,
+		"filter_row_reject": summary.DataBlockProbeFilterRejects,
 	})
 }
 
