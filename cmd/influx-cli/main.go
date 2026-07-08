@@ -244,21 +244,21 @@ func newStorageCommand(flags *globalFlags) *cobra.Command {
 			if hasNonEmptyValues(analyzeFlags.columns) && !queryRange.Set {
 				return fmt.Errorf("--column requires --from and --to because TSSP data ReadAt planning needs a query range")
 			}
-			fieldFilters, err := parseStorageFieldFilters(analyzeFlags.fields)
+			fieldFilters, err := parseStorageFieldFiltersForFlag("--field", analyzeFlags.fields)
 			if err != nil {
 				return err
 			}
 			if len(fieldFilters) > 0 && !queryRange.Set {
 				return fmt.Errorf("--field requires --from and --to because TSSP record filtering needs a query range")
 			}
-			anyFieldFilters, err := parseStorageFieldFilters(analyzeFlags.anyFields)
+			anyFieldFilters, err := parseStorageFieldFiltersForFlag("--field-any", analyzeFlags.anyFields)
 			if err != nil {
 				return err
 			}
 			if len(anyFieldFilters) > 0 && !queryRange.Set {
 				return fmt.Errorf("--field-any requires --from and --to because TSSP record filtering needs a query range")
 			}
-			noneFieldFilters, err := parseStorageFieldFilters(analyzeFlags.noneFields)
+			noneFieldFilters, err := parseStorageFieldFiltersForFlag("--field-none", analyzeFlags.noneFields)
 			if err != nil {
 				return err
 			}
@@ -461,6 +461,10 @@ func parseStorageTagFilters(values []string) ([]storage.TagFilter, error) {
 }
 
 func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
+	return parseStorageFieldFiltersForFlag("--field", values)
+}
+
+func parseStorageFieldFiltersForFlag(flag string, values []string) ([]storage.FieldFilter, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -472,15 +476,15 @@ func parseStorageFieldFilters(values []string) ([]storage.FieldFilter, error) {
 		}
 		key, op, filterValue, ok := splitStorageFieldFilter(trimmed)
 		if !ok {
-			return nil, fmt.Errorf("parse --field %q: use key=value, key==value, key equals/equal value, key!=value, key<>value, key not-equals/not equals/not_equals value, key not = value, key not == value, key !equals/!equal value, key exists, key not-exists, key !exists, key=~<pattern>, key!~<pattern>, key matches/match/regex/regexp <pattern> and not/! variants, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key !> value, key !>= value, key !< value, key !<= value, key not > value, key not >= value, key not < value, key not <= value as inverse ordered comparison aliases, key in (value1,value2), key not-in (value1,value2), key !in (value1,value2), key between (lower,upper), key not-between (lower,upper), key !between (lower,upper), key contains/icontains value, key not-contains/not-icontains value, key !contains/!icontains value, key like/ilike pattern, key not-like/not-ilike pattern, key !like/!ilike pattern, key starts-with/istarts-with value, key not-starts-with/not-istarts-with value, key !starts-with/!istarts-with value, key ends-with/iends-with value, key not-ends-with/not-iends-with value, or key !ends-with/!iends-with value; multi-word operators also accept hyphen, space, or underscore separators; range parentheses are optional", value)
+			return nil, fmt.Errorf("parse %s %q: use key=value, key==value, key equals/equal value, key!=value, key<>value, key not-equals/not equals/not_equals value, key not = value, key not == value, key !equals/!equal value, key exists, key not-exists, key !exists, key=~<pattern>, key!~<pattern>, key matches/match/regex/regexp <pattern> and not/! variants, key is value, key is-not value, key is not value, key>value, key>=value, key<value, key<=value, key !> value, key !>= value, key !< value, key !<= value, key not > value, key not >= value, key not < value, key not <= value as inverse ordered comparison aliases, key in (value1,value2), key not-in (value1,value2), key !in (value1,value2), key between (lower,upper), key not-between (lower,upper), key !between (lower,upper), key contains/icontains value, key not-contains/not-icontains value, key !contains/!icontains value, key like/ilike pattern, key not-like/not-ilike pattern, key !like/!ilike pattern, key starts-with/istarts-with value, key not-starts-with/not-istarts-with value, key !starts-with/!istarts-with value, key ends-with/iends-with value, key not-ends-with/not-iends-with value, or key !ends-with/!iends-with value; multi-word operators also accept hyphen, space, or underscore separators; range parentheses are optional", flag, value)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
-			return nil, fmt.Errorf("parse --field %q: key cannot be empty", value)
+			return nil, fmt.Errorf("parse %s %q: key cannot be empty", flag, value)
 		}
 		filterValue = strings.TrimSpace(filterValue)
 		if filterValue == "" && op != "=" && op != "==" && op != "!=" && op != "<>" && op != "exists" && op != "not-exists" {
-			return nil, fmt.Errorf("parse --field %q: value cannot be empty for operator %s", value, op)
+			return nil, fmt.Errorf("parse %s %q: value cannot be empty for operator %s", flag, value, op)
 		}
 		if op == "=" || op == "==" {
 			op = ""

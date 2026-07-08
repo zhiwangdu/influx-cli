@@ -770,12 +770,36 @@ func TestStorageAnalyzeFieldRequiresRange(t *testing.T) {
 	}
 }
 
+func TestStorageAnalyzeAnyFieldParseErrorUsesFlagName(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--field-any", "not between (1,2)", "missing.tssp"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "parse --field-any") {
+		t.Fatalf("error = %v, want field-any parse guidance", err)
+	}
+	if strings.Contains(err.Error(), "parse --field \"") {
+		t.Fatalf("error = %v, want field-any flag name instead of field", err)
+	}
+}
+
 func TestStorageAnalyzeAnyFieldRequiresRange(t *testing.T) {
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"storage", "analyze", "--field-any", "value=99", "missing.tssp"})
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--field-any requires --from and --to") {
 		t.Fatalf("error = %v, want OR field range requirement", err)
+	}
+}
+
+func TestStorageAnalyzeNoneFieldParseErrorUsesFlagName(t *testing.T) {
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{"storage", "analyze", "--field-none", "value>", "missing.tssp"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "parse --field-none") {
+		t.Fatalf("error = %v, want field-none parse guidance", err)
+	}
+	if strings.Contains(err.Error(), "parse --field \"") {
+		t.Fatalf("error = %v, want field-none flag name instead of field", err)
 	}
 }
 
