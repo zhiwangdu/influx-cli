@@ -277,11 +277,19 @@ func TestParseStorageFieldFiltersRejectsMalformedValues(t *testing.T) {
 	}
 }
 
-func TestParseStorageFieldFiltersParsesContainsOperators(t *testing.T) {
+func TestParseStorageFieldFiltersParsesStringOperators(t *testing.T) {
 	got, err := parseStorageFieldFilters([]string{
 		"message contains error",
 		"message not contains ok",
 		"region not-contains us",
+		"host starts-with edge",
+		"host starts with edge",
+		"path not-starts-with tmp",
+		"path not starts with tmp",
+		"region ends-with east",
+		"region ends with west",
+		"device not-ends-with old",
+		"device not ends with old",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -294,6 +302,14 @@ func TestParseStorageFieldFiltersParsesContainsOperators(t *testing.T) {
 		{"message", "contains", "error"},
 		{"message", "not-contains", "ok"},
 		{"region", "not-contains", "us"},
+		{"host", "starts-with", "edge"},
+		{"host", "starts-with", "edge"},
+		{"path", "not-starts-with", "tmp"},
+		{"path", "not-starts-with", "tmp"},
+		{"region", "ends-with", "east"},
+		{"region", "ends-with", "west"},
+		{"device", "not-ends-with", "old"},
+		{"device", "not-ends-with", "old"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("field filters = %d, want %d", len(got), len(want))
