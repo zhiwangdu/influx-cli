@@ -664,6 +664,7 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 		}
 	}
 	duplicateWindowCount := 0
+	binaryDuplicateWindow := false
 	for _, window := range decode.CursorWindows {
 		if window.Reason == "duplicate_item_merge" {
 			duplicateWindowCount++
@@ -673,10 +674,19 @@ func TestAnalyzeMergesetFileSetTableScanDuplicateHeapOutput(t *testing.T) {
 			if got, want := window.Files, []string{partPath1, partPath2}; !equalStrings(got, want) {
 				t.Fatalf("duplicate merge window files = %v, want %v", got, want)
 			}
+			if bytes.Equal([]byte(window.Key), wantFinalValues[1]) {
+				binaryDuplicateWindow = true
+				if got, want := window.KeyHex, hex.EncodeToString(wantFinalValues[1]); got != want {
+					t.Fatalf("duplicate merge window key hex = %q, want %q", got, want)
+				}
+			}
 		}
 	}
 	if got, want := duplicateWindowCount, 2; got != want {
 		t.Fatalf("duplicate merge windows = %d, want %d", got, want)
+	}
+	if !binaryDuplicateWindow {
+		t.Fatal("expected binary duplicate merge window")
 	}
 	if !containsString(decode.Recommendations, "merge/dedup 2 duplicate table-scan item candidate") {
 		t.Fatalf("recommendations = %v, want duplicate heap output recommendation", decode.Recommendations)
@@ -2651,6 +2661,12 @@ func TestAnalyzeMergesetQueryKeySearchBinaryItemHexSamples(t *testing.T) {
 	fileSetDecode := report.DecodePath
 	if fileSetDecode == nil {
 		t.Fatal("expected file-set decode path")
+	}
+	if got, want := len(fileSetDecode.CursorWindows), 1; got != want {
+		t.Fatalf("file-set cursor windows = %d, want %d", got, want)
+	}
+	if got, want := fileSetDecode.CursorWindows[0].KeyHex, queryHex; got != want {
+		t.Fatalf("file-set cursor window key hex = %q, want %q", got, want)
 	}
 	if got, want := len(fileSetDecode.CursorExecutionSamples), 1; got != want {
 		t.Fatalf("file-set cursor execution samples = %d, want %d", got, want)

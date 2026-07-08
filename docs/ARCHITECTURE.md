@@ -555,7 +555,7 @@ openGemini mergeset analyzer 覆盖 part directory metadata、metaindex row summ
 
 mergeset item payload byte accounting 只来自当前 part 的本地 `items.bin` 和 `lens.bin`：读入字节按 plain/zstd marshal type 累计，未压缩 payload 字节只在完整 decode 成功后累计，decode 失败不推断部分未压缩字节。
 
-mergeset cursor output 和 heap execution samples 会在 sampled item 含不可打印二进制字节时附带 hex 字段，保留原始 string 字段兼容性，同时让真实 openGemini index item 可读、可比对。
+mergeset cursor window、output 和 heap execution samples 会在 sampled item 含不可打印二进制字节时附带 hex 字段，保留原始 string 字段兼容性，同时让真实 openGemini index item 可读、可比对。
 
 openGemini meta topology analyzer 只读取本地 meta snapshot/export 文件，格式名为 `opengemini-meta`。它用轻量 protobuf/JSON reader 提取 database、retention policy、meta/data/sql node、PT view 和 replica group summary，不连接 meta service、HTTP API、raft runtime 或 storage engine runtime。
 

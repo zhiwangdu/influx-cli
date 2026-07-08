@@ -286,14 +286,14 @@ func populateMergesetFileSetCursorWindows(summary *DecodePathSummary, tableSeekR
 		if options.BlockSampleLimit <= 0 || len(summary.CursorWindows) >= options.BlockSampleLimit {
 			continue
 		}
-		summary.CursorWindows = append(summary.CursorWindows, DecodePathCursorWindow{
+		summary.CursorWindows = append(summary.CursorWindows, withMergesetCursorWindowKeyHex(DecodePathCursorWindow{
 			Key:            key,
 			Files:          append([]string(nil), files...),
 			LocationBlocks: len(files),
 			DecodedBlocks:  len(files),
 			RequiresMerge:  requiresMerge,
 			Reason:         reason,
-		})
+		}, []byte(key)))
 	}
 }
 
@@ -465,14 +465,14 @@ func populateMergesetFileSetScanCursor(summary *DecodePathSummary, streams []mer
 		requiresMerge := len(files) > 1
 		if requiresMerge {
 			duplicateGroups++
-			appendMergesetDuplicateMergeWindow(summary, DecodePathCursorWindow{
+			appendMergesetDuplicateMergeWindow(summary, withMergesetCursorWindowKeyHex(DecodePathCursorWindow{
 				Key:            string(previous),
 				Files:          files,
 				LocationBlocks: len(files),
 				DecodedBlocks:  len(files),
 				RequiresMerge:  true,
 				Reason:         "duplicate_item_merge",
-			}, options.BlockSampleLimit)
+			}, previous), options.BlockSampleLimit)
 			for _, index := range groupSampleIndexes {
 				summary.CursorOutputSamples[index].MergeFiles = newDecodePathStringList(files)
 				summary.CursorOutputSamples[index].RequiresMerge = true

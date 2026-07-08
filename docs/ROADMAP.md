@@ -335,7 +335,7 @@ influx-cli ingest out-of-order --ratio 0.1
 
 mergeset payload accounting 还会按 plain/zstd 分别报告本地 `items.bin`/`lens.bin` 读入字节，以及 decode 成功后的未压缩 payload 字节；decode 失败只保留读入字节和失败计数。
 
-mergeset cursor/output samples 在 sampled item 含不可打印二进制字节时会附带 hex 字段，便于用真实 openGemini mergeset part 对齐本地诊断。
+mergeset cursor window/output samples 在 sampled item 含不可打印二进制字节时会附带 hex 字段，便于用真实 openGemini mergeset part 对齐本地诊断。
 
 ## 9. Phase 6: Plugin Ecosystem 和 Dashboard
 

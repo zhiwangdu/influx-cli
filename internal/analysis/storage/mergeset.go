@@ -1598,6 +1598,13 @@ func newMergesetCursorOutputSample(key, typ string, item []byte, matches bool) D
 	}
 }
 
+func withMergesetCursorWindowKeyHex(window DecodePathCursorWindow, key []byte) DecodePathCursorWindow {
+	if key != nil {
+		window.KeyHex = mergesetDiagnosticHex(key)
+	}
+	return window
+}
+
 func withMergesetCursorStepHex(sample DecodePathCursorStep, key, candidate []byte) DecodePathCursorStep {
 	if key != nil {
 		sample.KeyHex = mergesetDiagnosticHex(key)

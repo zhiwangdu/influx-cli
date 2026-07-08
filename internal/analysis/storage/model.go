@@ -481,6 +481,7 @@ type DecodePathReadAtRange struct {
 
 type DecodePathCursorWindow struct {
 	Key             string   `json:"key"`
+	KeyHex          string   `json:"key_hex,omitempty"`
 	Files           []string `json:"files,omitempty"`
 	MinTime         int64    `json:"min_time"`
 	MaxTime         int64    `json:"max_time"`
