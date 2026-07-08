@@ -3506,6 +3506,84 @@ func TestAnalyzeTSSPDetachedFieldFilterMatchesQuotedStringEquality(t *testing.T)
 	}
 }
 
+func TestAnalyzeTSSPDetachedFieldFilterMatchesInequalityWordAlias(t *testing.T) {
+	dir := t.TempDir()
+	values := []string{"ok", "fail"}
+	timestamps := []int64{333, 444}
+	valueSize, err := testTSSPDetachedStringFullBlockSize(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := []testTSSPChunkSpec{{
+		sid:      42,
+		minTime:  333,
+		maxTime:  444,
+		offset:   1200,
+		size:     valueSize,
+		timeSize: testTSSPDetachedIntegerFullBlockSize(timestamps),
+	}}
+	metaIndexes, err := writeTestTSSPDetachedChunkMeta(filepath.Join(dir, tsspDetachedChunkMetaFileName), chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedMetaIndex(filepath.Join(dir, tsspDetachedMetaIndexFileName), metaIndexes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestTSSPDetachedStringFullData(filepath.Join(dir, tsspDetachedDataFileName), 1400, chunks[0], values, timestamps); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{filepath.Join(dir, tsspDetachedMetaIndexFileName)}, Options{
+		Format:           FormatTSSPDetachedIndex,
+		BlockSampleLimit: 4,
+		QueryRange:       queryRange,
+		QueryFields:      []FieldFilter{{Key: "value", Op: "not equals", Value: "fail"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_operator_evaluations"], "!=:2"; got != want {
+		t.Fatalf("data block probe filter operator evaluations = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	if got, want := decode.QueryFields, []FieldFilter{{Key: "value", Op: "!=", Value: "fail"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %v, want %v", got, want)
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorOutputSamples), 1; got != want {
+		t.Fatalf("cursor output samples = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "meta-index-id:42/value",
+		Time:           333,
+		Type:           "string-full",
+		OptimizedValue: "ok",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
+	}
+}
+
 func TestAnalyzeTSSPDetachedFieldFilterPreservesSetRangeValueSymbols(t *testing.T) {
 	dir := t.TempDir()
 	values := []string{"a=b", "c<>d", "z!x"}
