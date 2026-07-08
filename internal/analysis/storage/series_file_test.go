@@ -248,10 +248,14 @@ func TestSeriesIDFilterRequiresQueryRange(t *testing.T) {
 		want   bool
 	}{
 		{name: "explicit series file", paths: []string{"missing"}, format: FormatSeriesFile, want: false},
+		{name: "explicit tsi", paths: []string{"missing"}, format: FormatTSI, want: false},
+		{name: "explicit tsi log", paths: []string{"missing"}, format: FormatTSILog, want: false},
 		{name: "explicit tssp", paths: []string{"_series"}, format: FormatTSSP, want: true},
 		{name: "auto series dir", paths: []string{filepath.Join("shard", "_series")}, format: FormatAuto, want: false},
 		{name: "auto series partition", paths: []string{filepath.Join("shard", "_series", "00")}, format: FormatAuto, want: false},
 		{name: "auto series segment", paths: []string{filepath.Join("shard", "_series", "00", "0000")}, format: FormatAuto, want: false},
+		{name: "auto tsi", paths: []string{"L0-00000001.tsi"}, format: FormatAuto, want: false},
+		{name: "auto tsi log", paths: []string{"L0-00000001.tsl"}, format: FormatAuto, want: false},
 		{name: "auto mixed", paths: []string{filepath.Join("shard", "_series"), "00000001-0001-00000000.tssp"}, format: FormatAuto, want: true},
 		{name: "auto unknown", paths: []string{"missing.tssp"}, format: FormatAuto, want: true},
 	} {

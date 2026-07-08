@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 const (
@@ -211,6 +212,7 @@ func analyzeTSI(path string, info os.FileInfo, options Options) (FileReport, err
 		extra["tombstone_series_id_set_min"] = fmt.Sprint(*index.TombstoneSeriesIDSetMin)
 		extra["tombstone_series_id_set_max"] = fmt.Sprint(*index.TombstoneSeriesIDSetMax)
 	}
+	addTSIIndexIDFilterExtra(extra, data, trailer, options, &notices)
 
 	seriesID := SeriesIDSummary{Count: seriesIDCount}
 	if index.SeriesIDSetMin != nil && index.SeriesIDSetMax != nil {
@@ -761,6 +763,205 @@ func tsiRoaringStats(data []byte) (tsiSeriesIDSetStats, error) {
 		Max:         result.Max,
 		HasRange:    result.HasRange,
 	}, nil
+}
+
+func addTSIIndexIDFilterExtra(extra map[string]string, fileData []byte, trailer tsiIndexTrailer, options Options, notices *[]string) {
+	if len(options.QuerySeriesIDs) == 0 {
+		return
+	}
+	extra["query_series_id_filter_applied"] = "true"
+	extra["query_series_ids"] = joinStorageUint64s(options.QuerySeriesIDs)
+
+	live, err := tsiSeriesIDSetContainsForRange(fileData, trailer.SeriesIDSet, "series id set", options.QuerySeriesIDs)
+	if err != nil {
+		*notices = append(*notices, fmt.Sprintf("query series id filter unavailable: %v", err))
+		return
+	}
+	tombstones, err := tsiSeriesIDSetContainsForRange(fileData, trailer.TombstoneSeriesIDSet, "tombstone series id set", options.QuerySeriesIDs)
+	if err != nil {
+		*notices = append(*notices, fmt.Sprintf("query series id filter unavailable: %v", err))
+		return
+	}
+
+	matched := []uint64{}
+	tombstoned := []uint64{}
+	missing := []uint64{}
+	for _, id := range options.QuerySeriesIDs {
+		if live[id] {
+			matched = append(matched, id)
+			continue
+		}
+		if tombstones[id] {
+			tombstoned = append(tombstoned, id)
+			continue
+		}
+		missing = append(missing, id)
+	}
+	extra["query_matched_series_ids"] = joinStorageUint64s(matched)
+	extra["query_tombstone_series_ids"] = joinStorageUint64s(tombstoned)
+	extra["query_missing_series_ids"] = joinStorageUint64s(missing)
+}
+
+func tsiSeriesIDSetContainsForRange(fileData []byte, rng tsiRange, name string, ids []uint64) (map[uint64]bool, error) {
+	data, err := sliceTSIRange(fileData, rng, name)
+	if err != nil {
+		return nil, err
+	}
+	return tsiRoaringContains(data, ids)
+}
+
+func tsiRoaringContains(data []byte, ids []uint64) (map[uint64]bool, error) {
+	matches := make(map[uint64]bool, len(ids))
+	if len(ids) == 0 {
+		return matches, nil
+	}
+	targets := map[uint16][]uint16{}
+	for _, id := range ids {
+		matches[id] = false
+		if id > 1<<32-1 {
+			continue
+		}
+		key := uint16(id >> 16)
+		targets[key] = append(targets[key], uint16(id))
+	}
+	for key := range targets {
+		sort.Slice(targets[key], func(i, j int) bool {
+			return targets[key][i] < targets[key][j]
+		})
+	}
+	if len(data) == 0 {
+		return matches, nil
+	}
+	if len(data) < 8 {
+		return nil, fmt.Errorf("short roaring bitmap: %d bytes", len(data))
+	}
+
+	pos := 4
+	cookie := binary.LittleEndian.Uint32(data[:4])
+	var size uint32
+	haveRunContainers := false
+	var runBitmap []byte
+	switch {
+	case cookie&0x0000ffff == tsiRoaringSerialCookie:
+		haveRunContainers = true
+		size = uint32(uint16(cookie>>16) + 1)
+		runBitmapSize := (int(size) + 7) / 8
+		if runBitmapSize > len(data)-pos {
+			return nil, fmt.Errorf("roaring run-container bitmap overruns buffer")
+		}
+		runBitmap = data[pos : pos+runBitmapSize]
+		pos += runBitmapSize
+	case cookie == tsiRoaringSerialCookieNoRunContainer:
+		size = binary.LittleEndian.Uint32(data[pos:])
+		pos += 4
+	default:
+		return nil, fmt.Errorf("invalid roaring cookie %d", cookie)
+	}
+	if size > 1<<16 {
+		return nil, fmt.Errorf("roaring bitmap has impossible container count %d", size)
+	}
+
+	headerSize := int(size) * 4
+	if headerSize > len(data)-pos {
+		return nil, fmt.Errorf("roaring container header overruns buffer")
+	}
+	keys := make([]uint16, int(size))
+	cards := make([]int, int(size))
+	for i := 0; i < int(size); i++ {
+		keys[i] = binary.LittleEndian.Uint16(data[pos+i*4:])
+		cards[i] = int(binary.LittleEndian.Uint16(data[pos+i*4+2:])) + 1
+	}
+	pos += headerSize
+
+	if !haveRunContainers || size >= tsiRoaringNoOffsetThreshold {
+		offsetSize := int(size) * 4
+		if offsetSize > len(data)-pos {
+			return nil, fmt.Errorf("roaring container offsets overrun buffer")
+		}
+		pos += offsetSize
+	}
+
+	for i, card := range cards {
+		key := keys[i]
+		lows := targets[key]
+		if haveRunContainers && runBitmap[i/8]&(1<<uint(i%8)) != 0 {
+			if len(data)-pos < 2 {
+				return nil, fmt.Errorf("short roaring run container")
+			}
+			runCount := int(binary.LittleEndian.Uint16(data[pos:]))
+			pos += 2
+			runBytes := runCount * 4
+			if runBytes > len(data)-pos {
+				return nil, fmt.Errorf("roaring run container overruns buffer")
+			}
+			if len(lows) > 0 {
+				observeTSIRoaringRunMatches(matches, key, data[pos:pos+runBytes], lows)
+			}
+			pos += runBytes
+			continue
+		}
+
+		containerBytes := card * 2
+		if card > tsiRoaringArrayContainerMaxSize {
+			containerBytes = tsiRoaringBitmapContainerBytes
+		}
+		if containerBytes > len(data)-pos {
+			return nil, fmt.Errorf("roaring container data overruns buffer")
+		}
+		if len(lows) > 0 {
+			if card > tsiRoaringArrayContainerMaxSize {
+				observeTSIRoaringBitmapMatches(matches, key, data[pos:pos+containerBytes], lows)
+			} else {
+				observeTSIRoaringArrayMatches(matches, key, data[pos:pos+containerBytes], card, lows)
+			}
+		}
+		pos += containerBytes
+	}
+
+	return matches, nil
+}
+
+func observeTSIRoaringRunMatches(matches map[uint64]bool, key uint16, data []byte, lows []uint16) {
+	runCount := len(data) / 4
+	for _, low := range lows {
+		for run := 0; run < runCount; run++ {
+			start := binary.LittleEndian.Uint16(data[run*4:])
+			length := binary.LittleEndian.Uint16(data[run*4+2:])
+			end := uint32(start) + uint32(length)
+			if uint32(low) < uint32(start) {
+				break
+			}
+			if uint32(low) <= end {
+				matches[tsiSeriesIDFromRoaringKeyLow(key, low)] = true
+				break
+			}
+		}
+	}
+}
+
+func observeTSIRoaringArrayMatches(matches map[uint64]bool, key uint16, data []byte, card int, lows []uint16) {
+	for _, low := range lows {
+		idx := sort.Search(card, func(i int) bool {
+			return binary.LittleEndian.Uint16(data[i*2:]) >= low
+		})
+		if idx < card && binary.LittleEndian.Uint16(data[idx*2:]) == low {
+			matches[tsiSeriesIDFromRoaringKeyLow(key, low)] = true
+		}
+	}
+}
+
+func observeTSIRoaringBitmapMatches(matches map[uint64]bool, key uint16, data []byte, lows []uint16) {
+	for _, low := range lows {
+		byteIndex := int(low) / 8
+		bit := uint(low % 8)
+		if data[byteIndex]&(1<<bit) != 0 {
+			matches[tsiSeriesIDFromRoaringKeyLow(key, low)] = true
+		}
+	}
+}
+
+func tsiSeriesIDFromRoaringKeyLow(key, low uint16) uint64 {
+	return uint64(key)<<16 | uint64(low)
 }
 
 func tsiRoaringInspect(data []byte, emitIDs, trackRange bool) (tsiRoaringInspectResult, error) {

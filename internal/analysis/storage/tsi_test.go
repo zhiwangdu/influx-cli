@@ -115,6 +115,67 @@ func TestAnalyzeTSIMetadata(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSISeriesIDFilterWithoutRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSI(path); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSI,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+		QuerySeriesIDs:   []uint64{42, 4, 2, 4},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	for key, want := range map[string]string{
+		"query_series_id_filter_applied": "true",
+		"query_series_ids":               "2,4,42",
+		"query_matched_series_ids":       "2",
+		"query_tombstone_series_ids":     "4",
+		"query_missing_series_ids":       "42",
+	} {
+		if got := file.Extra[key]; got != want {
+			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestAnalyzeTSIAutoSeriesIDFilterWithoutRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSI(path); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatAuto,
+		KeySampleLimit:   2,
+		BlockSampleLimit: 5,
+		QuerySeriesIDs:   []uint64{7, 3, 4},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Format, FormatTSI; got != want {
+		t.Fatalf("format = %q, want %q", got, want)
+	}
+	for key, want := range map[string]string{
+		"query_series_id_filter_applied": "true",
+		"query_series_ids":               "3,4,7",
+		"query_matched_series_ids":       "3",
+		"query_tombstone_series_ids":     "4",
+		"query_missing_series_ids":       "7",
+	} {
+		if got := file.Extra[key]; got != want {
+			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestAnalyzeTSINoticesCorruptSeriesIDSetCardinality(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
 	if err := writeTestTSIWithSeriesIDSets(path, []byte{1, 2, 3}, writeTestTSIRoaringSeriesIDSet(4)); err != nil {
@@ -240,6 +301,49 @@ func TestAnalyzeTSISeriesIDSetRangeIncludesZero(t *testing.T) {
 	}
 	if !bytes.Contains(encoded, []byte(`"series_id_set_min":0`)) {
 		t.Fatalf("index JSON = %s, want explicit zero min", encoded)
+	}
+}
+
+func TestTSIRoaringContainsRunContainer(t *testing.T) {
+	data := writeTestTSIRoaringRunSeriesIDSet(1, []testTSIRoaringRun{
+		{start: 2, length: 3},
+		{start: 10, length: 0},
+	})
+
+	matches, err := tsiRoaringContains(data, []uint64{1<<16 + 1, 1<<16 + 2, 1<<16 + 5, 1<<16 + 10, 2 << 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[uint64]bool{
+		1<<16 + 1:  false,
+		1<<16 + 2:  true,
+		1<<16 + 5:  true,
+		1<<16 + 10: true,
+		2 << 16:    false,
+	} {
+		if got := matches[id]; got != want {
+			t.Fatalf("matches[%d] = %t, want %t", id, got, want)
+		}
+	}
+}
+
+func TestTSIRoaringContainsBitmapContainer(t *testing.T) {
+	data := writeTestTSIRoaringBitmapSeriesIDSet(2, 0, 4096, 65535)
+
+	matches, err := tsiRoaringContains(data, []uint64{2 << 16, 2<<16 + 1, 2<<16 + 4096, 2<<16 + 65535, 3 << 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[uint64]bool{
+		2 << 16:       true,
+		2<<16 + 1:     false,
+		2<<16 + 4096:  true,
+		2<<16 + 65535: true,
+		3 << 16:       false,
+	} {
+		if got := matches[id]; got != want {
+			t.Fatalf("matches[%d] = %t, want %t", id, got, want)
+		}
 	}
 }
 
@@ -786,6 +890,46 @@ func writeTestTSIRoaringSeriesIDSet(ids ...uint64) []byte {
 			writeTSILittleUint16(&buf, value)
 		}
 	}
+	return buf.Bytes()
+}
+
+type testTSIRoaringRun struct {
+	start  uint16
+	length uint16
+}
+
+func writeTestTSIRoaringRunSeriesIDSet(key uint16, runs []testTSIRoaringRun) []byte {
+	var cardinality uint16
+	for _, run := range runs {
+		cardinality += run.length + 1
+	}
+
+	var buf bytes.Buffer
+	writeTSILittleUint32(&buf, uint32(tsiRoaringSerialCookie))
+	buf.WriteByte(0x01)
+	writeTSILittleUint16(&buf, key)
+	writeTSILittleUint16(&buf, cardinality-1)
+	writeTSILittleUint16(&buf, uint16(len(runs)))
+	for _, run := range runs {
+		writeTSILittleUint16(&buf, run.start)
+		writeTSILittleUint16(&buf, run.length)
+	}
+	return buf.Bytes()
+}
+
+func writeTestTSIRoaringBitmapSeriesIDSet(key uint16, values ...uint16) []byte {
+	bitmap := make([]byte, tsiRoaringBitmapContainerBytes)
+	for _, value := range values {
+		bitmap[int(value)/8] |= 1 << uint(value%8)
+	}
+
+	var buf bytes.Buffer
+	writeTSILittleUint32(&buf, tsiRoaringSerialCookieNoRunContainer)
+	writeTSILittleUint32(&buf, 1)
+	writeTSILittleUint16(&buf, key)
+	writeTSILittleUint16(&buf, uint16(tsiRoaringArrayContainerMaxSize))
+	writeTSILittleUint32(&buf, 16)
+	buf.Write(bitmap)
 	return buf.Bytes()
 }
 
