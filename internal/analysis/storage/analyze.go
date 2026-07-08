@@ -106,7 +106,7 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 // SeriesIDFilterRequiresQueryRange reports whether --series-id needs a query
 // time range for the requested storage format and local input paths.
 func SeriesIDFilterRequiresQueryRange(paths []string, format Format) bool {
-	if format == FormatSeriesFile {
+	if format == FormatSeriesFile || format == FormatTSILog {
 		return false
 	}
 	if format != FormatAuto {
@@ -119,11 +119,15 @@ func SeriesIDFilterRequiresQueryRange(paths []string, format Format) bool {
 			continue
 		}
 		checked = true
-		if !isSeriesFileInputPath(filepath.Clean(path)) {
+		if !isLocalSeriesIDLookupPath(filepath.Clean(path)) {
 			return true
 		}
 	}
 	return !checked
+}
+
+func isLocalSeriesIDLookupPath(path string) bool {
+	return isSeriesFileInputPath(path) || isTSILogPath(path)
 }
 
 func isSeriesFileInputPath(path string) bool {

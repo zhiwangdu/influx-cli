@@ -142,6 +142,7 @@ func analyzeTSILog(path string, info os.FileInfo, options Options) (FileReport, 
 		extra["tombstone_series_id_set_min"] = fmt.Sprint(tombstoneMinSeriesID)
 		extra["tombstone_series_id_set_max"] = fmt.Sprint(tombstoneMaxSeriesID)
 	}
+	addTSILogIDFilterExtra(extra, state, options)
 
 	report := FileReport{
 		Path:         path,
@@ -515,6 +516,31 @@ func cloneTSILogSeriesIDSet(src map[uint64]struct{}) map[uint64]struct{} {
 		dst[id] = struct{}{}
 	}
 	return dst
+}
+
+func addTSILogIDFilterExtra(extra map[string]string, state *tsiLogState, options Options) {
+	if len(options.QuerySeriesIDs) == 0 {
+		return
+	}
+	matched := []uint64{}
+	tombstoned := []uint64{}
+	missing := []uint64{}
+	for _, id := range options.QuerySeriesIDs {
+		if _, ok := state.LiveSeries[id]; ok {
+			matched = append(matched, id)
+			continue
+		}
+		if _, ok := state.TombstoneSeries[id]; ok {
+			tombstoned = append(tombstoned, id)
+			continue
+		}
+		missing = append(missing, id)
+	}
+	extra["query_series_id_filter_applied"] = "true"
+	extra["query_series_ids"] = joinStorageUint64s(options.QuerySeriesIDs)
+	extra["query_matched_series_ids"] = joinStorageUint64s(matched)
+	extra["query_tombstone_series_ids"] = joinStorageUint64s(tombstoned)
+	extra["query_missing_series_ids"] = joinStorageUint64s(missing)
 }
 
 func (m *tsiLogMeasurement) TagCounts() (tagKeyCount, deletedTagKeyCount, tagValueCount, deletedTagValueCount int) {

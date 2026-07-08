@@ -124,6 +124,74 @@ func TestAnalyzeTSILogMetadata(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSILogSeriesIDFilterWithoutRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsl")
+	var buf bytes.Buffer
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 1, Name: "cpu", Key: "host", Value: "a"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 2, Name: "mem", Key: "host", Value: "b"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{Flag: tsiLogEntrySeriesTombstoneFlag, SeriesID: 2})
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatTSILog,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+		QuerySeriesIDs:   []uint64{42, 2, 1, 2},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	for key, want := range map[string]string{
+		"query_series_id_filter_applied": "true",
+		"query_series_ids":               "1,2,42",
+		"query_matched_series_ids":       "1",
+		"query_tombstone_series_ids":     "2",
+		"query_missing_series_ids":       "42",
+	} {
+		if got := file.Extra[key]; got != want {
+			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestAnalyzeTSILogAutoSeriesIDFilterWithoutRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsl")
+	var buf bytes.Buffer
+	appendTestTSILogEntry(&buf, tsiLogEntry{SeriesID: 1, Name: "cpu", Key: "host", Value: "a"})
+	appendTestTSILogEntry(&buf, tsiLogEntry{Flag: tsiLogEntrySeriesTombstoneFlag, SeriesID: 2})
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatAuto,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+		QuerySeriesIDs:   []uint64{2, 7, 1},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Format, FormatTSILog; got != want {
+		t.Fatalf("format = %q, want %q", got, want)
+	}
+	for key, want := range map[string]string{
+		"query_series_id_filter_applied": "true",
+		"query_series_ids":               "1,2,7",
+		"query_matched_series_ids":       "1",
+		"query_tombstone_series_ids":     "2",
+		"query_missing_series_ids":       "7",
+	} {
+		if got := file.Extra[key]; got != want {
+			t.Fatalf("extra[%s] = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func TestAnalyzeTSILogQueryFilters(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "L0-00000001.tsl")
 	var buf bytes.Buffer

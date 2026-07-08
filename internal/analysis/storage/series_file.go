@@ -885,13 +885,13 @@ func addSeriesFileIDFilterExtra(extra map[string]string, state *seriesFileState,
 		missing = append(missing, id)
 	}
 	extra["query_series_id_filter_applied"] = "true"
-	extra["query_series_ids"] = joinSeriesFileUint64s(options.QuerySeriesIDs)
-	extra["query_matched_series_ids"] = joinSeriesFileUint64s(matched)
-	extra["query_tombstone_series_ids"] = joinSeriesFileUint64s(tombstoned)
-	extra["query_missing_series_ids"] = joinSeriesFileUint64s(missing)
+	extra["query_series_ids"] = joinStorageUint64s(options.QuerySeriesIDs)
+	extra["query_matched_series_ids"] = joinStorageUint64s(matched)
+	extra["query_tombstone_series_ids"] = joinStorageUint64s(tombstoned)
+	extra["query_missing_series_ids"] = joinStorageUint64s(missing)
 }
 
-func joinSeriesFileUint64s(values []uint64) string {
+func joinStorageUint64s(values []uint64) string {
 	if len(values) == 0 {
 		return ""
 	}
