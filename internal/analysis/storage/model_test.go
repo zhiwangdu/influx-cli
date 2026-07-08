@@ -928,6 +928,11 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 					"tag-key":     3,
 					"ignored":     0,
 				},
+				SeriesID: SeriesIDSummary{
+					Min:   1,
+					Max:   9,
+					Count: 7,
+				},
 				Index: &IndexSummary{
 					MeasurementCount:                2,
 					DeletedMeasurementCount:         1,
@@ -965,6 +970,18 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 					ChangeCount:        3,
 					AddFieldChanges:    2,
 					DeleteMeasurements: 1,
+				},
+			},
+			{
+				Path:   "segment.idx",
+				Format: FormatTSSPDetachedIndex,
+				BlocksByType: map[string]int{
+					"detached-meta-index": 3,
+				},
+				MetaIndexID: SeriesIDSummary{
+					Min:   10,
+					Max:   12,
+					Count: 3,
 				},
 			},
 			{
@@ -1039,8 +1056,9 @@ func TestReportResultIncludesStructuredStorageDetails(t *testing.T) {
 	result := report.Result()
 	detailsColumn := tableColumnIndex(t, result.Table.Columns, "details")
 	wants := [][]string{
-		{"block_types measurement:2 tag-key:3", "index measurements=2", "series_refs=10", "series_ids=7", "tags=3 values=4", "deleted measurements=1 tag_keys=0 tag_values=0 series_ids=2", "query measurement_filter=true tag_filter=true measurements=2/1/1 tags=2/1/1 candidates=1 query_series_refs=2"},
+		{"block_types measurement:2 tag-key:3", "series_id count=7 range=1..9", "index measurements=2", "series_refs=10", "series_ids=7", "tags=3 values=4", "deleted measurements=1 tag_keys=0 tag_values=0 series_ids=2", "query measurement_filter=true tag_filter=true measurements=2/1/1 tags=2/1/1 candidates=1 query_series_refs=2"},
 		{"block_types field:4 measurement-fields:2", "fields measurements=2 fields=4", "types=float:1 integer:1 string:1 unsigned:1", "changes=3 adds=2 deletes=1"},
+		{"block_types detached-meta-index:3", "meta_index_id count=3 range=10..12"},
 		{"block_types primary-key-meta-block:2 primary-key-schema-column:3", "primary_key type=opengemini-detached-primary-meta", "columns=3", "rows=4", "block_ids=10..13", "data=120 valid=112", "crc=1 data_oob=2 column_oob=3 column_unordered=1"},
 		{"block_types bloom-filter-crc-mismatch:1 bloom-filter-line-block:2", "secondary_index type=opengemini-bloom-filter", "layout=attached-line-filter", "field=content", "blocks=2", "groups=3", "pieces=6", "payload_bytes=64", "block_bytes=96", "piece_bytes=16", "group_bytes=32", "valid_bytes=128", "crc=1 trailing=3 data_oob=1"},
 		{"block_types mergeset-block:2 mergeset-metaindex-row:1", "secondary_index type=opengemini-clv-text-mergeset", "layout=mergeset-namespace", "items=4", "documents=1", "terms=1", "dictionaries=1", "dictionary_versions=1", "positions=2", "sid_groups=3", "document_ids=4"},
@@ -1063,6 +1081,15 @@ func TestIndexQueryDetailsTextIncludesAppliedFiltersWithoutTerms(t *testing.T) {
 	want := "query measurement_filter=true tag_filter=true"
 	if details != want {
 		t.Fatalf("details = %q, want %q", details, want)
+	}
+}
+
+func TestSeriesIDDetailsTextOmitsUnknownRange(t *testing.T) {
+	if got, want := seriesIDDetailsText("series_id", SeriesIDSummary{Count: 7}), "series_id count=7"; got != want {
+		t.Fatalf("details = %q, want %q", got, want)
+	}
+	if got := seriesIDDetailsText("series_id", SeriesIDSummary{}); got != "" {
+		t.Fatalf("details = %q, want empty", got)
 	}
 }
 

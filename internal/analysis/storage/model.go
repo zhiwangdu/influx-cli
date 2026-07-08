@@ -648,6 +648,12 @@ func fileDetailsText(file FileReport) string {
 	if blocksByType := countMapText(file.BlocksByType); blocksByType != "" {
 		parts = append(parts, "block_types "+blocksByType)
 	}
+	if series := seriesIDDetailsText("series_id", file.SeriesID); series != "" {
+		parts = append(parts, series)
+	}
+	if metaIndex := seriesIDDetailsText("meta_index_id", file.MetaIndexID); metaIndex != "" {
+		parts = append(parts, metaIndex)
+	}
 	if file.Index != nil {
 		parts = append(parts, indexDetailsText(file.Index))
 	}
@@ -664,6 +670,20 @@ func fileDetailsText(file FileReport) string {
 		parts = append(parts, fmt.Sprintf("notices=%d", len(file.Notices)))
 	}
 	return strings.Join(nonEmptyStrings(parts), "; ")
+}
+
+func seriesIDDetailsText(label string, summary SeriesIDSummary) string {
+	parts := make([]string, 0, 2)
+	if summary.Count > 0 {
+		parts = append(parts, fmt.Sprintf("count=%d", summary.Count))
+	}
+	if summary.Min > 0 || summary.Max > 0 {
+		parts = append(parts, fmt.Sprintf("range=%d..%d", summary.Min, summary.Max))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return label + " " + strings.Join(parts, " ")
 }
 
 func summaryDetailsText(summary Summary, fileCount, noticeCount int) string {
