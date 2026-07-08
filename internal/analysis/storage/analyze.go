@@ -243,8 +243,12 @@ func normalizeFieldFilterOperator(op string) string {
 		return "not-in"
 	case "!contains", "not contains", "not-contains":
 		return "not-contains"
+	case "!icontains", "not icontains", "not-icontains":
+		return "not-icontains"
 	case "!like", "not like", "not-like":
 		return "not-like"
+	case "!ilike", "not ilike", "not-ilike":
+		return "not-ilike"
 	case "matches", "match", "regex", "regexp":
 		return "=~"
 	case "!matches", "!match", "!regex", "!regexp", "not matches", "not match", "not regex", "not regexp", "not-matches", "not-match", "not-regex", "not-regexp":
@@ -255,10 +259,18 @@ func normalizeFieldFilterOperator(op string) string {
 		return "starts-with"
 	case "!starts-with", "not starts with", "not-starts-with":
 		return "not-starts-with"
+	case "istarts with", "istarts-with":
+		return "istarts-with"
+	case "!istarts-with", "not istarts with", "not-istarts-with":
+		return "not-istarts-with"
 	case "ends with", "ends-with":
 		return "ends-with"
 	case "!ends-with", "not ends with", "not-ends-with":
 		return "not-ends-with"
+	case "iends with", "iends-with":
+		return "iends-with"
+	case "!iends-with", "not iends with", "not-iends-with":
+		return "not-iends-with"
 	case "is not", "is-not":
 		return "!="
 	default:
@@ -276,7 +288,7 @@ func fieldFilterOperator(filter FieldFilter) string {
 
 func validFieldFilterOperator(op string) bool {
 	switch normalizeFieldFilterOperator(op) {
-	case "", "!=", ">", ">=", "<", "<=", "in", "not-in", "between", "not-between", "contains", "not-contains", "like", "not-like", "starts-with", "not-starts-with", "ends-with", "not-ends-with", "=~", "!~", "exists", "not-exists":
+	case "", "!=", ">", ">=", "<", "<=", "in", "not-in", "between", "not-between", "contains", "not-contains", "icontains", "not-icontains", "like", "not-like", "ilike", "not-ilike", "starts-with", "not-starts-with", "istarts-with", "not-istarts-with", "ends-with", "not-ends-with", "iends-with", "not-iends-with", "=~", "!~", "exists", "not-exists":
 		return true
 	default:
 		return false

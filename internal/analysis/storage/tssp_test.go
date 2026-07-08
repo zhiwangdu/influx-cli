@@ -3620,6 +3620,91 @@ func TestAnalyzeTSSPFieldFilterMatchesStringPrefixSuffix(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSSPFieldFilterMatchesStringCaseInsensitiveOperators(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
+	if err := writeTestTSSPWithStringFullData(path); err != nil {
+		t.Fatal(err)
+	}
+	queryRange, err := NewTimeRange(333, 444)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:     FormatTSSP,
+		QueryRange: queryRange,
+		QueryFields: []FieldFilter{
+			{Key: "value", Op: "icontains", Value: "L"},
+			{Key: "value", Op: "not icontains", Value: "R"},
+			{Key: "value", Op: "ilike", Value: "B%"},
+			{Key: "value", Op: "not ilike", Value: "R_D"},
+			{Key: "value", Op: "istarts_with", Value: "B"},
+			{Key: "value", Op: "not_istarts_with", Value: "R"},
+			{Key: "value", Op: "iends-with", Value: "E"},
+			{Key: "value", Op: "not_iends_with", Value: "D"},
+		},
+		KeySampleLimit:   3,
+		BlockSampleLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := report.Files[0]
+	if got, want := file.Extra["data_block_probe_filter_rows"], "2"; got != want {
+		t.Fatalf("data block probe filter rows = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_matches"], "1"; got != want {
+		t.Fatalf("data block probe filter matches = %q, want %q", got, want)
+	}
+	if got, want := file.Extra["data_block_probe_filter_rejects"], "1"; got != want {
+		t.Fatalf("data block probe filter rejects = %q, want %q", got, want)
+	}
+	decode := file.DecodePath
+	if decode == nil {
+		t.Fatal("decode path is nil")
+	}
+	wantFields := []FieldFilter{
+		{Key: "value", Op: "icontains", Value: "L"},
+		{Key: "value", Op: "iends-with", Value: "E"},
+		{Key: "value", Op: "ilike", Value: "B%"},
+		{Key: "value", Op: "istarts-with", Value: "B"},
+		{Key: "value", Op: "not-icontains", Value: "R"},
+		{Key: "value", Op: "not-iends-with", Value: "D"},
+		{Key: "value", Op: "not-ilike", Value: "R_D"},
+		{Key: "value", Op: "not-istarts-with", Value: "R"},
+	}
+	if got := decode.QueryFields; !equalFieldFilters(got, wantFields) {
+		t.Fatalf("query fields = %v, want %v", got, wantFields)
+	}
+	for op, want := range map[string]int{
+		"icontains":        2,
+		"iends-with":       1,
+		"ilike":            1,
+		"istarts-with":     1,
+		"not-icontains":    1,
+		"not-iends-with":   1,
+		"not-ilike":        1,
+		"not-istarts-with": 1,
+	} {
+		if got := decode.DataBlockProbeFilterOps[op]; got != want {
+			t.Fatalf("%s operator evaluations = %d, want %d", op, got, want)
+		}
+	}
+	if got, want := decode.OptimizedValueOutputPoints, 1; got != want {
+		t.Fatalf("optimized value output points = %d, want %d", got, want)
+	}
+	want := DecodePathCursorOutput{
+		Key:            "sid:7/value",
+		Time:           444,
+		Type:           "string-full",
+		OptimizedValue: "blue",
+		Matches:        true,
+	}
+	if got := decode.CursorOutputSamples[0]; got != want {
+		t.Fatalf("first cursor output sample = %+v, want %+v", got, want)
+	}
+}
+
 func TestAnalyzeTSSPFieldNoneFilterMatchesStringNotContains(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "00000001-0001-00000000.tssp")
 	if err := writeTestTSSPWithStringFullData(path); err != nil {
@@ -3715,6 +3800,23 @@ func TestTSSPDataBlockLiteralStringOnlyOperatorsMatchNonNullStringBlocks(t *test
 	if !tsspDataBlockLiteralMatches(stringBlock, 0, "not-ends-with", "zz") {
 		t.Fatal("string not-ends-with did not match decoded string value")
 	}
+	for _, tc := range []struct {
+		op   string
+		want string
+	}{
+		{op: "icontains", want: "LU"},
+		{op: "not-icontains", want: "ZZ"},
+		{op: "ilike", want: "B%E"},
+		{op: "not-ilike", want: "R_D"},
+		{op: "istarts-with", want: "BL"},
+		{op: "not-istarts-with", want: "ZZ"},
+		{op: "iends-with", want: "UE"},
+		{op: "not-iends-with", want: "ZZ"},
+	} {
+		if !tsspDataBlockLiteralMatches(stringBlock, 0, tc.op, tc.want) {
+			t.Fatalf("string %s did not match decoded string value", tc.op)
+		}
+	}
 	if tsspDataBlockLiteralMatches(stringBlock, 1, "contains", "u") {
 		t.Fatal("contains matched decoded null sentinel")
 	}
@@ -3738,6 +3840,23 @@ func TestTSSPDataBlockLiteralStringOnlyOperatorsMatchNonNullStringBlocks(t *test
 	}
 	if tsspDataBlockLiteralMatches(stringBlock, 1, "not-ends-with", "zz") {
 		t.Fatal("not-ends-with matched decoded null sentinel")
+	}
+	for _, tc := range []struct {
+		op   string
+		want string
+	}{
+		{op: "icontains", want: "u"},
+		{op: "not-icontains", want: "zz"},
+		{op: "ilike", want: "%"},
+		{op: "not-ilike", want: "zz"},
+		{op: "istarts-with", want: "n"},
+		{op: "not-istarts-with", want: "zz"},
+		{op: "iends-with", want: "l"},
+		{op: "not-iends-with", want: "zz"},
+	} {
+		if tsspDataBlockLiteralMatches(stringBlock, 1, tc.op, tc.want) {
+			t.Fatalf("%s matched decoded null sentinel", tc.op)
+		}
 	}
 
 	integerBlock := tsspDetachedDataBlockInfo{
@@ -3770,6 +3889,23 @@ func TestTSSPDataBlockLiteralStringOnlyOperatorsMatchNonNullStringBlocks(t *test
 	}
 	if tsspDataBlockLiteralMatches(integerBlock, 0, "not-ends-with", "9") {
 		t.Fatal("not-ends-with matched non-string block")
+	}
+	for _, tc := range []struct {
+		op   string
+		want string
+	}{
+		{op: "icontains", want: "2"},
+		{op: "not-icontains", want: "9"},
+		{op: "ilike", want: "1%"},
+		{op: "not-ilike", want: "9%"},
+		{op: "istarts-with", want: "1"},
+		{op: "not-istarts-with", want: "9"},
+		{op: "iends-with", want: "3"},
+		{op: "not-iends-with", want: "9"},
+	} {
+		if tsspDataBlockLiteralMatches(integerBlock, 0, tc.op, tc.want) {
+			t.Fatalf("%s matched non-string block", tc.op)
+		}
 	}
 }
 
@@ -6209,6 +6345,47 @@ func TestAnalyzeQueryFieldsNormalizesExistenceOperators(t *testing.T) {
 	}
 	if err := validateFieldFilters([]FieldFilter{{Key: "value", Op: "exists", Value: "true"}}); err == nil || !strings.Contains(err.Error(), "does not take a value") {
 		t.Fatalf("exists validation error = %v, want value rejection", err)
+	}
+}
+
+func TestAnalyzeQueryFieldsNormalizesCaseInsensitiveStringOperators(t *testing.T) {
+	filters := normalizeFieldFilters([]FieldFilter{
+		{Key: "message", Op: "!icontains", Value: "error"},
+		{Key: "message_under", Op: "not_icontains", Value: "trace"},
+		{Key: "pattern", Op: "not ilike", Value: "tmp%"},
+		{Key: "pattern_under", Op: "not_ilike", Value: "TRACE%"},
+		{Key: "prefix", Op: "!istarts-with", Value: "edge"},
+		{Key: "prefix_under", Op: "istarts_with", Value: "EDGE"},
+		{Key: "suffix", Op: "iends with", Value: "tmp"},
+		{Key: "suffix_under", Op: "!iends_with", Value: "STALE"},
+	})
+	want := []FieldFilter{
+		{Key: "message", Op: "not-icontains", Value: "error"},
+		{Key: "message_under", Op: "not-icontains", Value: "trace"},
+		{Key: "pattern", Op: "not-ilike", Value: "tmp%"},
+		{Key: "pattern_under", Op: "not-ilike", Value: "TRACE%"},
+		{Key: "prefix", Op: "not-istarts-with", Value: "edge"},
+		{Key: "prefix_under", Op: "istarts-with", Value: "EDGE"},
+		{Key: "suffix", Op: "iends-with", Value: "tmp"},
+		{Key: "suffix_under", Op: "not-iends-with", Value: "STALE"},
+	}
+	if !equalFieldFilters(filters, want) {
+		t.Fatalf("filters = %v, want %v", filters, want)
+	}
+	if err := validateFieldFilters(filters); err != nil {
+		t.Fatalf("validate field filters: %v", err)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "message", Op: "not icontains", Value: "debug"}), "not-icontains"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "pattern", Op: "ilike", Value: "tmp%"}), "ilike"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "prefix", Op: "istarts with", Value: "edge"}), "istarts-with"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
+	}
+	if got, want := fieldFilterOperator(FieldFilter{Key: "suffix", Op: "!iends_with", Value: "tmp"}), "not-iends-with"; got != want {
+		t.Fatalf("field filter operator = %q, want %q", got, want)
 	}
 }
 

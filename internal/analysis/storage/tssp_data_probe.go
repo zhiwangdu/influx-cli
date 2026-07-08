@@ -890,7 +890,7 @@ func tsspDataBlockSupportsRange(block tsspDetachedDataBlockInfo) bool {
 
 func tsspDataBlockLiteralMatches(block tsspDetachedDataBlockInfo, row int, op, want string) bool {
 	got := tsspDataProbeRecordValue(block, row)
-	if op == "contains" || op == "not-contains" || op == "like" || op == "not-like" || op == "starts-with" || op == "not-starts-with" || op == "ends-with" || op == "not-ends-with" {
+	if tsspDataBlockStringFilterOperator(op) {
 		if !strings.HasPrefix(block.Type, "string") || got == "null" || want == "null" {
 			return false
 		}
@@ -1009,18 +1009,34 @@ func compareTSSPStringValues(got, want, op string) bool {
 		return strings.Contains(got, want)
 	case "not-contains":
 		return !strings.Contains(got, want)
+	case "icontains":
+		return strings.Contains(strings.ToLower(got), strings.ToLower(want))
+	case "not-icontains":
+		return !strings.Contains(strings.ToLower(got), strings.ToLower(want))
 	case "like":
 		return tsspStringLike(got, want)
 	case "not-like":
 		return !tsspStringLike(got, want)
+	case "ilike":
+		return tsspStringLike(strings.ToLower(got), strings.ToLower(want))
+	case "not-ilike":
+		return !tsspStringLike(strings.ToLower(got), strings.ToLower(want))
 	case "starts-with":
 		return strings.HasPrefix(got, want)
 	case "not-starts-with":
 		return !strings.HasPrefix(got, want)
+	case "istarts-with":
+		return strings.HasPrefix(strings.ToLower(got), strings.ToLower(want))
+	case "not-istarts-with":
+		return !strings.HasPrefix(strings.ToLower(got), strings.ToLower(want))
 	case "ends-with":
 		return strings.HasSuffix(got, want)
 	case "not-ends-with":
 		return !strings.HasSuffix(got, want)
+	case "iends-with":
+		return strings.HasSuffix(strings.ToLower(got), strings.ToLower(want))
+	case "not-iends-with":
+		return !strings.HasSuffix(strings.ToLower(got), strings.ToLower(want))
 	case ">":
 		return got > want
 	case ">=":
@@ -1029,6 +1045,18 @@ func compareTSSPStringValues(got, want, op string) bool {
 		return got < want
 	case "<=":
 		return got <= want
+	default:
+		return false
+	}
+}
+
+func tsspDataBlockStringFilterOperator(op string) bool {
+	switch op {
+	case "contains", "not-contains", "icontains", "not-icontains",
+		"like", "not-like", "ilike", "not-ilike",
+		"starts-with", "not-starts-with", "istarts-with", "not-istarts-with",
+		"ends-with", "not-ends-with", "iends-with", "not-iends-with":
+		return true
 	default:
 		return false
 	}
