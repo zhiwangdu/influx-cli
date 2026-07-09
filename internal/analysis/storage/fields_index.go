@@ -140,12 +140,14 @@ func analyzeFieldsIndex(path string, info os.FileInfo, options Options) (FileRep
 }
 
 func buildFieldsIndexQuerySummary(measurements []fieldsIndexMeasurement, options Options) *IndexQuerySummary {
-	if len(options.QueryMeasurements) == 0 {
+	if len(options.QueryMeasurements) == 0 && len(options.QueryFields) == 0 {
 		return nil
 	}
 	query := &IndexQuerySummary{
-		MeasurementFilterApplied: true,
+		MeasurementFilterApplied: len(options.QueryMeasurements) > 0,
+		FieldFilterApplied:       len(options.QueryFields) > 0,
 		QueryMeasurements:        append([]string(nil), options.QueryMeasurements...),
+		QueryFields:              append([]FieldFilter(nil), options.QueryFields...),
 	}
 	measurementSet := make(map[string]struct{}, len(measurements))
 	for _, measurement := range measurements {
@@ -158,17 +160,90 @@ func buildFieldsIndexQuerySummary(measurements []fieldsIndexMeasurement, options
 			query.MissingMeasurements = append(query.MissingMeasurements, measurement)
 		}
 	}
-	queryMatchSet := queryKeySet(query.MatchedMeasurements)
+	measurementFilterSet := queryKeySet(query.MatchedMeasurements)
+	matchedFields := map[string]FieldFilter{}
 	for _, measurement := range measurements {
-		if _, ok := queryMatchSet[measurement.Name]; !ok {
+		if len(query.QueryMeasurements) > 0 {
+			if _, ok := measurementFilterSet[measurement.Name]; !ok {
+				continue
+			}
+		}
+		matchedInMeasurement := true
+		for _, filter := range query.QueryFields {
+			if fieldsIndexFieldFilterMatches(measurement, filter) {
+				matchedFields[fieldsIndexFieldFilterID(filter)] = filter
+				continue
+			}
+			matchedInMeasurement = false
+		}
+		if !matchedInMeasurement {
 			continue
 		}
 		query.CandidateMeasurements++
 		if len(query.MeasurementSamples) < options.KeySampleLimit {
-			query.MeasurementSamples = append(query.MeasurementSamples, IndexQueryMeasurementReport{Name: measurement.Name})
+			query.MeasurementSamples = append(query.MeasurementSamples, IndexQueryMeasurementReport{
+				Name: measurement.Name,
+			})
+		}
+	}
+	for _, filter := range query.QueryFields {
+		if matched, ok := matchedFields[fieldsIndexFieldFilterID(filter)]; ok {
+			query.MatchedFields = append(query.MatchedFields, matched)
+		} else {
+			query.MissingFields = append(query.MissingFields, filter)
 		}
 	}
 	return query
+}
+
+func fieldsIndexFieldFilterMatches(measurement fieldsIndexMeasurement, filter FieldFilter) bool {
+	field, ok := fieldsIndexMeasurementField(measurement, filter.Key)
+	op := fieldFilterOperator(filter)
+	switch op {
+	case "exists":
+		return ok
+	case "not-exists":
+		return !ok
+	case "=":
+		if strings.TrimSpace(filter.Value) == "" {
+			return ok
+		}
+		return ok && fieldsIndexFieldTypeMatches(field.Type, filter.Value)
+	case "!=":
+		return ok && !fieldsIndexFieldTypeMatches(field.Type, filter.Value)
+	case "in":
+		return ok && fieldsIndexFieldTypeInSet(field.Type, filter.Value)
+	case "not-in":
+		return ok && !fieldsIndexFieldTypeInSet(field.Type, filter.Value)
+	default:
+		return false
+	}
+}
+
+func fieldsIndexMeasurementField(measurement fieldsIndexMeasurement, name string) (fieldsIndexField, bool) {
+	for _, field := range measurement.Fields {
+		if field.Name == name {
+			return field, true
+		}
+	}
+	return fieldsIndexField{}, false
+}
+
+func fieldsIndexFieldTypeMatches(fieldType int32, value string) bool {
+	return strings.EqualFold(fieldsIndexTypeName(fieldType), fieldFilterScalarValue(value))
+}
+
+func fieldsIndexFieldTypeInSet(fieldType int32, value string) bool {
+	for _, item := range fieldFilterSetValues(value) {
+		if fieldsIndexFieldTypeMatches(fieldType, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func fieldsIndexFieldFilterID(filter FieldFilter) string {
+	return filter.Key + "\x00" + fieldFilterOperator(filter) + "\x00" + filter.Value
 }
 
 func loadFieldsIndex(path string, info os.FileInfo) (fieldsIndexLoad, error) {
@@ -516,6 +591,15 @@ func fieldsIndexTypeName(value int32) string {
 		return "unsigned"
 	default:
 		return "unknown(" + strconv.FormatInt(int64(value), 10) + ")"
+	}
+}
+
+func validFieldsIndexFieldTypeName(value string) bool {
+	switch strings.ToLower(fieldFilterScalarValue(value)) {
+	case "float", "integer", "string", "boolean", "unsigned":
+		return true
+	default:
+		return false
 	}
 }
 

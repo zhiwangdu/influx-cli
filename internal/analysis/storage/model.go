@@ -291,12 +291,16 @@ type IndexMeasurementReport struct {
 type IndexQuerySummary struct {
 	MeasurementFilterApplied bool                          `json:"measurement_filter_applied,omitempty"`
 	TagFilterApplied         bool                          `json:"tag_filter_applied,omitempty"`
+	FieldFilterApplied       bool                          `json:"field_filter_applied,omitempty"`
 	QueryMeasurements        []string                      `json:"query_measurements,omitempty"`
 	QueryTags                []TagFilter                   `json:"query_tags,omitempty"`
+	QueryFields              []FieldFilter                 `json:"query_fields,omitempty"`
 	MatchedMeasurements      []string                      `json:"matched_measurements,omitempty"`
 	MissingMeasurements      []string                      `json:"missing_measurements,omitempty"`
 	MatchedTags              []TagFilter                   `json:"matched_tags,omitempty"`
 	MissingTags              []TagFilter                   `json:"missing_tags,omitempty"`
+	MatchedFields            []FieldFilter                 `json:"matched_fields,omitempty"`
+	MissingFields            []FieldFilter                 `json:"missing_fields,omitempty"`
 	CandidateMeasurements    int                           `json:"candidate_measurements,omitempty"`
 	SeriesRefs               int64                         `json:"series_refs,omitempty"`
 	TagKeyCount              int                           `json:"tag_key_count,omitempty"`
@@ -818,10 +822,16 @@ func indexQueryDetailsText(summary *IndexQuerySummary) string {
 	if summary.TagFilterApplied {
 		parts = append(parts, "tag_filter=true")
 	}
+	if summary.FieldFilterApplied {
+		parts = append(parts, "field_filter=true")
+	}
 	if text := queryMatchCountText("measurements", len(summary.QueryMeasurements), len(summary.MatchedMeasurements), len(summary.MissingMeasurements)); text != "" {
 		parts = append(parts, text)
 	}
 	if text := queryMatchCountText("tags", len(summary.QueryTags), len(summary.MatchedTags), len(summary.MissingTags)); text != "" {
+		parts = append(parts, text)
+	}
+	if text := queryMatchCountText("fields", len(summary.QueryFields), len(summary.MatchedFields), len(summary.MissingFields)); text != "" {
 		parts = append(parts, text)
 	}
 	if summary.CandidateMeasurements > 0 {

@@ -33,6 +33,11 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	if err := validateFieldFilters(options.QueryFields); err != nil {
 		return Report{}, err
 	}
+	if len(options.QueryFields) > 0 && !FieldFilterRequiresQueryRange(paths, options.Format) {
+		if err := validateFieldsIndexFieldFilters(options.QueryFields); err != nil {
+			return Report{}, err
+		}
+	}
 	options.QueryAnyFields = normalizeFieldFilters(options.QueryAnyFields)
 	if err := validateFieldFilters(options.QueryAnyFields); err != nil {
 		return Report{}, err
@@ -55,7 +60,10 @@ func Analyze(ctx context.Context, paths []string, options Options) (Report, erro
 	if len(options.QueryColumns) > 0 && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query column filter requires query range")
 	}
-	if (len(options.QueryFields) > 0 || len(options.QueryAnyFields) > 0 || len(options.QueryNoneFields) > 0) && !options.QueryRange.Set {
+	if len(options.QueryFields) > 0 && !options.QueryRange.Set && FieldFilterRequiresQueryRange(paths, options.Format) {
+		return Report{}, fmt.Errorf("query field filter requires query range")
+	}
+	if (len(options.QueryAnyFields) > 0 || len(options.QueryNoneFields) > 0) && !options.QueryRange.Set {
 		return Report{}, fmt.Errorf("query field filter requires query range")
 	}
 
@@ -132,6 +140,27 @@ func isLocalSeriesIDLookupPath(path string) bool {
 
 func isSeriesFileInputPath(path string) bool {
 	return isSeriesFilePath(path) || isSeriesPartitionPath(path)
+}
+
+func FieldFilterRequiresQueryRange(paths []string, format Format) bool {
+	if format == FormatFieldsIndex {
+		return false
+	}
+	if format != FormatAuto {
+		return true
+	}
+	checked := false
+	for _, input := range paths {
+		path := strings.TrimSpace(input)
+		if path == "" {
+			continue
+		}
+		checked = true
+		if !isFieldsIndexPath(filepath.Clean(path)) {
+			return true
+		}
+	}
+	return !checked
 }
 
 func normalizeQueryKeys(values []string) []string {
@@ -371,6 +400,32 @@ func validateFieldFilters(filters []FieldFilter) error {
 			if _, err := regexp.Compile(fieldFilterScalarValue(filter.Value)); err != nil {
 				return fmt.Errorf("query field filter %q has invalid regex for operator %q: %w", filter.Key, op, err)
 			}
+		}
+	}
+	return nil
+}
+
+func validateFieldsIndexFieldFilters(filters []FieldFilter) error {
+	for _, filter := range filters {
+		op := fieldFilterOperator(filter)
+		switch op {
+		case "exists", "not-exists":
+			continue
+		case "=", "!=":
+			if strings.TrimSpace(filter.Value) == "" {
+				continue
+			}
+			if !validFieldsIndexFieldTypeName(filter.Value) {
+				return fmt.Errorf("fields-index field filter %q has unsupported field type %q", filter.Key, fieldFilterScalarValue(filter.Value))
+			}
+		case "in", "not-in":
+			for _, value := range fieldFilterSetValues(filter.Value) {
+				if !validFieldsIndexFieldTypeName(value) {
+					return fmt.Errorf("fields-index field filter %q has unsupported field type %q", filter.Key, fieldFilterScalarValue(value))
+				}
+			}
+		default:
+			return fmt.Errorf("fields-index field filter %q does not support operator %q", filter.Key, op)
 		}
 	}
 	return nil

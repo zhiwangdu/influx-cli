@@ -215,6 +215,293 @@ func TestAnalyzeFieldsIndexQueryMeasurements(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFieldsIndexQueryFieldsWithoutRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, fieldsIndexFileName)
+	writeTestFieldsIndex(t, path, []fieldsIndexMeasurement{
+		{Name: "cpu", Fields: []fieldsIndexField{
+			{Name: "value", Type: 1},
+			{Name: "status", Type: 3},
+		}},
+		{Name: "disk", Fields: []fieldsIndexField{{Name: "free", Type: 9}}},
+	})
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatFieldsIndex,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+		QueryFields: []FieldFilter{
+			{Key: "value"},
+			{Key: "status", Value: "string"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if file.Index == nil || file.Index.Query == nil {
+		t.Fatalf("index query summary is nil")
+	}
+	query := file.Index.Query
+	if !query.FieldFilterApplied {
+		t.Fatalf("field filter applied = false, want true")
+	}
+	if got, want := query.QueryFields, []FieldFilter{{Key: "status", Value: "string"}, {Key: "value"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %+v, want %+v", got, want)
+	}
+	if got := query.MatchedFields; !equalFieldFilters(got, query.QueryFields) {
+		t.Fatalf("matched fields = %+v, want %+v", got, query.QueryFields)
+	}
+	if got, want := len(query.MissingFields), 0; got != want {
+		t.Fatalf("missing fields = %d, want %d", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := len(query.MeasurementSamples), 1; got != want {
+		t.Fatalf("measurement samples = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].Name, "cpu"; got != want {
+		t.Fatalf("measurement sample = %q, want %q", got, want)
+	}
+
+	details := report.Result().Table.Rows[0][tableColumnIndex(t, report.Result().Table.Columns, "details")].(string)
+	if !strings.Contains(details, "query field_filter=true fields=2/2/0 candidates=1") {
+		t.Fatalf("details = %q, want field filter summary", details)
+	}
+}
+
+func TestAnalyzeFieldsIndexQueryFieldsAutoWithoutRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), fieldsIndexFileName)
+	writeTestFieldsIndex(t, path, []fieldsIndexMeasurement{
+		{Name: "cpu", Fields: []fieldsIndexField{{Name: "value", Type: 1}}},
+	})
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatAuto,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+		QueryFields:      []FieldFilter{{Key: "value", Value: "float"}},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	file := report.Files[0]
+	if got, want := file.Format, FormatFieldsIndex; got != want {
+		t.Fatalf("format = %q, want %q", got, want)
+	}
+	if file.Index == nil || file.Index.Query == nil {
+		t.Fatalf("index query summary is nil")
+	}
+	if got, want := file.Index.Query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeFieldsIndexQueryFieldsReportsMissingType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), fieldsIndexFileName)
+	writeTestFieldsIndex(t, path, []fieldsIndexMeasurement{
+		{Name: "cpu", Fields: []fieldsIndexField{{Name: "value", Type: 1}}},
+	})
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatFieldsIndex,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+		QueryFields:      []FieldFilter{{Key: "value", Value: "integer"}},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if got, want := len(query.MatchedFields), 0; got != want {
+		t.Fatalf("matched fields = %d, want %d", got, want)
+	}
+	if got, want := query.MissingFields, []FieldFilter{{Key: "value", Value: "integer"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("missing fields = %+v, want %+v", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeFieldsIndexQueryFieldsPreservesQuotedTypeFilter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), fieldsIndexFileName)
+	writeTestFieldsIndex(t, path, []fieldsIndexMeasurement{
+		{Name: "cpu", Fields: []fieldsIndexField{{Name: "value", Type: 1}}},
+	})
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatFieldsIndex,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+		QueryFields: []FieldFilter{
+			{Key: "value", Value: "float"},
+			{Key: "value", Value: `"float"`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if got, want := query.QueryFields, []FieldFilter{{Key: "value", Value: `"float"`}, {Key: "value", Value: "float"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("query fields = %+v, want %+v", got, want)
+	}
+	if got := query.MatchedFields; !equalFieldFilters(got, query.QueryFields) {
+		t.Fatalf("matched fields = %+v, want %+v", got, query.QueryFields)
+	}
+}
+
+func TestAnalyzeFieldsIndexQueryMeasurementsAndFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), fieldsIndexFileName)
+	writeTestFieldsIndex(t, path, []fieldsIndexMeasurement{
+		{Name: "cpu", Fields: []fieldsIndexField{{Name: "value", Type: 1}}},
+		{Name: "disk", Fields: []fieldsIndexField{{Name: "value", Type: 2}}},
+	})
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:            FormatFieldsIndex,
+		KeySampleLimit:    5,
+		BlockSampleLimit:  5,
+		QueryMeasurements: []string{"disk", "cpu"},
+		QueryFields:       []FieldFilter{{Key: "value", Value: "float"}},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if got, want := query.MatchedMeasurements, []string{"cpu", "disk"}; !equalStrings(got, want) {
+		t.Fatalf("matched measurements = %v, want %v", got, want)
+	}
+	if got, want := query.MatchedFields, []FieldFilter{{Key: "value", Value: "float"}}; !equalFieldFilters(got, want) {
+		t.Fatalf("matched fields = %+v, want %+v", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.MeasurementSamples[0].Name, "cpu"; got != want {
+		t.Fatalf("measurement sample = %q, want %q", got, want)
+	}
+
+	details := report.Result().Table.Rows[0][tableColumnIndex(t, report.Result().Table.Columns, "details")].(string)
+	if !strings.Contains(details, "query measurement_filter=true field_filter=true measurements=2/2/0 fields=1/1/0 candidates=1") {
+		t.Fatalf("details = %q, want combined query summary", details)
+	}
+}
+
+func TestAnalyzeFieldsIndexQueryFieldOperators(t *testing.T) {
+	path := filepath.Join(t.TempDir(), fieldsIndexFileName)
+	writeTestFieldsIndex(t, path, []fieldsIndexMeasurement{
+		{Name: "cpu", Fields: []fieldsIndexField{
+			{Name: "value", Type: 1},
+			{Name: "status", Type: 3},
+		}},
+		{Name: "disk", Fields: []fieldsIndexField{{Name: "free", Type: 9}}},
+	})
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:           FormatFieldsIndex,
+		KeySampleLimit:   5,
+		BlockSampleLimit: 5,
+		QueryFields: []FieldFilter{
+			{Key: "value", Op: "!=", Value: "integer"},
+			{Key: "status", Op: "in", Value: "(string,boolean)"},
+			{Key: "free", Op: "not-in", Value: "(float,integer)"},
+			{Key: "missing", Op: "not-exists"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	query := report.Files[0].Index.Query
+	if got := query.MatchedFields; !equalFieldFilters(got, query.QueryFields) {
+		t.Fatalf("matched fields = %+v, want %+v", got, query.QueryFields)
+	}
+	if got, want := len(query.MissingFields), 0; got != want {
+		t.Fatalf("missing fields = %d, want %d", got, want)
+	}
+	if got, want := query.CandidateMeasurements, 0; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+}
+
+func TestAnalyzeFieldsIndexRejectsUnsupportedFieldOperator(t *testing.T) {
+	_, err := Analyze(context.Background(), []string{fieldsIndexFileName}, Options{
+		Format:      FormatFieldsIndex,
+		QueryFields: []FieldFilter{{Key: "value", Op: ">", Value: "float"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `fields-index field filter "value" does not support operator ">"`) {
+		t.Fatalf("error = %v, want unsupported fields-index operator", err)
+	}
+}
+
+func TestAnalyzeFieldsIndexRejectsUnsupportedFieldTypeValue(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		filter FieldFilter
+		want   string
+	}{
+		{
+			name:   "null scalar",
+			filter: FieldFilter{Key: "value", Value: "null"},
+			want:   `fields-index field filter "value" has unsupported field type "null"`,
+		},
+		{
+			name:   "invalid set member",
+			filter: FieldFilter{Key: "value", Op: "in", Value: "(float,null)"},
+			want:   `fields-index field filter "value" has unsupported field type "null"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Analyze(context.Background(), []string{fieldsIndexFileName}, Options{
+				Format:      FormatFieldsIndex,
+				QueryFields: []FieldFilter{tc.filter},
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAnalyzeFieldsIndexDoesNotRelaxTSSPFieldRangeGate(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options Options
+	}{
+		{name: "required", options: Options{Format: FormatTSSP, QueryFields: []FieldFilter{{Key: "value", Value: "99"}}}},
+		{name: "any", options: Options{Format: FormatTSSP, QueryAnyFields: []FieldFilter{{Key: "value", Value: "99"}}}},
+		{name: "none", options: Options{Format: FormatTSSP, QueryNoneFields: []FieldFilter{{Key: "value", Value: "99"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Analyze(context.Background(), []string{"missing.tssp"}, tc.options)
+			if err == nil || !strings.Contains(err.Error(), "field filter requires query range") {
+				t.Fatalf("error = %v, want field range requirement", err)
+			}
+		})
+	}
+}
+
+func TestFieldsIndexQueryFieldsDoNotRequireRange(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		paths  []string
+		format Format
+		want   bool
+	}{
+		{name: "explicit fields index", paths: []string{"missing"}, format: FormatFieldsIndex, want: false},
+		{name: "auto fields index", paths: []string{fieldsIndexFileName}, format: FormatAuto, want: false},
+		{name: "auto tssp", paths: []string{"00000001-0001-00000000.tssp"}, format: FormatAuto, want: true},
+		{name: "explicit tssp", paths: []string{fieldsIndexFileName}, format: FormatTSSP, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FieldFilterRequiresQueryRange(tc.paths, tc.format); got != tc.want {
+				t.Fatalf("FieldFilterRequiresQueryRange() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAnalyzeFieldsIndexTruncatedChangeLog(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, fieldsIndexFileName)
