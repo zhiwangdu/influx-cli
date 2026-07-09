@@ -73,9 +73,9 @@ influx-cli --format json storage analyze /path/to/0000-0000-0001.content.bf --st
 
 `opengemini-meta` reads local direct protobuf/JSON topology snapshots and SnapshotV2 `DataOps` wrapper protobufs without connecting to a meta service.
 
-`tsi` JSON output includes local live/tombstone series-id set cardinality and min/max series-id ranges from the file's roaring bitmaps.
+`tsi` JSON output includes local live/tombstone series-id set cardinality and min/max series-id ranges from the file's roaring bitmaps; measurement-only query summaries include local tag/value samples and report deleted tag key/value samples with zero live series.
 
-`tsi-log` JSON output includes local live/tombstone series-id counts and min/max ranges after replaying local log series and tombstone entries; measurement-only query summaries include replayed local tag/value samples with tombstone markers.
+`tsi-log` JSON output includes local live/tombstone series-id counts and min/max ranges after replaying local log series and tombstone entries; measurement-only query summaries include replayed local tag/value samples with tombstone markers and zero live series for deleted tag key/value samples.
 
 `series-file` JSON output includes local `_series` live/tombstone series-id counts and min/max ranges after replaying local insert/tombstone segment entries.
 

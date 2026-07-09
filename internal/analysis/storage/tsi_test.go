@@ -667,6 +667,70 @@ func TestAnalyzeTSIQueryFiltersIgnoreDeletedTagValues(t *testing.T) {
 	}
 }
 
+func TestAnalyzeTSIQueryMeasurementOnlyReportsDeletedTagSamplesAsZeroLiveSeries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "L0-00000001.tsi")
+	if err := writeTestTSIWithDeletedTagSamples(path); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Analyze(context.Background(), []string{path}, Options{
+		Format:            FormatTSI,
+		QueryMeasurements: []string{"cpu"},
+		KeySampleLimit:    2,
+		BlockSampleLimit:  3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := report.Files[0].Index.Query
+	if query == nil {
+		t.Fatal("expected TSI query summary")
+	}
+	if !query.MeasurementFilterApplied || query.TagFilterApplied {
+		t.Fatalf("query flags = measurement:%t tag:%t, want measurement only", query.MeasurementFilterApplied, query.TagFilterApplied)
+	}
+	if got, want := query.CandidateMeasurements, 1; got != want {
+		t.Fatalf("candidate measurements = %d, want %d", got, want)
+	}
+	if got, want := query.SeriesRefs, int64(3); got != want {
+		t.Fatalf("query series refs = %d, want %d", got, want)
+	}
+	if got, want := len(query.MeasurementSamples), 1; got != want {
+		t.Fatalf("measurement samples = %d, want %d", got, want)
+	}
+	tags := query.MeasurementSamples[0].Tags
+	if got, want := len(tags), 2; got != want {
+		t.Fatalf("sample tags = %d, want %d", got, want)
+	}
+	if got, want := tags[0].Key, "host"; got != want {
+		t.Fatalf("first sample tag key = %q, want %q", got, want)
+	}
+	if got, want := tags[0].Values[0].Value, "a"; got != want {
+		t.Fatalf("first host value = %q, want %q", got, want)
+	}
+	if got, want := tags[0].Values[0].SeriesCount, uint64(1); got != want {
+		t.Fatalf("live host value series count = %d, want %d", got, want)
+	}
+	if got, want := tags[0].Values[1].Value, "old"; got != want {
+		t.Fatalf("second host value = %q, want %q", got, want)
+	}
+	if !tags[0].Values[1].Deleted {
+		t.Fatalf("host old value should be marked deleted")
+	}
+	if got, want := tags[0].Values[1].SeriesCount, uint64(0); got != want {
+		t.Fatalf("deleted host value series count = %d, want %d", got, want)
+	}
+	if got, want := tags[1].Key, "zone"; got != want {
+		t.Fatalf("second sample tag key = %q, want %q", got, want)
+	}
+	if !tags[1].Deleted {
+		t.Fatalf("zone tag key should be marked deleted")
+	}
+	if got, want := tags[1].Values[0].SeriesCount, uint64(0); got != want {
+		t.Fatalf("deleted zone key value series count = %d, want %d", got, want)
+	}
+}
+
 func writeTestTSI(path string) error {
 	return writeTestTSIWithSeriesIDSets(
 		path,
@@ -723,6 +787,67 @@ func writeTestTSIWithSeriesIDSets(path string, seriesIDSet, tombstoneSeriesIDSet
 		TombstoneSeriesIDSet: tsiRange{
 			Offset: tombstoneSeriesIDSetOffset,
 			Size:   int64(len(tombstoneSeriesIDSet)),
+		},
+		SeriesSketch: tsiRange{
+			Offset: int64(buf.Len()),
+			Size:   0,
+		},
+		TombstoneSeriesSketch: tsiRange{
+			Offset: int64(buf.Len()),
+			Size:   0,
+		},
+	})
+
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+func writeTestTSIWithDeletedTagSamples(path string) error {
+	var buf bytes.Buffer
+	buf.WriteString(tsiMagic)
+
+	cpuTags := writeTestTSITagBlock([]testTSITagKey{
+		{
+			name: "host",
+			values: []testTSITagValue{
+				{name: "a", seriesIDs: []uint64{1}},
+				{name: "old", seriesIDs: []uint64{2}, deleted: true},
+			},
+		},
+		{
+			name:    "zone",
+			deleted: true,
+			values: []testTSITagValue{
+				{name: "z1", seriesIDs: []uint64{3}},
+			},
+		},
+	})
+	cpuTagOffset := int64(buf.Len())
+	buf.Write(cpuTags)
+
+	measurementBlock := writeTestTSIMeasurementBlock([]testTSIMeasurement{
+		{name: "cpu", tagOffset: cpuTagOffset, tagSize: int64(len(cpuTags)), seriesCount: 3},
+	})
+	measurementBlockOffset := int64(buf.Len())
+	buf.Write(measurementBlock)
+
+	seriesIDSet := writeTestTSIRoaringSeriesIDSet(1, 2, 3)
+	seriesIDSetOffset := int64(buf.Len())
+	buf.Write(seriesIDSet)
+	tombstoneSeriesIDSetOffset := int64(buf.Len())
+
+	writeTestTSIIndexTrailer(&buf, tsiIndexTrailer{
+		Version: tsiIndexFileVersion,
+		MeasurementBlock: tsiRange{
+			Offset: measurementBlockOffset,
+			Size:   int64(len(measurementBlock)),
+		},
+		SeriesIDSet: tsiRange{
+			Offset: seriesIDSetOffset,
+			Size:   int64(len(seriesIDSet)),
+		},
+		TombstoneSeriesIDSet: tsiRange{
+			Offset: tombstoneSeriesIDSetOffset,
+			Size:   0,
 		},
 		SeriesSketch: tsiRange{
 			Offset: int64(buf.Len()),

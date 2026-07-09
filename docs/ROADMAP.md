@@ -39,6 +39,8 @@ influx-cli storage analyze <file-or-dir>...
 
 TSI index file analyzer 会从本地 roaring series-id set 统计 live/tombstone cardinality，并在不分配完整 ID 列表的路径上输出 live/tombstone min/max series-id range；TSI index/log analyzer 还支持不带 query range 的本地 series-id hit/tombstone/miss 诊断，其中 `.tsi` 走 roaring bitmap 定点 membership 检查，`.tsl` 走本地 replay 后的 live/tombstone 集合。该逻辑不调用 TSI mmap runtime、series file runtime 或数据库服务。
 
+TSI index analyzer 会为 measurement-only query summary 输出本地 tag/value samples；被 `.tsi` tombstone 标记的 tag key/value sample 会保留 deleted marker，但 live series count 归零，避免把本地 tombstone 前的 series count 误读成当前 live series。
+
 TSI log analyzer 会在本地 replay 后为 measurement-only query summary 输出 tag/value samples，并保留 `.tsl` 中 tag key/value tombstone marker，便于只凭调用方传入的 log 文件解释 measurement 的本地 tag 形态。
 
 WAL analyzer 会在本地 decode path 中输出 query range/key 过滤后的 entry skip/replay execution step samples 和 action counts，用于说明 write/delete/delete-range entry 是被本地 replay 采纳还是因 key/range 被跳过；该逻辑不调用 engine cache 或 WAL replay runtime。

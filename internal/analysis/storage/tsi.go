@@ -607,7 +607,7 @@ func inspectTSITagBlock(fileData []byte, rng tsiRange, filters []TagFilter, incl
 			tagReport.Values = append(tagReport.Values, IndexQueryTagValueReport{
 				Value:       value.Value,
 				Deleted:     value.Flag&tsiTagValueTombstoneFlag != 0,
-				SeriesCount: value.SeriesCount,
+				SeriesCount: tsiTagValueSampleSeriesCount(key, value),
 			})
 		}
 		if includeDetails && sampleLimit > 0 && len(inspection.Tags) < sampleLimit && (len(filterSet) == 0 || len(tagReport.Values) > 0) {
@@ -615,6 +615,13 @@ func inspectTSITagBlock(fileData []byte, rng tsiRange, filters []TagFilter, incl
 		}
 	}
 	return inspection, nil
+}
+
+func tsiTagValueSampleSeriesCount(key tsiTagKeyElem, value tsiTagValueElem) uint64 {
+	if key.Flag&tsiTagKeyTombstoneFlag != 0 || value.Flag&tsiTagValueTombstoneFlag != 0 {
+		return 0
+	}
+	return value.SeriesCount
 }
 
 func tagFilterSet(filters []TagFilter) map[string]TagFilter {
