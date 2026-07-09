@@ -141,8 +141,61 @@ func TestAnalyzeWALSegment(t *testing.T) {
 	if got := decode.CursorOutputSamples[0]; got != wantSample {
 		t.Fatalf("cursor output sample = %+v, want %+v", got, wantSample)
 	}
+	if got, want := len(decode.CursorExecutionSamples), 3; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorExecutionActions["replay_write"], 1; got != want {
+		t.Fatalf("replay write action count = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorExecutionActions["skip_after_range"], 1; got != want {
+		t.Fatalf("skip after range action count = %d, want %d", got, want)
+	}
+	if got, want := decode.CursorExecutionActions["skip_by_key"], 1; got != want {
+		t.Fatalf("skip by key action count = %d, want %d", got, want)
+	}
+	wantSteps := []DecodePathCursorStep{
+		{
+			Step:              1,
+			Type:              "wal-replay-step",
+			Action:            "replay_write",
+			Key:               "cpu value",
+			CandidateValue:    "type=write time_range=10:30 keys=2 values=3 query_points=1",
+			CursorIndexBefore: 0,
+			CursorIndexAfter:  1,
+			CursorAdvanced:    true,
+		},
+		{
+			Step:              2,
+			Type:              "wal-replay-step",
+			Action:            "skip_after_range",
+			Key:               "cpu value",
+			CandidateValue:    "type=delete-range time_range=40:50 keys=1",
+			CursorIndexBefore: 1,
+			CursorIndexAfter:  2,
+			CursorAdvanced:    true,
+		},
+		{
+			Step:              3,
+			Type:              "wal-replay-step",
+			Action:            "skip_by_key",
+			Key:               "mem value",
+			CandidateValue:    "type=delete keys=1",
+			CursorIndexBefore: 2,
+			CursorIndexAfter:  3,
+			CursorAdvanced:    true,
+			CursorExhausted:   true,
+		},
+	}
+	for i, want := range wantSteps {
+		if got := decode.CursorExecutionSamples[i]; got != want {
+			t.Fatalf("cursor execution sample[%d] = %+v, want %+v", i, got, want)
+		}
+	}
 	if !containsString(decode.Recommendations, "sampled local WAL replay candidates") {
 		t.Fatalf("recommendations = %v, want replay candidate sample recommendation", decode.Recommendations)
+	}
+	if !containsString(decode.Recommendations, "WAL replay execution samples show local entry skip/replay steps") {
+		t.Fatalf("recommendations = %v, want WAL replay execution sample recommendation", decode.Recommendations)
 	}
 }
 
@@ -371,6 +424,12 @@ func TestAnalyzeWALWritePointSampleLimitKeepsExactCount(t *testing.T) {
 	}
 	if got, want := decode.CursorOutputSamples[0].Time, int64(10); got != want {
 		t.Fatalf("first cursor output sample time = %d, want %d", got, want)
+	}
+	if got, want := len(decode.CursorExecutionSamples), 1; got != want {
+		t.Fatalf("cursor execution samples = %d, want %d", got, want)
+	}
+	if decode.CursorExecutionSamples[0].CursorExhausted {
+		t.Fatalf("cursor execution sample = %+v, want not exhausted because sample limit clipped later WAL entries", decode.CursorExecutionSamples[0])
 	}
 }
 

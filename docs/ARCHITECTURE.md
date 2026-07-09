@@ -533,7 +533,7 @@ TSM 窄范围查询诊断所需字段：
 
 InfluxDB TSM analyzer 覆盖本地 TSM file metadata、index entry、tombstone range/impact、基于 query range/key 的 KeyCursor/FileStore cursor window/merge-window simulation、optimized/baseline value-output comparison、本地 KeyCursor block read/merge-window execution step sample，以及本地 optimized cursor final output sample；FileStore 汇总的 execution/final output sample 会记录被本地 cursor merge/dedup 后保留的 TSM 文件来源。它只读取调用方传入的本地 `.tsm`/`.tombstone` 文件，不调用 tsdb engine、shard runtime、HTTP query API 或数据库服务。
 
-InfluxDB WAL analyzer 覆盖 TSM1 WAL segment 的本地 entry 解码：entry type、snappy payload size、key samples、write point time range/value sample、delete/delete-range target，以及基于 query range/key 的 replay candidate filtering 和本地 write/delete replay candidate output sample。WAL analyzer 不直接调用 engine cache 或 WAL replay runtime。
+InfluxDB WAL analyzer 覆盖 TSM1 WAL segment 的本地 entry 解码：entry type、snappy payload size、key samples、write point time range/value sample、delete/delete-range target，以及基于 query range/key 的 replay candidate filtering、本地 write/delete replay candidate output sample 和本地 WAL replay entry skip/replay execution step sample。WAL analyzer 不直接调用 engine cache 或 WAL replay runtime。
 
 InfluxDB TSI analyzer 覆盖本地 `.tsi` index file 和 `.tsl` log file：解析 TSI trailer、measurement block、tag block、index roaring bitmap 与 log replay 后的 live/tombstone series-id set cardinality、live/tombstone series-id min/max range、TSI index/log 本地 series-id filter hit/tombstone/miss 诊断和 measurement/tag predicate inspection。它只读取调用方传入的本地 index/log 文件，不调用 TSI mmap runtime、series file runtime、shard engine、HTTP query API 或数据库服务。
 

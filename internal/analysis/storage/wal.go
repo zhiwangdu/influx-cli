@@ -429,10 +429,11 @@ func buildWALDecodePathSummary(entries []walEntryReport, options Options) *Decod
 		DecodeBlocksByType: map[string]int{},
 	}
 	populateWALDecodeKeyMatches(summary, entries)
-	for _, entry := range entries {
+	for i, entry := range entries {
 		selectedKey := walEntryKeySelected(entry, keySet)
 		if !selectedKey {
 			summary.SkippedByKeyBlocks++
+			appendWALReplayExecutionSample(summary, entry, i, len(entries), "skip_by_key", options.BlockSampleLimit)
 			continue
 		}
 		summary.BaselineDecodeBlocks++
@@ -441,12 +442,16 @@ func buildWALDecodePathSummary(entries []walEntryReport, options Options) *Decod
 			summary.BaselineDecodeValues += entry.ValueCount
 		}
 		if !entry.QueryOverlaps {
+			action := "skip_outside_range"
 			if entry.HasTime && entry.MaxTime < options.QueryRange.Min {
 				summary.SkippedBeforeSeekBlocks++
+				action = "skip_before_seek"
 			} else if entry.HasTime && entry.MinTime > options.QueryRange.Max {
 				summary.SkippedAfterRangeBlocks++
+				action = "skip_after_range"
 			}
 			appendWALDecodeSample(summary, entry, keySet, options.BlockSampleLimit)
+			appendWALReplayExecutionSample(summary, entry, i, len(entries), action, options.BlockSampleLimit)
 			continue
 		}
 		summary.OptimizedDecodeBlocks++
@@ -459,6 +464,7 @@ func buildWALDecodePathSummary(entries []walEntryReport, options Options) *Decod
 		}
 		summary.DecodeBlocksByType["wal-"+entry.Type]++
 		appendWALDecodeSample(summary, entry, keySet, options.BlockSampleLimit)
+		appendWALReplayExecutionSample(summary, entry, i, len(entries), "replay_"+strings.ReplaceAll(entry.Type, "-", "_"), options.BlockSampleLimit)
 		appendWALReplayCandidateSamples(summary, entry, keySet, options.BlockSampleLimit)
 	}
 	summary.SavedDecodeBlocks = summary.BaselineDecodeBlocks - summary.OptimizedDecodeBlocks
@@ -467,6 +473,7 @@ func buildWALDecodePathSummary(entries []walEntryReport, options Options) *Decod
 	if summary.FilteredDecodeBlocks > 0 {
 		summary.Amplification = float64(summary.BaselineDecodeBlocks) / float64(summary.FilteredDecodeBlocks)
 	}
+	populateDecodePathExecutionActionCounts(summary)
 	summary.Recommendations = walDecodeRecommendations(summary)
 	return summary
 }
@@ -514,6 +521,47 @@ func appendWALReplayCandidateSamples(summary *DecodePathSummary, entry walEntryR
 	case "delete-range":
 		appendWALDeleteRangeSamples(summary, entry, keySet, sampleLimit)
 	}
+}
+
+func appendWALReplayExecutionSample(summary *DecodePathSummary, entry walEntryReport, entryIndex, entryCount int, action string, sampleLimit int) {
+	if sampleLimit <= 0 || len(summary.CursorExecutionSamples) >= sampleLimit {
+		return
+	}
+	summary.CursorExecutionSamples = append(summary.CursorExecutionSamples, DecodePathCursorStep{
+		Step:              len(summary.CursorExecutionSamples) + 1,
+		Type:              "wal-replay-step",
+		Action:            action,
+		Key:               walEntryStepKey(entry),
+		CandidateValue:    walEntryStepCandidateValue(entry),
+		CursorIndexBefore: entryIndex,
+		CursorIndexAfter:  entryIndex + 1,
+		CursorAdvanced:    true,
+		CursorExhausted:   entryIndex == entryCount-1,
+	})
+}
+
+func walEntryStepKey(entry walEntryReport) string {
+	if len(entry.Keys) == 0 {
+		return "wal-entry"
+	}
+	return entry.Keys[0]
+}
+
+func walEntryStepCandidateValue(entry walEntryReport) string {
+	parts := []string{"type=" + entry.Type}
+	if entry.HasTime {
+		parts = append(parts, fmt.Sprintf("time_range=%d:%d", entry.MinTime, entry.MaxTime))
+	}
+	if entry.KeyCount > 0 {
+		parts = append(parts, fmt.Sprintf("keys=%d", entry.KeyCount))
+	}
+	if entry.ValueCount > 0 {
+		parts = append(parts, fmt.Sprintf("values=%d", entry.ValueCount))
+	}
+	if entry.QueryWritePointCount > 0 {
+		parts = append(parts, fmt.Sprintf("query_points=%d", entry.QueryWritePointCount))
+	}
+	return strings.Join(parts, " ")
 }
 
 func appendWALWritePointSamples(summary *DecodePathSummary, entry walEntryReport, sampleLimit int) {
@@ -604,6 +652,9 @@ func walDecodeRecommendations(summary *DecodePathSummary) []string {
 	}
 	if len(summary.CursorOutputSamples) > 0 {
 		recommendations = append(recommendations, "sampled local WAL replay candidates that match the key/range filters")
+	}
+	if len(summary.CursorExecutionSamples) > 0 {
+		recommendations = append(recommendations, "WAL replay execution samples show local entry skip/replay steps")
 	}
 	return recommendations
 }
