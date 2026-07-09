@@ -476,7 +476,7 @@ func (s *tsiLogState) QuerySummary(options Options) *IndexQuerySummary {
 
 func (m *tsiLogMeasurement) QueryTags(filters []TagFilter, sampleLimit int) ([]IndexQueryTagReport, map[string]TagFilter, map[uint64]struct{}, bool) {
 	if len(filters) == 0 {
-		return nil, nil, nil, true
+		return m.QueryTagSamples(sampleLimit), nil, nil, true
 	}
 	matched := map[string]TagFilter{}
 	var matchingSeriesIDs map[uint64]struct{}
@@ -508,6 +508,59 @@ func (m *tsiLogMeasurement) QueryTags(filters []TagFilter, sampleLimit int) ([]I
 		})
 	}
 	return reports, matched, matchingSeriesIDs, len(matched) == len(filters)
+}
+
+func (m *tsiLogMeasurement) QueryTagSamples(sampleLimit int) []IndexQueryTagReport {
+	if m == nil || sampleLimit <= 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m.TagKeys))
+	for key := range m.TagKeys {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	reports := make([]IndexQueryTagReport, 0, minInt(len(keys), sampleLimit))
+	for _, keyName := range keys {
+		if len(reports) >= sampleLimit {
+			break
+		}
+		tagKey := m.TagKeys[keyName]
+		if tagKey == nil {
+			continue
+		}
+		report := IndexQueryTagReport{
+			Key:     tagKey.Key,
+			Deleted: tagKey.Deleted,
+		}
+		values := make([]string, 0, len(tagKey.TagValues))
+		for value := range tagKey.TagValues {
+			values = append(values, value)
+		}
+		sort.Strings(values)
+		for _, valueName := range values {
+			if len(report.Values) >= sampleLimit {
+				break
+			}
+			tagValue := tagKey.TagValues[valueName]
+			if tagValue == nil {
+				continue
+			}
+			report.Values = append(report.Values, IndexQueryTagValueReport{
+				Value:       tagValue.Value,
+				Deleted:     tagValue.Deleted,
+				SeriesCount: tsiLogTagValueSampleSeriesCount(tagKey, tagValue),
+			})
+		}
+		reports = append(reports, report)
+	}
+	return reports
+}
+
+func tsiLogTagValueSampleSeriesCount(tagKey *tsiLogTagKey, tagValue *tsiLogTagValue) uint64 {
+	if tagKey == nil || tagValue == nil || tagKey.Deleted || tagValue.Deleted {
+		return 0
+	}
+	return uint64(len(tagValue.SeriesIDs))
 }
 
 func cloneTSILogSeriesIDSet(src map[uint64]struct{}) map[uint64]struct{} {
